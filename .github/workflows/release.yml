@@ -20,20 +20,40 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  setup:
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.set-matrix.outputs.matrix }}
+    steps:
+      - name: Set build matrix
+        id: set-matrix
+        shell: bash
+        run: |
+          if [ "${{ github.event_name }}" = "push" ]; then
+            PLATFORMS="mac,windows,linux,linux-arm"
+          else
+            PLATFORMS="${{ github.event.inputs.platforms }}"
+          fi
+          MATRIX='{"include":['
+          SEP=''
+          echo "$PLATFORMS" | tr ',' '\n' | sed 's/^ *//;s/ *$//' | while read -r P; do
+            case "$P" in
+              mac)        ENTRY='{"os":"macos-14","platform":"mac"}' ;;
+              windows)    ENTRY='{"os":"windows-2022","platform":"windows"}' ;;
+              linux)      ENTRY='{"os":"ubuntu-22.04","platform":"linux"}' ;;
+              linux-arm)  ENTRY='{"os":"ubuntu-22.04-arm","arch":"arm64","platform":"linux-arm"}' ;;
+              *)          continue ;;
+            esac
+            printf '%s%s' "$SEP" "$ENTRY"
+            SEP=','
+          done | (read ITEMS; echo "$MATRIX$ITEMS]}" >> "$GITHUB_OUTPUT")
+          echo "matrix set"
+
   release:
+    needs: setup
     runs-on: ${{ matrix.os }}
     strategy:
-      matrix:
-        include:
-          - os: windows-2022
-            platform: windows
-          - os: ubuntu-22.04
-            platform: linux
-          - os: ubuntu-22.04-arm
-            arch: arm64
-            platform: linux-arm
-          - os: macos-14
-            platform: mac
+      matrix: ${{ fromJson(needs.setup.outputs.matrix) }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
