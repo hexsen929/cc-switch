@@ -8,6 +8,7 @@ import { Form, FormField, FormItem, FormMessage } from "@/components/ui/form";
 import { Input } from "@/components/ui/input";
 import { providerSchema, type ProviderFormData } from "@/lib/schemas/provider";
 import type { AppId } from "@/lib/api";
+import { providersApi } from "@/lib/api/providers";
 import type {
   ProviderCategory,
   ProviderMeta,
@@ -559,6 +560,69 @@ export function ProviderForm({
     onSettingsConfigChange: (config) => form.setValue("settingsConfig", config),
     getSettingsConfig: () => form.getValues("settingsConfig"),
   });
+
+  const [isFetchingModels, setIsFetchingModels] = useState(false);
+  const [fetchedModelOptions, setFetchedModelOptions] = useState<string[]>([]);
+
+  useEffect(() => {
+    setFetchedModelOptions([]);
+    setIsFetchingModels(false);
+  }, [appId, providerId, selectedPresetId]);
+
+  const handleFetchModels = useCallback(async () => {
+    const parsedSettings = (() => {
+      try {
+        return JSON.parse(form.getValues("settingsConfig") || "{}") as Record<string, unknown>;
+      } catch {
+        return {} as Record<string, unknown>;
+      }
+    })();
+
+    const resolveCredentials = () => {
+      if (appId === "claude") return { baseUrl: baseUrl.trim(), apiKey: apiKey.trim() };
+      if (appId === "codex") return { baseUrl: codexBaseUrl.trim(), apiKey: codexApiKey.trim() };
+      if (appId === "gemini") return { baseUrl: geminiBaseUrl.trim(), apiKey: geminiApiKey.trim() };
+      const options = parsedSettings.options && typeof parsedSettings.options === "object"
+        ? (parsedSettings.options as Record<string, unknown>) : {};
+      const fallbackBaseUrl = typeof options.baseURL === "string" ? options.baseURL.trim() : "";
+      const fallbackApiKey = typeof options.apiKey === "string" ? options.apiKey.trim() : "";
+      return {
+        baseUrl: opencodeForm.opencodeBaseUrl.trim() || fallbackBaseUrl,
+        apiKey: opencodeForm.opencodeApiKey.trim() || fallbackApiKey,
+      };
+    };
+
+    const { baseUrl: rawBaseUrl, apiKey: rawApiKey } = resolveCredentials();
+    if (!rawBaseUrl) {
+      toast.error(t("providerForm.endpointRequired", { defaultValue: "请先填写 API 端点" }));
+      return;
+    }
+
+    setIsFetchingModels(true);
+    try {
+      const result = await providersApi.fetchOpenAiModels({
+        appId,
+        providerId,
+        baseUrl: rawBaseUrl,
+        apiKey: rawApiKey,
+      });
+      const modelIds = result.models.map((m) => m.id).filter(Boolean);
+      setFetchedModelOptions(modelIds);
+      if (modelIds.length === 0) {
+        toast.error(t("providerForm.fetchModelsEmpty", { defaultValue: "未获取到任何模型" }));
+      } else {
+        toast.success(t("providerForm.fetchModelsSuccess", { defaultValue: `已获取 ${modelIds.length} 个模型` }));
+      }
+    } catch (err) {
+      toast.error(t("providerForm.fetchModelsFailed", { defaultValue: `获取模型失败: ${String(err)}` }));
+    } finally {
+      setIsFetchingModels(false);
+    }
+  }, [
+    appId, providerId, baseUrl, apiKey, codexBaseUrl, codexApiKey,
+    geminiBaseUrl, geminiApiKey, opencodeForm.opencodeBaseUrl, opencodeForm.opencodeApiKey,
+    form, t,
+  ]);
 
   const initialOmoSettings =
     appId === "opencode" &&
@@ -1337,6 +1401,9 @@ export function ProviderForm({
             onApiFormatChange={handleApiFormatChange}
             apiKeyField={localApiKeyField}
             onApiKeyFieldChange={handleApiKeyFieldChange}
+            onFetchModels={handleFetchModels}
+            isFetchingModels={isFetchingModels}
+            modelSuggestions={fetchedModelOptions}
           />
         )}
 
@@ -1364,6 +1431,9 @@ export function ProviderForm({
             modelName={codexModelName}
             onModelNameChange={handleCodexModelNameChange}
             speedTestEndpoints={speedTestEndpoints}
+            onFetchModels={handleFetchModels}
+            isFetchingModels={isFetchingModels}
+            modelSuggestions={fetchedModelOptions}
           />
         )}
 
@@ -1393,6 +1463,9 @@ export function ProviderForm({
             model={geminiModel}
             onModelChange={handleGeminiModelChange}
             speedTestEndpoints={speedTestEndpoints}
+            onFetchModels={handleFetchModels}
+            isFetchingModels={isFetchingModels}
+            modelSuggestions={fetchedModelOptions}
           />
         )}
 

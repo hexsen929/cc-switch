@@ -929,6 +929,7 @@ pub fn run() {
             commands::import_prompt_from_file,
             commands::get_current_prompt_file_content,
             // ours: endpoint speed test + custom endpoint management
+            commands::fetch_provider_models_openai,
             commands::test_api_endpoints,
             commands::get_custom_endpoints,
             commands::add_custom_endpoint,

@@ -1,7 +1,9 @@
 import { useTranslation } from "react-i18next";
 import { FormLabel } from "@/components/ui/form";
 import { Input } from "@/components/ui/input";
-import { Info } from "lucide-react";
+import { Info, Loader2 } from "lucide-react";
+import { Button } from "@/components/ui/button";
+import { ModelSuggest } from "@/components/ui/model-suggest";
 import EndpointSpeedTest from "./EndpointSpeedTest";
 import { ApiKeySection, EndpointField } from "./shared";
 import type { ProviderCategory } from "@/types";
@@ -36,6 +38,9 @@ interface GeminiFormFieldsProps {
   shouldShowModelField: boolean;
   model: string;
   onModelChange: (value: string) => void;
+  onFetchModels?: () => void;
+  isFetchingModels?: boolean;
+  modelSuggestions?: string[];
 
   // Speed Test Endpoints
   speedTestEndpoints: EndpointCandidate[];
@@ -62,6 +67,9 @@ export function GeminiFormFields({
   shouldShowModelField,
   model,
   onModelChange,
+  onFetchModels,
+  isFetchingModels = false,
+  modelSuggestions = [],
   speedTestEndpoints,
 }: GeminiFormFieldsProps) {
   const { t } = useTranslation();
@@ -124,13 +132,30 @@ export function GeminiFormFields({
       {/* Model 输入框 */}
       {shouldShowModelField && (
         <div>
-          <FormLabel htmlFor="gemini-model">
-            {t("provider.form.gemini.model", { defaultValue: "模型" })}
-          </FormLabel>
-          <Input
+          <div className="flex items-center justify-between gap-2 mb-1">
+            <FormLabel htmlFor="gemini-model" className="mb-0">
+              {t("provider.form.gemini.model", { defaultValue: "模型" })}
+            </FormLabel>
+            {onFetchModels && (
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                onClick={onFetchModels}
+                disabled={isFetchingModels}
+              >
+                {isFetchingModels && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
+                {t("providerForm.autoFetchModels", {
+                  defaultValue: "自动获取模型",
+                })}
+              </Button>
+            )}
+          </div>
+          <ModelSuggest
             id="gemini-model"
             value={model}
-            onChange={(e) => onModelChange(e.target.value)}
+            onChange={(v) => onModelChange(v)}
+            suggestions={modelSuggestions}
             placeholder="gemini-3-pro-preview"
           />
         </div>

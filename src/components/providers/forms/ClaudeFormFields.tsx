@@ -1,6 +1,9 @@
 import { useTranslation } from "react-i18next";
 import { FormLabel } from "@/components/ui/form";
 import { Input } from "@/components/ui/input";
+import { Button } from "@/components/ui/button";
+import { ModelSuggest } from "@/components/ui/model-suggest";
+import { Loader2 } from "lucide-react";
 import {
   Select,
   SelectContent,
@@ -76,6 +79,9 @@ interface ClaudeFormFieldsProps {
   // Auth Field (ANTHROPIC_AUTH_TOKEN or ANTHROPIC_API_KEY)
   apiKeyField: ClaudeApiKeyField;
   onApiKeyFieldChange: (field: ClaudeApiKeyField) => void;
+  onFetchModels?: () => void;
+  isFetchingModels?: boolean;
+  modelSuggestions?: string[];
 }
 
 export function ClaudeFormFields({
@@ -112,6 +118,9 @@ export function ClaudeFormFields({
   onApiFormatChange,
   apiKeyField,
   onApiKeyFieldChange,
+  onFetchModels,
+  isFetchingModels = false,
+  modelSuggestions = [],
 }: ClaudeFormFieldsProps) {
   const { t } = useTranslation();
 
@@ -273,23 +282,41 @@ export function ClaudeFormFields({
       {/* 模型选择器 */}
       {shouldShowModelSelector && (
         <div className="space-y-3">
+          <div className="flex items-center justify-between">
+            <FormLabel className="mb-0">
+              {t("providerForm.modelConfig", { defaultValue: "模型配置" })}
+            </FormLabel>
+            {onFetchModels && (
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                onClick={onFetchModels}
+                disabled={isFetchingModels}
+              >
+                {isFetchingModels && (
+                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                )}
+                {t("providerForm.autoFetchModels", {
+                  defaultValue: "自动获取模型",
+                })}
+              </Button>
+            )}
+          </div>
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             {/* 主模型 */}
             <div className="space-y-2">
               <FormLabel htmlFor="claudeModel">
                 {t("providerForm.anthropicModel", { defaultValue: "主模型" })}
               </FormLabel>
-              <Input
+              <ModelSuggest
                 id="claudeModel"
-                type="text"
                 value={claudeModel}
-                onChange={(e) =>
-                  onModelChange("ANTHROPIC_MODEL", e.target.value)
-                }
+                onChange={(value) => onModelChange("ANTHROPIC_MODEL", value)}
                 placeholder={t("providerForm.modelPlaceholder", {
                   defaultValue: "",
                 })}
-                autoComplete="off"
+                suggestions={modelSuggestions}
               />
             </div>
 
@@ -298,14 +325,11 @@ export function ClaudeFormFields({
               <FormLabel htmlFor="reasoningModel">
                 {t("providerForm.anthropicReasoningModel")}
               </FormLabel>
-              <Input
+              <ModelSuggest
                 id="reasoningModel"
-                type="text"
                 value={reasoningModel}
-                onChange={(e) =>
-                  onModelChange("ANTHROPIC_REASONING_MODEL", e.target.value)
-                }
-                autoComplete="off"
+                onChange={(value) => onModelChange("ANTHROPIC_REASONING_MODEL", value)}
+                suggestions={modelSuggestions}
               />
             </div>
 
@@ -316,17 +340,12 @@ export function ClaudeFormFields({
                   defaultValue: "Haiku 默认模型",
                 })}
               </FormLabel>
-              <Input
+              <ModelSuggest
                 id="claudeDefaultHaikuModel"
-                type="text"
                 value={defaultHaikuModel}
-                onChange={(e) =>
-                  onModelChange("ANTHROPIC_DEFAULT_HAIKU_MODEL", e.target.value)
-                }
-                placeholder={t("providerForm.haikuModelPlaceholder", {
-                  defaultValue: "",
-                })}
-                autoComplete="off"
+                onChange={(value) => onModelChange("ANTHROPIC_DEFAULT_HAIKU_MODEL", value)}
+                suggestions={modelSuggestions}
+                placeholder={t("providerForm.haikuModelPlaceholder", { defaultValue: "" })}
               />
             </div>
 
@@ -337,20 +356,12 @@ export function ClaudeFormFields({
                   defaultValue: "Sonnet 默认模型",
                 })}
               </FormLabel>
-              <Input
+              <ModelSuggest
                 id="claudeDefaultSonnetModel"
-                type="text"
                 value={defaultSonnetModel}
-                onChange={(e) =>
-                  onModelChange(
-                    "ANTHROPIC_DEFAULT_SONNET_MODEL",
-                    e.target.value,
-                  )
-                }
-                placeholder={t("providerForm.modelPlaceholder", {
-                  defaultValue: "",
-                })}
-                autoComplete="off"
+                onChange={(value) => onModelChange("ANTHROPIC_DEFAULT_SONNET_MODEL", value)}
+                suggestions={modelSuggestions}
+                placeholder={t("providerForm.modelPlaceholder", { defaultValue: "" })}
               />
             </div>
 
@@ -361,17 +372,12 @@ export function ClaudeFormFields({
                   defaultValue: "Opus 默认模型",
                 })}
               </FormLabel>
-              <Input
+              <ModelSuggest
                 id="claudeDefaultOpusModel"
-                type="text"
                 value={defaultOpusModel}
-                onChange={(e) =>
-                  onModelChange("ANTHROPIC_DEFAULT_OPUS_MODEL", e.target.value)
-                }
-                placeholder={t("providerForm.modelPlaceholder", {
-                  defaultValue: "",
-                })}
-                autoComplete="off"
+                onChange={(value) => onModelChange("ANTHROPIC_DEFAULT_OPUS_MODEL", value)}
+                suggestions={modelSuggestions}
+                placeholder={t("providerForm.modelPlaceholder", { defaultValue: "" })}
               />
             </div>
           </div>

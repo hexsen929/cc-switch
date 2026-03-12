@@ -7,6 +7,7 @@ use crate::provider::Provider;
 use crate::services::{
     EndpointLatency, ProviderService, ProviderSortUpdate, SpeedtestService, SwitchResult,
 };
+use crate::services::provider::FetchOpenAiModelsResponse;
 use crate::store::AppState;
 use std::str::FromStr;
 
@@ -343,6 +344,29 @@ pub fn get_opencode_live_provider_ids() -> Result<Vec<String>, String> {
     crate::opencode_config::get_providers()
         .map(|providers| providers.keys().cloned().collect())
         .map_err(|e| e.to_string())
+}
+
+#[allow(non_snake_case)]
+#[tauri::command]
+pub async fn fetch_provider_models_openai(
+    state: State<'_, AppState>,
+    app: String,
+    #[allow(non_snake_case)] providerId: Option<String>,
+    #[allow(non_snake_case)] baseUrl: String,
+    #[allow(non_snake_case)] apiKey: String,
+    #[allow(non_snake_case)] timeoutSecs: Option<u64>,
+) -> Result<FetchOpenAiModelsResponse, String> {
+    let app_type = AppType::from_str(&app).map_err(|e| e.to_string())?;
+    crate::services::provider::fetch_openai_models(
+        state.inner(),
+        app_type,
+        providerId.as_deref(),
+        &baseUrl,
+        &apiKey,
+        timeoutSecs,
+    )
+    .await
+    .map_err(|e| e.to_string())
 }
 
 // ============================================================================

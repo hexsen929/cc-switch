@@ -5,6 +5,7 @@
 mod endpoints;
 mod gemini_auth;
 mod live;
+mod models;
 mod usage;
 
 use indexmap::IndexMap;
@@ -18,6 +19,9 @@ use crate::provider::{Provider, UsageResult};
 use crate::services::mcp::McpService;
 use crate::settings::CustomEndpoint;
 use crate::store::AppState;
+
+// Re-export types and functions from models module
+pub use models::{fetch_openai_models, FetchOpenAiModelsResponse};
 
 // Re-export sub-module functions for external access
 pub use live::{

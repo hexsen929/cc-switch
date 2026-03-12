@@ -21,6 +21,27 @@ export interface SwitchResult {
   warnings: string[];
 }
 
+export interface OpenAiModelDescriptor {
+  id: string;
+  ownedBy?: string;
+  created?: number;
+}
+
+export interface FetchOpenAiModelsRequest {
+  appId: AppId;
+  providerId?: string | null;
+  baseUrl: string;
+  apiKey: string;
+  timeoutSecs?: number;
+}
+
+export interface FetchOpenAiModelsResponse {
+  models: OpenAiModelDescriptor[];
+  resolvedUrl: string;
+  elapsedMs: number;
+  warnings?: string[];
+}
+
 export const providersApi = {
   async getAll(appId: AppId): Promise<Record<string, Provider>> {
     return await invoke("get_providers", { app: appId });
@@ -158,5 +179,18 @@ export const universalProvidersApi = {
    */
   async sync(id: string): Promise<boolean> {
     return await invoke("sync_universal_provider", { id });
+  },
+
+  async fetchOpenAiModels(
+    payload: FetchOpenAiModelsRequest,
+  ): Promise<FetchOpenAiModelsResponse> {
+    const { appId, providerId = null, baseUrl, apiKey, timeoutSecs } = payload;
+    return await invoke("fetch_provider_models_openai", {
+      app: appId,
+      providerId,
+      baseUrl,
+      apiKey,
+      timeoutSecs,
+    });
   },
 };
