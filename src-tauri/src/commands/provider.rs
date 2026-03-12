@@ -4,6 +4,7 @@ use tauri::State;
 use crate::app_config::AppType;
 use crate::error::AppError;
 use crate::provider::Provider;
+use crate::services::provider::FetchOpenAiModelsResponse;
 use crate::services::{
     EndpointLatency, ProviderService, ProviderSortUpdate, SpeedtestService, SwitchResult,
 };
@@ -195,6 +196,29 @@ pub async fn test_api_endpoints(
     SpeedtestService::test_endpoints(urls, timeoutSecs)
         .await
         .map_err(|e| e.to_string())
+}
+
+#[allow(non_snake_case)]
+#[tauri::command]
+pub async fn fetch_provider_models_openai(
+    state: State<'_, AppState>,
+    app: String,
+    #[allow(non_snake_case)] providerId: Option<String>,
+    #[allow(non_snake_case)] baseUrl: String,
+    #[allow(non_snake_case)] apiKey: String,
+    #[allow(non_snake_case)] timeoutSecs: Option<u64>,
+) -> Result<FetchOpenAiModelsResponse, String> {
+    let app_type = AppType::from_str(&app).map_err(|e| e.to_string())?;
+    ProviderService::fetch_openai_models(
+        state.inner(),
+        app_type,
+        providerId.as_deref(),
+        &baseUrl,
+        &apiKey,
+        timeoutSecs,
+    )
+    .await
+    .map_err(|e| e.to_string())
 }
 
 #[tauri::command]

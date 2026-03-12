@@ -45,6 +45,7 @@ import {
   hasApiKeyField,
 } from "@/utils/providerConfigUtils";
 import { mergeProviderMeta } from "@/utils/providerMetaUtils";
+import { providersApi } from "@/lib/api/providers";
 import { getCodexCustomTemplate } from "@/config/codexTemplates";
 import CodexConfigEditor from "./CodexConfigEditor";
 import { CommonConfigEditor } from "./CommonConfigEditor";
@@ -559,6 +560,184 @@ export function ProviderForm({
     onSettingsConfigChange: (config) => form.setValue("settingsConfig", config),
     getSettingsConfig: () => form.getValues("settingsConfig"),
   });
+
+  const [isFetchingModels, setIsFetchingModels] = useState(false);
+  const [fetchedModelOptions, setFetchedModelOptions] = useState<string[]>([]);
+
+  useEffect(() => {
+    setFetchedModelOptions([]);
+    setIsFetchingModels(false);
+  }, [appId, providerId, selectedPresetId]);
+
+  const handleFetchModels = useCallback(async () => {
+    const parsedSettings = (() => {
+      try {
+        return JSON.parse(form.getValues("settingsConfig") || "{}") as Record<
+          string,
+          unknown
+        >;
+      } catch {
+        return {};
+      }
+    })();
+
+    const resolveCredentials = () => {
+      if (appId === "claude") {
+        return {
+          baseUrl: baseUrl.trim(),
+          apiKey: apiKey.trim(),
+        };
+      }
+
+      if (appId === "codex") {
+        return {
+          baseUrl: codexBaseUrl.trim(),
+          apiKey: codexApiKey.trim(),
+        };
+      }
+
+      if (appId === "gemini") {
+        return {
+          baseUrl: geminiBaseUrl.trim(),
+          apiKey: geminiApiKey.trim(),
+        };
+      }
+
+      const options =
+        parsedSettings.options && typeof parsedSettings.options === "object"
+          ? (parsedSettings.options as Record<string, unknown>)
+          : {};
+      const fallbackBaseUrl =
+        typeof options.baseURL === "string" ? options.baseURL.trim() : "";
+      const fallbackApiKey =
+        typeof options.apiKey === "string" ? options.apiKey.trim() : "";
+
+      return {
+        baseUrl: opencodeForm.opencodeBaseUrl.trim() || fallbackBaseUrl,
+        apiKey: opencodeForm.opencodeApiKey.trim() || fallbackApiKey,
+      };
+    };
+
+    const { baseUrl: rawBaseUrl, apiKey: rawApiKey } = resolveCredentials();
+    if (!rawBaseUrl) {
+      toast.error(
+        t("providerForm.endpointRequired", {
+          defaultValue: "非官方供应商请填写 API 端点",
+        }),
+      );
+      return;
+    }
+
+    if (!rawApiKey) {
+      toast.error(
+        t("providerForm.apiKeyRequired", {
+          defaultValue: "非官方供应商请填写 API Key",
+        }),
+      );
+      return;
+    }
+
+    setIsFetchingModels(true);
+    try {
+      const response = await providersApi.fetchOpenAiModels({
+        appId,
+        providerId: providerId ?? null,
+        baseUrl: rawBaseUrl,
+        apiKey: rawApiKey,
+        timeoutSecs: 15,
+      });
+
+      const modelIds = Array.from(
+        new Set(
+          (response.models || [])
+            .map((item) => item.id?.trim())
+            .filter((id): id is string => Boolean(id)),
+        ),
+      ).sort((a, b) => a.localeCompare(b, "en-US"));
+
+      setFetchedModelOptions(modelIds);
+      toast.success(
+        t("providerForm.modelsFetched", {
+          count: modelIds.length,
+          defaultValue: "已获取 {{count}} 个模型",
+        }),
+      );
+
+      if ((response.warnings || []).length > 0) {
+        console.warn("[MODEL_FETCH_WARNINGS]", response.warnings);
+      }
+    } catch (error) {
+      toast.error(String(error), {
+        description: t("providerForm.fetchModelsFailedHint", {
+          defaultValue:
+            "此功能仅供参考，部分供应商可能不支持模型列表接口，您可以手动输入模型名称。",
+        }),
+      });
+    } finally {
+      setIsFetchingModels(false);
+    }
+  }, [
+    appId,
+    providerId,
+    form,
+    t,
+    baseUrl,
+    apiKey,
+    codexBaseUrl,
+    codexApiKey,
+    geminiBaseUrl,
+    geminiApiKey,
+    opencodeForm.opencodeBaseUrl,
+    opencodeForm.opencodeApiKey,
+  ]);
+
+  const handleImportFetchedModels = useCallback(() => {
+    if (appId !== "opencode") return;
+    if (fetchedModelOptions.length === 0) {
+      toast.error(
+        t("opencode.noFetchedModels", {
+          defaultValue: "暂无可导入模型，请先自动获取。",
+        }),
+      );
+      return;
+    }
+
+    const merged = { ...opencodeForm.opencodeModels };
+    let imported = 0;
+    let updated = 0;
+
+    for (const modelId of fetchedModelOptions) {
+      const key = modelId.trim();
+      if (!key) continue;
+
+      const existing = merged[key];
+      if (!existing) {
+        merged[key] = { name: key };
+        imported += 1;
+        continue;
+      }
+
+      const existingName = String(existing.name ?? "").trim();
+      if (!existingName) {
+        merged[key] = { ...existing, name: key };
+        updated += 1;
+      }
+    }
+
+    opencodeForm.handleOpencodeModelsChange(merged);
+    toast.success(
+      t("opencode.importFetchedModelsResult", {
+        imported,
+        updated,
+        defaultValue: "模型导入完成：新增 {{imported}} 个，补全名称 {{updated}} 个。",
+      }),
+    );
+  }, [
+    appId,
+    fetchedModelOptions,
+    opencodeForm,
+    t,
+  ]);
 
   const initialOmoSettings =
     appId === "opencode" &&
@@ -1413,6 +1592,10 @@ export function ProviderForm({
             onModelsChange={opencodeForm.handleOpencodeModelsChange}
             extraOptions={opencodeForm.opencodeExtraOptions}
             onExtraOptionsChange={opencodeForm.handleOpencodeExtraOptionsChange}
+            onFetchModels={shouldShowSpeedTest ? handleFetchModels : undefined}
+            isFetchingModels={isFetchingModels}
+            fetchedModelOptions={fetchedModelOptions}
+            onImportFetchedModels={handleImportFetchedModels}
           />
         )}
 
