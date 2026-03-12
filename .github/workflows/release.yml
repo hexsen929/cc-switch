@@ -4,6 +4,13 @@ on:
   push:
     tags:
       - 'v*'
+  workflow_dispatch:
+    inputs:
+      platforms:
+        description: '选择编译平台（逗号分隔：mac, windows, linux, linux-arm）'
+        required: false
+        default: 'mac'
+        type: string
 
 permissions:
   contents: write
@@ -19,10 +26,15 @@ jobs:
       matrix:
         include:
           - os: windows-2022
+            platform: windows
           - os: ubuntu-22.04
+            platform: linux
           - os: ubuntu-22.04-arm
             arch: arm64
+            platform: linux-arm
           - os: macos-14
+            platform: mac
+    if: github.event_name == 'push' || contains(github.event.inputs.platforms, matrix.platform)
 
     steps:
       - name: Checkout
