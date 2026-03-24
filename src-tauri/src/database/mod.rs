@@ -34,7 +34,7 @@ mod tests;
 // DAO 类型导出供外部使用
 pub use dao::FailoverQueueItem;
 
-use crate::config::get_app_config_dir;
+use crate::config::{get_app_config_dir, get_fork_db_path};
 use crate::error::AppError;
 use rusqlite::{hooks::Action, Connection};
 use serde::Serialize;
@@ -70,6 +70,29 @@ pub(crate) use lock_conn;
 /// rusqlite::Connection 本身不是 Sync 的，因此需要这层包装。
 pub struct Database {
     pub(crate) conn: Mutex<Connection>,
+}
+
+fn attach_fork_database(conn: &Connection, in_memory: bool) -> Result<(), AppError> {
+    let attach_target = if in_memory {
+        ":memory:".to_string()
+    } else {
+        let fork_db_path = get_fork_db_path();
+        if let Some(parent) = fork_db_path.parent() {
+            std::fs::create_dir_all(parent).map_err(|e| AppError::io(parent, e))?;
+        }
+        fork_db_path.to_string_lossy().to_string()
+    };
+
+    conn.execute(
+        "ATTACH DATABASE ?1 AS forkdb",
+        rusqlite::params![attach_target],
+    )
+    .map_err(|e| AppError::Database(format!("附加 forkdb 失败: {e}")))?;
+
+    conn.execute("PRAGMA forkdb.foreign_keys = ON;", [])
+        .map_err(|e| AppError::Database(format!("启用 forkdb 外键失败: {e}")))?;
+
+    Ok(())
 }
 
 fn register_db_change_hook(conn: &Connection) {
@@ -109,6 +132,7 @@ impl Database {
         }
         register_db_change_hook(&conn);
 
+        attach_fork_database(&conn, false)?;
         let db = Self {
             conn: Mutex::new(conn),
         };
@@ -163,6 +187,7 @@ impl Database {
         conn.execute("PRAGMA auto_vacuum = INCREMENTAL;", [])
             .map_err(|e| AppError::Database(e.to_string()))?;
         register_db_change_hook(&conn);
+        attach_fork_database(&conn, true)?;
 
         let db = Self {
             conn: Mutex::new(conn),

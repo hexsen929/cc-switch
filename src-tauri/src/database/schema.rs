@@ -176,6 +176,98 @@ impl Database {
             FOREIGN KEY (provider_id, app_type) REFERENCES providers(id, app_type) ON DELETE CASCADE
         )", []).map_err(|e| AppError::Database(e.to_string()))?;
 
+        // 9.1 Fork 独立数据库基础表（与主库解耦）
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS forkdb.settings (
+                key TEXT PRIMARY KEY,
+                value TEXT
+            )",
+            [],
+        )
+        .map_err(|e| AppError::Database(e.to_string()))?;
+
+        // 9.2 Claude 模型族路由策略表
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS forkdb.fork_model_route_policy (
+                app_type TEXT NOT NULL,
+                model_key TEXT NOT NULL,
+                enabled INTEGER NOT NULL DEFAULT 0,
+                default_provider_id TEXT,
+                model_failover_enabled INTEGER NOT NULL DEFAULT 1,
+                model_failover_mode TEXT NOT NULL DEFAULT 'random',
+                updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+                PRIMARY KEY (app_type, model_key)
+            )",
+            [],
+        )
+        .map_err(|e| AppError::Database(e.to_string()))?;
+        let _ = conn.execute(
+            "ALTER TABLE forkdb.fork_model_route_policy
+             ADD COLUMN model_failover_mode TEXT NOT NULL DEFAULT 'random'",
+            [],
+        );
+
+        // 9.3 Claude 模型族健康状态表
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS forkdb.fork_provider_health_model (
+                provider_id TEXT NOT NULL,
+                app_type TEXT NOT NULL,
+                model_key TEXT NOT NULL,
+                is_healthy INTEGER NOT NULL DEFAULT 1,
+                consecutive_failures INTEGER NOT NULL DEFAULT 0,
+                last_success_at TEXT,
+                last_failure_at TEXT,
+                last_error TEXT,
+                updated_at TEXT NOT NULL,
+                PRIMARY KEY (provider_id, app_type, model_key)
+            )",
+            [],
+        )
+        .map_err(|e| AppError::Database(e.to_string()))?;
+        let _ = conn.execute(
+            "CREATE INDEX IF NOT EXISTS forkdb.idx_fork_provider_health_model
+             ON fork_provider_health_model(app_type, model_key, is_healthy)",
+            [],
+        );
+
+        // 9.4 Claude 模型族故障转移队列表
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS forkdb.fork_model_failover_queue (
+                app_type TEXT NOT NULL,
+                model_key TEXT NOT NULL,
+                provider_id TEXT NOT NULL,
+                sort_index INTEGER NOT NULL DEFAULT 0,
+                updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+                PRIMARY KEY (app_type, model_key, provider_id)
+            )",
+            [],
+        )
+        .map_err(|e| AppError::Database(e.to_string()))?;
+        let _ = conn.execute(
+            "CREATE INDEX IF NOT EXISTS forkdb.idx_fork_model_failover_queue
+             ON fork_model_failover_queue(app_type, model_key, sort_index)",
+            [],
+        );
+
+        // 9.5 混合故障转移链表
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS forkdb.fork_failover_chain (
+                app_type TEXT NOT NULL,
+                node_type TEXT NOT NULL,
+                node_id TEXT NOT NULL,
+                sort_index INTEGER NOT NULL DEFAULT 0,
+                updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+                PRIMARY KEY (app_type, node_type, node_id)
+            )",
+            [],
+        )
+        .map_err(|e| AppError::Database(e.to_string()))?;
+        let _ = conn.execute(
+            "CREATE INDEX IF NOT EXISTS forkdb.idx_fork_failover_chain
+             ON fork_failover_chain(app_type, sort_index)",
+            [],
+        );
+
         // 10. Proxy Request Logs 表
         conn.execute("CREATE TABLE IF NOT EXISTS proxy_request_logs (
             request_id TEXT PRIMARY KEY, provider_id TEXT NOT NULL, app_type TEXT NOT NULL, model TEXT NOT NULL,

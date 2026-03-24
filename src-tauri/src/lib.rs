@@ -943,6 +943,18 @@ pub fn run() {
             commands::import_skills_from_apps,
             commands::check_skill_updates,
             commands::discover_available_skills,
+            // Fork proxy (Claude model routing)
+            commands::get_claude_model_routing_settings,
+            commands::set_claude_model_routing_settings,
+            commands::list_claude_model_route_policies,
+            commands::upsert_claude_model_route_policy,
+            // Fork failover (model-level queues + chain)
+            commands::get_failover_queue_for_model,
+            commands::get_available_providers_for_model_failover,
+            commands::set_failover_queue_for_model,
+            commands::get_fork_failover_chain,
+            commands::set_fork_failover_chain,
+            commands::get_available_providers_for_fork_failover_chain,
             // Skill management (legacy API compatibility)
             commands::get_skills,
             commands::get_skills_for_app,

@@ -3,6 +3,7 @@ import { failoverApi } from "@/lib/api/failover";
 import { toast } from "sonner";
 import { useTranslation } from "react-i18next";
 import { extractErrorMessage } from "@/utils/errorUtils";
+import type { ForkFailoverChainItem } from "@/types/proxy";
 
 // ========== 熔断器 Hooks ==========
 
@@ -279,6 +280,96 @@ export function useSetAutoFailoverEnabled() {
       });
       queryClient.invalidateQueries({
         queryKey: ["providers", variables.appType],
+      });
+      queryClient.invalidateQueries({
+        queryKey: ["proxyStatus"],
+      });
+    },
+  });
+}
+
+export function useFailoverQueueForModel(appType: string, modelKey: string) {
+  return useQuery({
+    queryKey: ["failoverQueueModel", appType, modelKey],
+    queryFn: () => failoverApi.getFailoverQueueForModel(appType, modelKey),
+    enabled: !!appType && !!modelKey,
+  });
+}
+
+export function useAvailableProvidersForModelFailover(
+  appType: string,
+  modelKey: string,
+) {
+  return useQuery({
+    queryKey: ["availableProvidersForModelFailover", appType, modelKey],
+    queryFn: () =>
+      failoverApi.getAvailableProvidersForModelFailover(appType, modelKey),
+    enabled: !!appType && !!modelKey,
+  });
+}
+
+export function useSetFailoverQueueForModel() {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: ({
+      appType,
+      modelKey,
+      providerIds,
+    }: {
+      appType: string;
+      modelKey: string;
+      providerIds: string[];
+    }) => failoverApi.setFailoverQueueForModel(appType, modelKey, providerIds),
+    onSuccess: (_, variables) => {
+      queryClient.invalidateQueries({
+        queryKey: ["failoverQueueModel", variables.appType, variables.modelKey],
+      });
+      queryClient.invalidateQueries({
+        queryKey: [
+          "availableProvidersForModelFailover",
+          variables.appType,
+          variables.modelKey,
+        ],
+      });
+      queryClient.invalidateQueries({ queryKey: ["proxyStatus"] });
+    },
+  });
+}
+
+export function useForkFailoverChain(appType: string) {
+  return useQuery({
+    queryKey: ["forkFailoverChain", appType],
+    queryFn: () => failoverApi.getForkFailoverChain(appType),
+    enabled: !!appType,
+  });
+}
+
+export function useAvailableProvidersForForkFailoverChain(appType: string) {
+  return useQuery({
+    queryKey: ["availableProvidersForForkFailoverChain", appType],
+    queryFn: () => failoverApi.getAvailableProvidersForForkFailoverChain(appType),
+    enabled: !!appType,
+  });
+}
+
+export function useSetForkFailoverChain() {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: ({
+      appType,
+      items,
+    }: {
+      appType: string;
+      items: ForkFailoverChainItem[];
+    }) => failoverApi.setForkFailoverChain(appType, items),
+    onSuccess: (_, variables) => {
+      queryClient.invalidateQueries({
+        queryKey: ["forkFailoverChain", variables.appType],
+      });
+      queryClient.invalidateQueries({
+        queryKey: ["availableProvidersForForkFailoverChain", variables.appType],
       });
       queryClient.invalidateQueries({
         queryKey: ["proxyStatus"],

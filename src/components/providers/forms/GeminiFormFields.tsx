@@ -1,6 +1,5 @@
 import { useTranslation } from "react-i18next";
 import { FormLabel } from "@/components/ui/form";
-import { Input } from "@/components/ui/input";
 import { Info, Loader2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { ModelSuggest } from "@/components/ui/model-suggest";

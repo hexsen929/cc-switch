@@ -105,6 +105,13 @@ export interface ProxyUsageRecord {
   timestamp: string;
 }
 
+export interface ForkFailoverChainItem {
+  nodeType: "provider" | "route_mode";
+  nodeId: string;
+  providerName?: string | null;
+  sortIndex?: number;
+}
+
 // 故障转移队列条目
 export interface FailoverQueueItem {
   providerId: string;
@@ -118,6 +125,24 @@ export interface GlobalProxyConfig {
   listenAddress: string;
   listenPort: number;
   enableLogging: boolean;
+}
+
+export type ClaudeModelKey = "sonnet" | "opus" | "haiku" | "custom" | "unknown";
+export type ClaudeModelFailoverMode = "round_robin" | "random";
+
+export interface ClaudeModelRoutingSettings {
+  routeEnabled: boolean;
+  modelFailoverEnabled: boolean;
+}
+
+export interface ClaudeModelRoutePolicy {
+  appType: string;
+  modelKey: ClaudeModelKey;
+  enabled: boolean;
+  defaultProviderId: string | null;
+  modelFailoverEnabled: boolean;
+  modelFailoverMode: ClaudeModelFailoverMode;
+  updatedAt: string;
 }
 
 // 应用级代理配置（每个 app 独立）

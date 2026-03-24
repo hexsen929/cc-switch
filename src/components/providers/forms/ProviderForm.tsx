@@ -614,6 +614,10 @@ export function ProviderForm({
       toast.error(t("providerForm.endpointRequired", { defaultValue: "请先填写 API 端点" }));
       return;
     }
+    if (!rawApiKey) {
+      toast.error(t("providerForm.apiKeyRequired", { defaultValue: "请先填写 API Key" }));
+      return;
+    }
 
     setIsFetchingModels(true);
     try {
@@ -622,16 +626,32 @@ export function ProviderForm({
         providerId,
         baseUrl: rawBaseUrl,
         apiKey: rawApiKey,
+        timeoutSecs: 15,
       });
-      const modelIds = result.models.map((m) => m.id).filter(Boolean);
+      if (result.warnings?.length) {
+        console.warn("[fetchModels] warnings:", result.warnings);
+      }
+      const modelIds = [...new Set(result.models.map((m) => m.id).filter(Boolean))].sort((a, b) =>
+        a.localeCompare(b),
+      );
       setFetchedModelOptions(modelIds);
       if (modelIds.length === 0) {
         toast.error(t("providerForm.fetchModelsEmpty", { defaultValue: "未获取到任何模型" }));
       } else {
-        toast.success(t("providerForm.fetchModelsSuccess", { defaultValue: `已获取 ${modelIds.length} 个模型` }));
+        toast.success(
+          t("providerForm.fetchModelsSuccess", {
+            count: modelIds.length,
+            defaultValue: `已获取 ${modelIds.length} 个模型`,
+          }),
+        );
       }
     } catch (err) {
-      toast.error(t("providerForm.fetchModelsFailed", { defaultValue: `获取模型失败: ${String(err)}` }));
+      toast.error(
+        t("providerForm.fetchModelsFailed", {
+          defaultValue: "获取模型失败，此功能仅供参考，部分供应商可能不支持模型列表接口",
+        }),
+        { description: String(err) },
+      );
     } finally {
       setIsFetchingModels(false);
     }
@@ -661,6 +681,37 @@ export function ProviderForm({
     onSettingsConfigChange: (config) => form.setValue("settingsConfig", config),
     getSettingsConfig: () => form.getValues("settingsConfig"),
   });
+
+  const handleImportFetchedModels = useCallback(() => {
+    if (appId !== "opencode") return;
+    if (fetchedModelOptions.length === 0) {
+      toast.error(t("opencode.noFetchedModels", { defaultValue: "暂无可导入模型，请先自动获取。" }));
+      return;
+    }
+    const merged: Record<string, Record<string, unknown>> = { ...opencodeForm.opencodeModels };
+    let imported = 0;
+    let updated = 0;
+    for (const modelId of fetchedModelOptions) {
+      const key = modelId.trim();
+      if (!key) continue;
+      const existing = merged[key];
+      if (!existing) {
+        merged[key] = { name: key };
+        imported += 1;
+      } else if (!(existing as Record<string, unknown>).name || !String((existing as Record<string, unknown>).name).trim()) {
+        merged[key] = { ...existing, name: key };
+        updated += 1;
+      }
+    }
+    opencodeForm.handleOpencodeModelsChange(merged as Parameters<typeof opencodeForm.handleOpencodeModelsChange>[0]);
+    toast.success(
+      t("opencode.importFetchedModelsResult", {
+        imported,
+        updated,
+        defaultValue: "模型导入完成：新增 {{imported}} 个，补全名称 {{updated}} 个。",
+      }),
+    );
+  }, [appId, fetchedModelOptions, opencodeForm, t]);
 
   const [isCommonConfigModalOpen, setIsCommonConfigModalOpen] = useState(false);
 
@@ -1551,6 +1602,10 @@ export function ProviderForm({
             onModelsChange={opencodeForm.handleOpencodeModelsChange}
             extraOptions={opencodeForm.opencodeExtraOptions}
             onExtraOptionsChange={opencodeForm.handleOpencodeExtraOptionsChange}
+            onFetchModels={handleFetchModels}
+            isFetchingModels={isFetchingModels}
+            fetchedModelOptions={fetchedModelOptions}
+            onImportFetchedModels={handleImportFetchedModels}
           />
         )}
 
