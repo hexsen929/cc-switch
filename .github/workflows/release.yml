@@ -317,7 +317,7 @@ jobs:
           echo "✅ DMG created: $NEW_DMG"
 
       - name: Notarize macOS DMG
-        if: runner.os == 'macOS' && secrets.APPLE_ID != ''
+        if: runner.os == 'macOS'
         shell: bash
         timeout-minutes: 30
         env:
@@ -326,6 +326,11 @@ jobs:
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
         run: |
           set -euo pipefail
+
+          if [ -z "${APPLE_ID:-}" ]; then
+            echo "⚠️ APPLE_ID not set — skipping DMG notarization"
+            exit 0
+          fi
 
           DMG_PATH=$(find release-assets -maxdepth 1 -name "*.dmg" -type f | head -1 || true)
           if [ -z "$DMG_PATH" ]; then
