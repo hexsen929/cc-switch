@@ -55,6 +55,19 @@ export function useDiscoverableSkills() {
 }
 
 /**
+ * 检查已安装 Skills 是否有更新
+ * 返回有更新的 skill id 集合，手动触发（enabled: false）
+ */
+export function useCheckSkillUpdates() {
+  return useQuery({
+    queryKey: ["skills", "updates"],
+    queryFn: () => skillsApi.checkUpdates(),
+    enabled: false,
+    staleTime: 0,
+  });
+}
+
+/**
  * 安装 Skill
  * 成功后直接更新缓存，不触发重新加载/刷新
  */

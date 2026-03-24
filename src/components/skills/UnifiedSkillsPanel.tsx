@@ -1,6 +1,6 @@
 import React, { useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { Sparkles, Trash2, ExternalLink } from "lucide-react";
+import { Sparkles, Trash2, ExternalLink, RefreshCw, ArrowUpCircle } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import {
@@ -15,6 +15,7 @@ import {
   useScanUnmanagedSkills,
   useImportSkillsFromApps,
   useInstallSkillsFromZip,
+  useCheckSkillUpdates,
   type InstalledSkill,
 } from "@/hooks/useSkills";
 import type { AppId } from "@/lib/api/types";
@@ -70,6 +71,15 @@ const UnifiedSkillsPanel = React.forwardRef<
   const [restoreDialogOpen, setRestoreDialogOpen] = useState(false);
 
   const { data: skills, isLoading } = useInstalledSkills();
+  const {
+    data: updatableIds,
+    isFetching: isCheckingUpdates,
+    refetch: checkUpdates,
+  } = useCheckSkillUpdates();
+  const updatableSet = useMemo(
+    () => new Set(updatableIds ?? []),
+    [updatableIds],
+  );
   const {
     data: skillBackups = [],
     refetch: refetchSkillBackups,
@@ -260,11 +270,37 @@ const UnifiedSkillsPanel = React.forwardRef<
 
   return (
     <div className="px-6 flex flex-col flex-1 min-h-0 overflow-hidden">
-      <AppCountBar
-        totalLabel={t("skills.installed", { count: skills?.length || 0 })}
-        counts={enabledCounts}
-        appIds={MCP_SKILLS_APP_IDS}
-      />
+      <div className="flex items-center justify-between">
+        <AppCountBar
+          totalLabel={t("skills.installed", { count: skills?.length || 0 })}
+          counts={enabledCounts}
+          appIds={MCP_SKILLS_APP_IDS}
+        />
+        {skills && skills.length > 0 && (
+          <Button
+            type="button"
+            variant="ghost"
+            size="sm"
+            className="h-7 gap-1.5 text-xs text-muted-foreground hover:text-foreground flex-shrink-0"
+            onClick={() => checkUpdates()}
+            disabled={isCheckingUpdates}
+            title={t("skills.checkUpdates", { defaultValue: "检查更新" })}
+          >
+            <RefreshCw
+              size={13}
+              className={isCheckingUpdates ? "animate-spin" : ""}
+            />
+            {updatableIds !== undefined
+              ? updatableSet.size > 0
+                ? t("skills.updatesAvailable", {
+                    count: updatableSet.size,
+                    defaultValue: `${updatableSet.size} 个可更新`,
+                  })
+                : t("skills.upToDate", { defaultValue: "已是最新" })
+              : t("skills.checkUpdates", { defaultValue: "检查更新" })}
+          </Button>
+        )}
+      </div>
 
       <div className="flex-1 overflow-y-auto overflow-x-hidden pb-24">
         {isLoading ? (
@@ -293,6 +329,7 @@ const UnifiedSkillsPanel = React.forwardRef<
                   onToggleApp={handleToggleApp}
                   onUninstall={() => handleUninstall(skill)}
                   isLast={index === skills.length - 1}
+                  hasUpdate={updatableSet.has(skill.id)}
                 />
               ))}
             </div>
@@ -342,6 +379,7 @@ interface InstalledSkillListItemProps {
   onToggleApp: (id: string, app: AppId, enabled: boolean) => void;
   onUninstall: () => void;
   isLast?: boolean;
+  hasUpdate?: boolean;
 }
 
 const InstalledSkillListItem: React.FC<InstalledSkillListItemProps> = ({
@@ -349,6 +387,7 @@ const InstalledSkillListItem: React.FC<InstalledSkillListItemProps> = ({
   onToggleApp,
   onUninstall,
   isLast,
+  hasUpdate = false,
 }) => {
   const { t } = useTranslation();
 
@@ -383,6 +422,15 @@ const InstalledSkillListItem: React.FC<InstalledSkillListItemProps> = ({
             >
               <ExternalLink size={12} />
             </button>
+          )}
+          {hasUpdate && (
+            <span
+              className="inline-flex items-center gap-0.5 text-xs font-medium text-amber-600 dark:text-amber-400 flex-shrink-0"
+              title={t("skills.updateAvailable", { defaultValue: "有新版本可用" })}
+            >
+              <ArrowUpCircle size={12} />
+              {t("skills.updateAvailable", { defaultValue: "有更新" })}
+            </span>
           )}
           <span className="text-xs text-muted-foreground/50 flex-shrink-0">
             {sourceLabel}

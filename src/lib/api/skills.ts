@@ -195,6 +195,11 @@ export const skillsApi = {
     return await invoke("remove_skill_repo", { owner, name });
   },
 
+  /** 检查已安装 Skills 是否有更新，返回有更新的 skill id 列表 */
+  async checkUpdates(): Promise<string[]> {
+    return await invoke("check_skill_updates");
+  },
+
   // ========== ZIP 安装 ==========
 
   /** 打开 ZIP 文件选择对话框 */

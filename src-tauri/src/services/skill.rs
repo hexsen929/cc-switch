@@ -2116,6 +2116,106 @@ impl SkillService {
 
         Ok(())
     }
+
+    /// 检查已安装 Skills 是否有更新
+    ///
+    /// 按仓库分组，每个仓库只请求一次 GitHub API，对比最新 commit 时间与安装时间。
+    /// 返回有更新的 skill id 列表。
+    pub async fn check_updates(db: &Arc<Database>) -> Result<Vec<String>> {
+        let installed = db.get_all_installed_skills()?;
+
+        // 按 (owner, repo, branch) 分组，记录该组下哪些 skill 的 installed_at
+        let mut repo_map: HashMap<(String, String, String), Vec<(String, i64)>> = HashMap::new();
+        for skill in installed.values() {
+            if let (Some(owner), Some(repo), Some(branch)) = (
+                &skill.repo_owner,
+                &skill.repo_name,
+                &skill.repo_branch,
+            ) {
+                repo_map
+                    .entry((owner.clone(), repo.clone(), branch.clone()))
+                    .or_default()
+                    .push((skill.id.clone(), skill.installed_at));
+            }
+        }
+
+        if repo_map.is_empty() {
+            return Ok(vec![]);
+        }
+
+        let client = crate::proxy::http_client::get();
+        let mut updatable_ids = Vec::new();
+
+        // 并发请求每个仓库的最新 commit
+        let tasks: Vec<_> = repo_map
+            .into_iter()
+            .map(|((owner, repo, branch), skills)| {
+                let client = client.clone();
+                async move {
+                    let url = format!(
+                        "https://api.github.com/repos/{}/{}/commits/{}",
+                        owner, repo, branch
+                    );
+                    let result = client
+                        .get(&url)
+                        .header("Accept", "application/vnd.github.v3+json")
+                        .header("User-Agent", "cc-switch")
+                        .timeout(std::time::Duration::from_secs(15))
+                        .send()
+                        .await;
+
+                    match result {
+                        Ok(resp) if resp.status().is_success() => {
+                            #[derive(Deserialize)]
+                            struct CommitResponse {
+                                commit: CommitInfo,
+                            }
+                            #[derive(Deserialize)]
+                            struct CommitInfo {
+                                author: CommitAuthor,
+                            }
+                            #[derive(Deserialize)]
+                            struct CommitAuthor {
+                                date: String,
+                            }
+
+                            match resp.json::<CommitResponse>().await {
+                                Ok(data) => {
+                                    // 解析 ISO 8601 时间字符串
+                                    if let Ok(dt) = data.commit.author.date.parse::<DateTime<Utc>>() {
+                                        let remote_ts = dt.timestamp();
+                                        let ids: Vec<String> = skills
+                                            .into_iter()
+                                            .filter(|(_, installed_at)| remote_ts > *installed_at)
+                                            .map(|(id, _)| id)
+                                            .collect();
+                                        return ids;
+                                    }
+                                }
+                                Err(e) => {
+                                    log::warn!("[check_updates] 解析 {}/{} 响应失败: {}", owner, repo, e);
+                                }
+                            }
+                        }
+                        Ok(resp) => {
+                            log::warn!("[check_updates] {}/{} 返回 {}", owner, repo, resp.status());
+                        }
+                        Err(e) => {
+                            log::warn!("[check_updates] 请求 {}/{} 失败: {}", owner, repo, e);
+                        }
+                    }
+                    vec![]
+                }
+            })
+            .collect();
+
+        let results = futures::future::join_all(tasks).await;
+        for ids in results {
+            updatable_ids.extend(ids);
+        }
+
+        Ok(updatable_ids)
+    }
 }
 
 // ========== 迁移支持 ==========

@@ -941,6 +941,7 @@ pub fn run() {
             commands::toggle_skill_app,
             commands::scan_unmanaged_skills,
             commands::import_skills_from_apps,
+            commands::check_skill_updates,
             commands::discover_available_skills,
             // Skill management (legacy API compatibility)
             commands::get_skills,

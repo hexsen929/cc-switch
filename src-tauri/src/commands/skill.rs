@@ -120,6 +120,17 @@ pub fn import_skills_from_apps(
 
 // ========== 发现功能命令 ==========
 
+/// 检查已安装 Skills 是否有更新
+/// 返回有更新的 skill id 列表
+#[tauri::command]
+pub async fn check_skill_updates(
+    app_state: State<'_, AppState>,
+) -> Result<Vec<String>, String> {
+    SkillService::check_updates(&app_state.db)
+        .await
+        .map_err(|e| e.to_string())
+}
+
 /// 发现可安装的 Skills（从仓库获取）
 #[tauri::command]
 pub async fn discover_available_skills(
