@@ -187,6 +187,7 @@ impl ProxyServer {
                 app_type: app_type.clone(),
                 provider_id: provider_id.clone(),
                 provider_name: provider_name.clone(),
+                model_key: None,
             })
             .collect();
 
