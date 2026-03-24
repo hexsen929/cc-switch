@@ -10,6 +10,7 @@ import { toast } from "sonner";
 import { FormLabel } from "@/components/ui/form";
 import { Input } from "@/components/ui/input";
 import { ChevronDown, ChevronRight, Loader2 } from "lucide-react";
+import { ModelSuggest } from "@/components/ui/model-suggest";
 import {
   Select,
   SelectContent,
@@ -152,9 +153,9 @@ export function ClaudeFormFields({
   onApiFormatChange,
   apiKeyField,
   onApiKeyFieldChange,
-  onFetchModels: _onFetchModels,
-  isFetchingModels: _isFetchingModels,
-  modelSuggestions: _modelSuggestions,
+  onFetchModels,
+  isFetchingModels = false,
+  modelSuggestions = [],
 }: ClaudeFormFieldsProps) {
   const { t } = useTranslation();
   const hasAnyAdvancedValue = !!(
@@ -300,13 +301,12 @@ export function ClaudeFormFields({
     }
 
     return (
-      <Input
+      <ModelSuggest
         id={id}
-        type="text"
         value={value}
-        onChange={(e) => onModelChange(field, e.target.value)}
+        onChange={(val) => onModelChange(field, val)}
         placeholder={placeholder}
-        autoComplete="off"
+        suggestions={modelSuggestions}
       />
     );
   };
@@ -503,7 +503,25 @@ export function ClaudeFormFields({
 
             {/* 模型映射 */}
             <div className="space-y-1 pt-2 border-t">
-              <FormLabel>{t("providerForm.modelMappingLabel")}</FormLabel>
+              <div className="flex items-center justify-between">
+                <FormLabel className="mb-0">{t("providerForm.modelMappingLabel")}</FormLabel>
+                {onFetchModels && (
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    onClick={onFetchModels}
+                    disabled={isFetchingModels}
+                  >
+                    {isFetchingModels && (
+                      <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                    )}
+                    {t("providerForm.autoFetchModels", {
+                      defaultValue: "自动获取模型",
+                    })}
+                  </Button>
+                )}
+              </div>
               <p className="text-xs text-muted-foreground">
                 {t("providerForm.modelMappingHint")}
               </p>
