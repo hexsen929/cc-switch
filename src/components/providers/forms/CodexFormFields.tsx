@@ -25,6 +25,8 @@ interface CodexFormFieldsProps {
   shouldShowSpeedTest: boolean;
   codexBaseUrl: string;
   onBaseUrlChange: (url: string) => void;
+  isFullUrl: boolean;
+  onFullUrlChange: (value: boolean) => void;
   isEndpointModalOpen: boolean;
   onEndpointModalToggle: (open: boolean) => void;
   onCustomEndpointsChange?: (endpoints: string[]) => void;
@@ -55,6 +57,8 @@ export function CodexFormFields({
   shouldShowSpeedTest,
   codexBaseUrl,
   onBaseUrlChange,
+  isFullUrl,
+  onFullUrlChange,
   isEndpointModalOpen,
   onEndpointModalToggle,
   onCustomEndpointsChange,
@@ -102,6 +106,9 @@ export function CodexFormFields({
           onChange={onBaseUrlChange}
           placeholder={t("providerForm.codexApiEndpointPlaceholder")}
           hint={t("providerForm.codexApiHint")}
+          showFullUrlToggle
+          isFullUrl={isFullUrl}
+          onFullUrlChange={onFullUrlChange}
           onManageClick={() => onEndpointModalToggle(true)}
         />
       )}

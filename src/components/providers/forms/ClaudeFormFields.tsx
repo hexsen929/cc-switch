@@ -112,6 +112,10 @@ interface ClaudeFormFieldsProps {
   onFetchModels?: () => void;
   isFetchingModels?: boolean;
   modelSuggestions?: string[];
+
+  // Full URL mode
+  isFullUrl: boolean;
+  onFullUrlChange: (value: boolean) => void;
 }
 
 export function ClaudeFormFields({
@@ -156,6 +160,8 @@ export function ClaudeFormFields({
   onFetchModels,
   isFetchingModels = false,
   modelSuggestions = [],
+  isFullUrl,
+  onFullUrlChange,
 }: ClaudeFormFieldsProps) {
   const { t } = useTranslation();
   const hasAnyAdvancedValue = !!(
@@ -167,8 +173,7 @@ export function ClaudeFormFields({
     apiFormat !== "anthropic" ||
     apiKeyField !== "ANTHROPIC_AUTH_TOKEN"
   );
-  const [advancedExpanded, setAdvancedExpanded] =
-    useState(hasAnyAdvancedValue);
+  const [advancedExpanded, setAdvancedExpanded] = useState(hasAnyAdvancedValue);
 
   // 预设填充高级值后自动展开（仅从折叠→展开，不会自动折叠）
   useEffect(() => {
@@ -385,6 +390,9 @@ export function ClaudeFormFields({
                 : t("providerForm.apiHint")
           }
           onManageClick={() => onEndpointModalToggle(true)}
+          showFullUrlToggle={true}
+          isFullUrl={isFullUrl}
+          onFullUrlChange={onFullUrlChange}
         />
       )}
 
@@ -406,10 +414,7 @@ export function ClaudeFormFields({
 
       {/* 高级选项（API 格式 + 认证字段 + 模型映射） */}
       {shouldShowModelSelector && (
-        <Collapsible
-          open={advancedExpanded}
-          onOpenChange={setAdvancedExpanded}
-        >
+        <Collapsible open={advancedExpanded} onOpenChange={setAdvancedExpanded}>
           <CollapsibleTrigger asChild>
             <Button
               type="button"
