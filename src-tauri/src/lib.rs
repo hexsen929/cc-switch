@@ -942,6 +942,8 @@ pub fn run() {
             commands::scan_unmanaged_skills,
             commands::import_skills_from_apps,
             commands::check_skill_updates,
+            commands::update_skill_unified,
+            commands::update_all_skills,
             commands::discover_available_skills,
             // Fork proxy (Claude model routing)
             commands::get_claude_model_routing_settings,

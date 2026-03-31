@@ -120,6 +120,34 @@ pub fn import_skills_from_apps(
 
 // ========== 发现功能命令 ==========
 
+/// 更新单个 Skill
+#[tauri::command]
+pub async fn update_skill_unified(
+    id: String,
+    service: State<'_, SkillServiceState>,
+    app_state: State<'_, AppState>,
+) -> Result<InstalledSkill, String> {
+    service
+        .0
+        .update_skill(&app_state.db, &id)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+/// 批量更新 Skills
+#[tauri::command]
+pub async fn update_all_skills(
+    ids: Vec<String>,
+    service: State<'_, SkillServiceState>,
+    app_state: State<'_, AppState>,
+) -> Result<Vec<InstalledSkill>, String> {
+    service
+        .0
+        .update_all_skills(&app_state.db, &ids)
+        .await
+        .map_err(|e| e.to_string())
+}
+
 /// 检查已安装 Skills 是否有更新
 /// 返回有更新的 skill id 列表
 #[tauri::command]

@@ -200,6 +200,16 @@ export const skillsApi = {
     return await invoke("check_skill_updates");
   },
 
+  /** 更新单个 Skill */
+  async updateSkill(id: string): Promise<InstalledSkill> {
+    return await invoke("update_skill_unified", { id });
+  },
+
+  /** 批量更新 Skills */
+  async updateAllSkills(ids: string[]): Promise<InstalledSkill[]> {
+    return await invoke("update_all_skills", { ids });
+  },
+
   // ========== ZIP 安装 ==========
 
   /** 打开 ZIP 文件选择对话框 */

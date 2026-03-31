@@ -2216,9 +2216,131 @@ impl SkillService {
 
         Ok(updatable_ids)
     }
-}
 
-// ========== 迁移支持 ==========
+    /// 更新单个 Skill（重新从仓库下载，保留启用状态）
+    pub async fn update_skill(&self, db: &Arc<Database>, id: &str) -> Result<InstalledSkill> {
+        let skill = db
+            .get_installed_skill(id)?
+            .ok_or_else(|| anyhow!("Skill not found: {id}"))?;
+
+        let owner = skill
+            .repo_owner
+            .clone()
+            .ok_or_else(|| anyhow!("Skill {} has no repo info, cannot update", skill.name))?;
+        let repo_name_str = skill
+            .repo_name
+            .clone()
+            .ok_or_else(|| anyhow!("Skill {} has no repo info, cannot update", skill.name))?;
+        let branch = skill
+            .repo_branch
+            .clone()
+            .ok_or_else(|| anyhow!("Skill {} has no repo info, cannot update", skill.name))?;
+
+        // id 格式: "owner/repo:directory"，提取仓库内相对路径
+        let repo_dir = id
+            .splitn(2, ':')
+            .nth(1)
+            .unwrap_or(&skill.directory)
+            .to_string();
+
+        // 备份旧版本
+        Self::create_uninstall_backup(&skill)?;
+
+        // 从所有应用目录移除
+        for app in AppType::all() {
+            let _ = Self::remove_from_app(&skill.directory, &app);
+        }
+
+        // 删除 SSOT 目录，强制重新下载
+        let ssot_dir = Self::get_ssot_dir()?;
+        let skill_path = ssot_dir.join(&skill.directory);
+        if skill_path.exists() {
+            fs::remove_dir_all(&skill_path)?;
+        }
+
+        // 下载仓库
+        let repo = SkillRepo {
+            owner: owner.clone(),
+            name: repo_name_str.clone(),
+            branch: branch.clone(),
+            enabled: true,
+        };
+        let (temp_dir, used_branch) = timeout(
+            std::time::Duration::from_secs(60),
+            self.download_repo(&repo),
+        )
+        .await
+        .map_err(|_| {
+            anyhow!(format_skill_error(
+                "DOWNLOAD_TIMEOUT",
+                &[
+                    ("owner", owner.as_str()),
+                    ("name", repo_name_str.as_str()),
+                    ("timeout", "60")
+                ],
+                Some("checkNetwork"),
+            ))
+        })??;
+
+        // 在下载的仓库中定位 skill 目录
+        let source_rel =
+            Self::sanitize_skill_source_path(&repo_dir).ok_or_else(|| {
+                anyhow!(format_skill_error(
+                    "INVALID_SKILL_DIRECTORY",
+                    &[("directory", &repo_dir)],
+                    Some("checkZipContent"),
+                ))
+            })?;
+        let source = temp_dir.join(&source_rel);
+
+        if !source.exists() {
+            let _ = fs::remove_dir_all(&temp_dir);
+            return Err(anyhow!(format_skill_error(
+                "SKILL_DIR_NOT_FOUND",
+                &[("path", &source.display().to_string())],
+                Some("checkRepoUrl"),
+            )));
+        }
+
+        let dest = ssot_dir.join(&skill.directory);
+        Self::copy_dir_recursive(&source, &dest)?;
+        let _ = fs::remove_dir_all(&temp_dir);
+
+        // 更新安装时间，保留启用状态
+        let mut updated = skill;
+        updated.installed_at = chrono::Utc::now().timestamp();
+        if used_branch != branch {
+            updated.repo_branch = Some(used_branch);
+        }
+        db.save_skill(&updated)?;
+
+        // 重新同步到所有已启用的应用目录
+        for app in AppType::all() {
+            if updated.apps.is_enabled_for(&app) {
+                Self::sync_to_app_dir(&updated.directory, &app)?;
+            }
+        }
+
+        log::info!("Skill {} 更新成功", updated.name);
+        Ok(updated)
+    }
+
+    /// 批量更新 Skills，单个失败不中断整体
+    pub async fn update_all_skills(
+        &self,
+        db: &Arc<Database>,
+        ids: &[String],
+    ) -> Result<Vec<InstalledSkill>> {
+        let mut updated = Vec::new();
+        for id in ids {
+            match self.update_skill(db, id).await {
+                Ok(skill) => updated.push(skill),
+                Err(e) => log::warn!("更新 Skill {id} 失败: {e:#}"),
+            }
+        }
+        Ok(updated)
+    }
+}
 
 /// 从 lock 文件信息构建 skill 的 ID、仓库字段和 readme URL
 ///

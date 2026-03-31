@@ -67,6 +67,37 @@ export function useCheckSkillUpdates() {
   });
 }
 
+export function useUpdateSkill() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (id: string) => skillsApi.updateSkill(id),
+    onSuccess: (updatedSkill) => {
+      queryClient.setQueryData<InstalledSkill[]>(["skills", "installed"], (old) => {
+        if (!old) return [updatedSkill];
+        return old.map((s) => (s.id === updatedSkill.id ? updatedSkill : s));
+      });
+      queryClient.setQueryData<string[]>(["skills", "updates"], (old) =>
+        old ? old.filter((id) => id !== updatedSkill.id) : [],
+      );
+    },
+  });
+}
+
+export function useUpdateAllSkills() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (ids: string[]) => skillsApi.updateAllSkills(ids),
+    onSuccess: (updatedSkills) => {
+      queryClient.setQueryData<InstalledSkill[]>(["skills", "installed"], (old) => {
+        if (!old) return updatedSkills;
+        const map = new Map(updatedSkills.map((s) => [s.id, s]));
+        return old.map((s) => map.get(s.id) ?? s);
+      });
+      queryClient.setQueryData<string[]>(["skills", "updates"], []);
+    },
+  });
+}
+
 /**
  * 安装 Skill
  * 成功后直接更新缓存，不触发重新加载/刷新
