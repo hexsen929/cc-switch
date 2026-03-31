@@ -696,11 +696,23 @@ jobs:
         run: |
           set -euo pipefail
           CURRENT_REF="refs/tags/${{ github.ref_name }}"
+          REPO="${{ github.repository }}"
           echo "Keeping caches for: $CURRENT_REF"
-          gh cache list --repo "${{ github.repository }}" --limit 100 --json id,ref \
-            | jq -r ".[] | select(.ref != \"$CURRENT_REF\") | .id" \
-            | while read -r cache_id; do
-                echo "Deleting cache: $cache_id"
-                gh cache delete "$cache_id" --repo "${{ github.repository }}" || true
-              done
-          echo "Cache cleanup complete"
+          page=1
+          deleted=0
+          while true; do
+            ids=$(gh cache list --repo "$REPO" --limit 100 --json id,ref \
+              | jq -r ".[] | select(.ref | startswith(\"refs/tags/\")) | select(.ref != \"$CURRENT_REF\") | .id")
+            [ -z "$ids" ] && break
+            while IFS= read -r cache_id; do
+              echo "Deleting cache: $cache_id"
+              if gh cache delete "$cache_id" --repo "$REPO"; then
+                deleted=$((deleted + 1))
+              else
+                echo "Warning: failed to delete cache $cache_id" >&2
+              fi
+            done <<< "$ids"
+            page=$((page + 1))
+            [ $(echo "$ids" | wc -l) -lt 100 ] && break
+          done
+          echo "Cache cleanup complete: $deleted caches deleted"
