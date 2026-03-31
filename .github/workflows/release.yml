@@ -682,3 +682,25 @@ jobs:
         run: |
           set -euxo pipefail
           gh release upload "$GITHUB_REF_NAME" latest.json --clobber --repo "$GITHUB_REPOSITORY"
+
+  cleanup-old-caches:
+    name: Cleanup old caches
+    runs-on: ubuntu-22.04
+    needs: assemble-latest-json
+    permissions:
+      actions: write
+    steps:
+      - name: Delete caches from previous tags
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          CURRENT_REF="refs/tags/${{ github.ref_name }}"
+          echo "Keeping caches for: $CURRENT_REF"
+          gh cache list --repo "${{ github.repository }}" --limit 100 --json id,ref \
+            | jq -r ".[] | select(.ref != \"$CURRENT_REF\") | .id" \
+            | while read -r cache_id; do
+                echo "Deleting cache: $cache_id"
+                gh cache delete "$cache_id" --repo "${{ github.repository }}" || true
+              done
+          echo "Cache cleanup complete"
