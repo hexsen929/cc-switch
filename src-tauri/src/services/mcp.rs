@@ -285,10 +285,10 @@ impl McpService {
                     state.db.save_mcp_server(&to_save)?;
                     existing.insert(to_save.id.clone(), to_save.clone());
 
-                    // 同步到对应应用 live 配置
-                    Self::sync_server_to_apps(state, &to_save)?;
                 }
             }
+
+            Self::sync_all_enabled(state)?;
         }
 
         Ok(new_count)
@@ -323,10 +323,10 @@ impl McpService {
                     state.db.save_mcp_server(&to_save)?;
                     existing.insert(to_save.id.clone(), to_save.clone());
 
-                    // 同步到对应应用 live 配置
-                    Self::sync_server_to_apps(state, &to_save)?;
                 }
             }
+
+            Self::sync_all_enabled(state)?;
         }
 
         Ok(new_count)
@@ -361,10 +361,10 @@ impl McpService {
                     state.db.save_mcp_server(&to_save)?;
                     existing.insert(to_save.id.clone(), to_save.clone());
 
-                    // 同步到对应应用 live 配置
-                    Self::sync_server_to_apps(state, &to_save)?;
                 }
             }
+
+            Self::sync_all_enabled(state)?;
         }
 
         Ok(new_count)
@@ -399,10 +399,10 @@ impl McpService {
                     state.db.save_mcp_server(&to_save)?;
                     existing.insert(to_save.id.clone(), to_save.clone());
 
-                    // 同步到对应应用 live 配置
-                    Self::sync_server_to_apps(state, &to_save)?;
                 }
             }
+
+            Self::sync_all_enabled(state)?;
         }
 
         Ok(new_count)
