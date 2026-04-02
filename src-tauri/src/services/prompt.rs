@@ -3,6 +3,7 @@ use indexmap::IndexMap;
 use crate::app_config::AppType;
 use crate::config::write_text_file;
 use crate::error::AppError;
+use crate::provider::{Provider, ProviderPromptOverrideMode};
 use crate::prompt::Prompt;
 use crate::prompt_files::prompt_file_path;
 use crate::store::AppState;
@@ -18,6 +19,73 @@ fn get_unix_timestamp() -> Result<i64, AppError> {
 pub struct PromptService;
 
 impl PromptService {
+    fn get_current_provider_for_app(
+        state: &AppState,
+        app: &AppType,
+    ) -> Result<Option<Provider>, AppError> {
+        if app.is_additive_mode() {
+            return Ok(None);
+        }
+
+        let Some(provider_id) = crate::settings::get_effective_current_provider(&state.db, app)?
+        else {
+            return Ok(None);
+        };
+
+        state.db.get_provider_by_id(&provider_id, app.as_str())
+    }
+
+    fn resolve_effective_prompt_from_map(
+        prompts: &IndexMap<String, Prompt>,
+        provider: Option<&Provider>,
+    ) -> Option<Prompt> {
+        let global_enabled = prompts.values().find(|prompt| prompt.enabled).cloned();
+
+        let Some(prompt_override) = provider
+            .and_then(|provider| provider.meta.as_ref())
+            .and_then(|meta| meta.resource_overrides.as_ref())
+            .and_then(|overrides| overrides.prompt.as_ref())
+            .filter(|override_config| override_config.enabled)
+        else {
+            return global_enabled;
+        };
+
+        match prompt_override.mode {
+            ProviderPromptOverrideMode::Disabled => None,
+            ProviderPromptOverrideMode::Selected => prompt_override
+                .prompt_id
+                .as_ref()
+                .and_then(|prompt_id| prompts.get(prompt_id).cloned())
+                .or(global_enabled),
+        }
+    }
+
+    pub fn resolve_effective_prompt(
+        state: &AppState,
+        app: &AppType,
+    ) -> Result<Option<Prompt>, AppError> {
+        let prompts = state.db.get_prompts(app.as_str())?;
+        let provider = Self::get_current_provider_for_app(state, app)?;
+        Ok(Self::resolve_effective_prompt_from_map(
+            &prompts,
+            provider.as_ref(),
+        ))
+    }
+
+    pub fn sync_effective_prompt_to_file(state: &AppState, app: AppType) -> Result<(), AppError> {
+        let target_path = prompt_file_path(&app)?;
+        let content = Self::resolve_effective_prompt(state, &app)?
+            .map(|prompt| prompt.content)
+            .unwrap_or_default();
+
+        if content.trim().is_empty() && !target_path.exists() {
+            return Ok(());
+        }
+
+        write_text_file(&target_path, &content)?;
+        Ok(())
+    }
+
     pub fn get_prompts(
         state: &AppState,
         app: AppType,
@@ -31,28 +99,9 @@ impl PromptService {
         _id: &str,
         prompt: Prompt,
     ) -> Result<(), AppError> {
-        // 检查是否为已启用的提示词
-        let is_enabled = prompt.enabled;
-
         state.db.save_prompt(app.as_str(), &prompt)?;
 
-        if is_enabled {
-            // 启用提示词：写入内容到文件
-            let target_path = prompt_file_path(&app)?;
-            write_text_file(&target_path, &prompt.content)?;
-        } else {
-            // 禁用提示词：检查是否还有其他已启用的提示词
-            let prompts = state.db.get_prompts(app.as_str())?;
-            let any_enabled = prompts.values().any(|p| p.enabled);
-
-            if !any_enabled {
-                // 所有提示词都已禁用，清空文件
-                let target_path = prompt_file_path(&app)?;
-                if target_path.exists() {
-                    write_text_file(&target_path, "")?;
-                }
-            }
-        }
+        Self::sync_effective_prompt_to_file(state, app)?;
 
         Ok(())
     }
@@ -67,6 +116,7 @@ impl PromptService {
         }
 
         state.db.delete_prompt(app.as_str(), id)?;
+        Self::sync_effective_prompt_to_file(state, app)?;
         Ok(())
     }
 
@@ -129,7 +179,6 @@ impl PromptService {
 
         if let Some(prompt) = prompts.get_mut(id) {
             prompt.enabled = true;
-            write_text_file(&target_path, &prompt.content)?; // 原子写入
             state.db.save_prompt(app.as_str(), prompt)?;
         } else {
             return Err(AppError::InvalidInput(format!("提示词 {id} 不存在")));
@@ -139,6 +188,8 @@ impl PromptService {
         for (_, prompt) in prompts.iter() {
             state.db.save_prompt(app.as_str(), prompt)?;
         }
+
+        Self::sync_effective_prompt_to_file(state, app)?;
 
         Ok(())
     }

@@ -861,14 +861,23 @@ pub fn sync_current_to_live(state: &AppState) -> Result<(), AppError> {
         }
     }
 
-    // MCP sync
-    McpService::sync_all_enabled(state)?;
-
-    // Skill sync
     for app_type in AppType::all() {
+        if let Err(e) = McpService::sync_effective_for_app(state, &app_type) {
+            log::warn!("同步 MCP 到 {app_type:?} 失败: {e}");
+        }
+
         if let Err(e) = crate::services::skill::SkillService::sync_to_app(&state.db, &app_type) {
             log::warn!("同步 Skill 到 {app_type:?} 失败: {e}");
             // Continue syncing other apps, don't abort
+        }
+
+        if let Err(e) =
+            crate::services::prompt::PromptService::sync_effective_prompt_to_file(
+                state,
+                app_type.clone(),
+            )
+        {
+            log::warn!("同步 Prompt 到 {app_type:?} 失败: {e}");
         }
     }
 

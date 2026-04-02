@@ -4,12 +4,51 @@ use std::collections::HashMap;
 use crate::app_config::{AppType, McpServer};
 use crate::error::AppError;
 use crate::mcp;
+use crate::provider::Provider;
 use crate::store::AppState;
 
 /// MCP 相关业务逻辑（v3.7.0 统一结构）
 pub struct McpService;
 
 impl McpService {
+    fn get_current_provider_for_app(
+        state: &AppState,
+        app: &AppType,
+    ) -> Result<Option<Provider>, AppError> {
+        if app.is_additive_mode() {
+            return Ok(None);
+        }
+
+        let Some(provider_id) = crate::settings::get_effective_current_provider(&state.db, app)?
+        else {
+            return Ok(None);
+        };
+
+        state.db.get_provider_by_id(&provider_id, app.as_str())
+    }
+
+    fn is_effectively_enabled_for_app(
+        server: &McpServer,
+        app: &AppType,
+        provider: Option<&Provider>,
+    ) -> bool {
+        if !server.apps.is_enabled_for(app) {
+            return false;
+        }
+
+        let Some(disabled_server_ids) = provider
+            .and_then(|provider| provider.meta.as_ref())
+            .and_then(|meta| meta.resource_overrides.as_ref())
+            .and_then(|overrides| overrides.mcp.as_ref())
+            .filter(|override_config| override_config.enabled)
+            .map(|override_config| &override_config.disabled_server_ids)
+        else {
+            return true;
+        };
+
+        !disabled_server_ids.iter().any(|id| id == &server.id)
+    }
+
     /// 获取所有 MCP 服务器（统一结构）
     pub fn get_all_servers(state: &AppState) -> Result<IndexMap<String, McpServer>, AppError> {
         state.db.get_all_mcp_servers()
@@ -41,8 +80,8 @@ impl McpService {
             Self::remove_server_from_app(state, &server.id, &AppType::OpenCode)?;
         }
 
-        // 同步到各个启用的应用
-        Self::sync_server_to_apps(state, &server)?;
+        // 根据当前 provider 的覆盖配置重新同步
+        Self::sync_all_enabled(state)?;
 
         Ok(())
     }
@@ -75,21 +114,8 @@ impl McpService {
             server.apps.set_enabled_for(&app, enabled);
             state.db.save_mcp_server(server)?;
 
-            // 同步到对应应用
-            if enabled {
-                Self::sync_server_to_app(state, server, &app)?;
-            } else {
-                Self::remove_server_from_app(state, server_id, &app)?;
-            }
-        }
-
-        Ok(())
-    }
-
-    /// 将 MCP 服务器同步到所有启用的应用
-    fn sync_server_to_apps(_state: &AppState, server: &McpServer) -> Result<(), AppError> {
-        for app in server.apps.enabled_apps() {
-            Self::sync_server_to_app_no_config(server, &app)?;
+            // 重新同步对应应用，应用 provider 级覆盖
+            Self::sync_effective_for_app(state, &app)?;
         }
 
         Ok(())
@@ -161,22 +187,30 @@ impl McpService {
         Ok(())
     }
 
+    /// 按当前 provider 的覆盖配置同步指定应用的 MCP
+    pub fn sync_effective_for_app(state: &AppState, app: &AppType) -> Result<(), AppError> {
+        if matches!(app, AppType::OpenClaw) {
+            return Ok(());
+        }
+
+        let servers = Self::get_all_servers(state)?;
+        let current_provider = Self::get_current_provider_for_app(state, app)?;
+
+        for server in servers.values() {
+            if Self::is_effectively_enabled_for_app(server, app, current_provider.as_ref()) {
+                Self::sync_server_to_app(state, server, app)?;
+            } else {
+                Self::remove_server_from_app(state, &server.id, app)?;
+            }
+        }
+
+        Ok(())
+    }
+
     /// 手动同步所有启用的 MCP 服务器到对应的应用
     pub fn sync_all_enabled(state: &AppState) -> Result<(), AppError> {
-        let servers = Self::get_all_servers(state)?;
-
         for app in AppType::all() {
-            if matches!(app, AppType::OpenClaw) {
-                continue;
-            }
-
-            for server in servers.values() {
-                if server.apps.is_enabled_for(&app) {
-                    Self::sync_server_to_app(state, server, &app)?;
-                } else {
-                    Self::remove_server_from_app(state, &server.id, &app)?;
-                }
-            }
+            Self::sync_effective_for_app(state, &app)?;
         }
 
         Ok(())
@@ -219,15 +253,7 @@ impl McpService {
     /// [已废弃] 同步启用的 MCP 到指定应用（兼容旧 API）
     #[deprecated(since = "3.7.0", note = "Use sync_all_enabled instead")]
     pub fn sync_enabled(state: &AppState, app: AppType) -> Result<(), AppError> {
-        let servers = Self::get_all_servers(state)?;
-
-        for server in servers.values() {
-            if server.apps.is_enabled_for(&app) {
-                Self::sync_server_to_app(state, server, &app)?;
-            }
-        }
-
-        Ok(())
+        Self::sync_effective_for_app(state, &app)
     }
 
     /// 从 Claude 导入 MCP（v3.7.0 已更新为统一结构）

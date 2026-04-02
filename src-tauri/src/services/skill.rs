@@ -18,6 +18,7 @@ use crate::app_config::{AppType, InstalledSkill, SkillApps, UnmanagedSkill};
 use crate::config::get_app_config_dir;
 use crate::database::Database;
 use crate::error::format_skill_error;
+use crate::provider::Provider;
 
 // ========== 数据结构 ==========
 
@@ -360,6 +361,45 @@ impl Default for SkillService {
 }
 
 impl SkillService {
+    fn get_current_provider_for_app(
+        db: &Arc<Database>,
+        app: &AppType,
+    ) -> Result<Option<Provider>> {
+        if app.is_additive_mode() {
+            return Ok(None);
+        }
+
+        let Some(provider_id) = crate::settings::get_effective_current_provider(db.as_ref(), app)?
+        else {
+            return Ok(None);
+        };
+
+        db.get_provider_by_id(&provider_id, app.as_str())
+            .map_err(anyhow::Error::from)
+    }
+
+    fn is_effectively_enabled_for_app(
+        skill: &InstalledSkill,
+        app: &AppType,
+        provider: Option<&Provider>,
+    ) -> bool {
+        if !skill.apps.is_enabled_for(app) {
+            return false;
+        }
+
+        let Some(disabled_skill_ids) = provider
+            .and_then(|provider| provider.meta.as_ref())
+            .and_then(|meta| meta.resource_overrides.as_ref())
+            .and_then(|overrides| overrides.skills.as_ref())
+            .filter(|override_config| override_config.enabled)
+            .map(|override_config| &override_config.disabled_skill_ids)
+        else {
+            return true;
+        };
+
+        !disabled_skill_ids.iter().any(|id| id == &skill.id)
+    }
+
     pub fn new() -> Self {
         Self
     }
@@ -504,7 +544,7 @@ impl SkillService {
                     let mut updated = existing.clone();
                     updated.apps.set_enabled_for(current_app, true);
                     db.save_skill(&updated)?;
-                    Self::sync_to_app_dir(&updated.directory, current_app)?;
+                    Self::sync_to_app(db, current_app)?;
                     log::info!(
                         "Skill {} 已存在，更新 {:?} 启用状态",
                         updated.name,
@@ -653,7 +693,7 @@ impl SkillService {
         db.save_skill(&installed_skill)?;
 
         // 同步到当前应用目录
-        Self::sync_to_app_dir(&install_name, current_app)?;
+        Self::sync_to_app(db, current_app)?;
 
         log::info!(
             "Skill {} 安装成功，已启用 {:?}",
@@ -809,7 +849,7 @@ impl SkillService {
         }
 
         if !restored_skill.apps.is_empty() {
-            if let Err(err) = Self::sync_to_app_dir(&restored_skill.directory, current_app) {
+            if let Err(err) = Self::sync_to_app(db, current_app) {
                 let _ = db.delete_skill(&restored_skill.id);
                 let _ = fs::remove_dir_all(&restore_path);
                 return Err(err);
@@ -838,15 +878,11 @@ impl SkillService {
         // 更新状态
         skill.apps.set_enabled_for(app, enabled);
 
-        // 同步文件
-        if enabled {
-            Self::sync_to_app_dir(&skill.directory, app)?;
-        } else {
-            Self::remove_from_app(&skill.directory, app)?;
-        }
-
-        // 更新数据库
+        // 先写数据库，再按当前 provider 覆盖重新同步
         db.update_skill_apps(id, &skill.apps)?;
+
+        // 同步文件
+        Self::sync_to_app(db, app)?;
 
         log::info!("Skill {} 的 {:?} 状态已更新为 {}", skill.name, app, enabled);
 
@@ -1173,6 +1209,7 @@ impl SkillService {
         let skills = db.get_all_installed_skills()?;
         let ssot_dir = Self::get_ssot_dir()?;
         let app_dir = Self::get_app_skills_dir(app)?;
+        let current_provider = Self::get_current_provider_for_app(db, app)?;
 
         let indexed_skills: HashMap<String, &InstalledSkill> = skills
             .values()
@@ -1190,7 +1227,11 @@ impl SkillService {
                 }
 
                 if let Some(skill) = indexed_skills.get(&dir_name.to_lowercase()) {
-                    if !skill.apps.is_enabled_for(app) {
+                    if !Self::is_effectively_enabled_for_app(
+                        skill,
+                        app,
+                        current_provider.as_ref(),
+                    ) {
                         Self::remove_path(&path)?;
                     }
                     continue;
@@ -1203,7 +1244,7 @@ impl SkillService {
         }
 
         for skill in skills.values() {
-            if skill.apps.is_enabled_for(app) {
+            if Self::is_effectively_enabled_for_app(skill, app, current_provider.as_ref()) {
                 Self::sync_to_app_dir(&skill.directory, app)?;
             }
         }
@@ -1983,7 +2024,7 @@ impl SkillService {
             db.save_skill(&skill)?;
 
             // 同步到当前应用目录
-            Self::sync_to_app_dir(&install_name, current_app)?;
+            Self::sync_to_app(db, current_app)?;
 
             log::info!(
                 "Skill {} installed from ZIP, enabled for {:?}",
@@ -2317,7 +2358,7 @@ impl SkillService {
         // 重新同步到所有已启用的应用目录
         for app in AppType::all() {
             if updated.apps.is_enabled_for(&app) {
-                Self::sync_to_app_dir(&updated.directory, &app)?;
+                Self::sync_to_app(db, &app)?;
             }
         }
 

@@ -191,6 +191,75 @@ pub struct ProviderProxyConfig {
     pub proxy_password: Option<String>,
 }
 
+/// Provider 级 MCP 覆盖配置
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct ProviderMcpOverrides {
+    /// 是否启用 provider 级覆盖（false 时沿用全局应用配置）
+    #[serde(default)]
+    pub enabled: bool,
+    /// 基于全局启用列表额外禁用的 MCP 服务器 ID
+    #[serde(
+        rename = "disabledServerIds",
+        default,
+        skip_serializing_if = "Vec::is_empty"
+    )]
+    pub disabled_server_ids: Vec<String>,
+}
+
+/// Provider 级 Skill 覆盖配置
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct ProviderSkillOverrides {
+    /// 是否启用 provider 级覆盖（false 时沿用全局应用配置）
+    #[serde(default)]
+    pub enabled: bool,
+    /// 基于全局启用列表额外禁用的 Skill ID
+    #[serde(
+        rename = "disabledSkillIds",
+        default,
+        skip_serializing_if = "Vec::is_empty"
+    )]
+    pub disabled_skill_ids: Vec<String>,
+}
+
+/// Provider 级 Prompt 覆盖模式
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum ProviderPromptOverrideMode {
+    /// 使用指定 Prompt
+    #[default]
+    Selected,
+    /// 不加载 Prompt
+    Disabled,
+}
+
+/// Provider 级 Prompt 覆盖配置
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct ProviderPromptOverrides {
+    /// 是否启用 provider 级覆盖（false 时沿用全局应用配置）
+    #[serde(default)]
+    pub enabled: bool,
+    /// 覆盖模式：selected / disabled
+    #[serde(default)]
+    pub mode: ProviderPromptOverrideMode,
+    /// 指定使用的 Prompt ID（mode=selected 时有效）
+    #[serde(rename = "promptId", skip_serializing_if = "Option::is_none")]
+    pub prompt_id: Option<String>,
+}
+
+/// Provider 级资源覆盖配置
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct ProviderResourceOverrides {
+    /// MCP 覆盖
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub mcp: Option<ProviderMcpOverrides>,
+    /// Skill 覆盖
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub skills: Option<ProviderSkillOverrides>,
+    /// Prompt 覆盖
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub prompt: Option<ProviderPromptOverrides>,
+}
+
 /// 认证绑定来源
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
 #[serde(rename_all = "snake_case")]
@@ -291,6 +360,9 @@ pub struct ProviderMeta {
     /// 用于多账号支持，关联到特定的 GitHub 账号
     #[serde(rename = "githubAccountId", skip_serializing_if = "Option::is_none")]
     pub github_account_id: Option<String>,
+    /// Provider 级 MCP / Skill / Prompt 覆盖
+    #[serde(rename = "resourceOverrides", skip_serializing_if = "Option::is_none")]
+    pub resource_overrides: Option<ProviderResourceOverrides>,
 }
 
 impl ProviderMeta {

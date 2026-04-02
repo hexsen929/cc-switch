@@ -12,6 +12,7 @@ import { providersApi } from "@/lib/api/providers";
 import type {
   ProviderCategory,
   ProviderMeta,
+  ProviderResourceOverrides,
   ProviderTestConfig,
   ProviderProxyConfig,
   ClaudeApiFormat,
@@ -63,6 +64,7 @@ import {
   ProviderAdvancedConfig,
   type PricingModelSourceOption,
 } from "./ProviderAdvancedConfig";
+import { ProviderResourceOverridesConfig } from "./ProviderResourceOverridesConfig";
 import {
   useProviderCategory,
   useApiKeyState,
@@ -123,6 +125,39 @@ interface ProviderFormProps {
     iconColor?: string;
   };
   showButtons?: boolean;
+}
+
+function normalizeResourceOverrides(
+  value: ProviderResourceOverrides,
+): ProviderResourceOverrides | undefined {
+  const next: ProviderResourceOverrides = {};
+
+  if (value.mcp?.enabled) {
+    next.mcp = {
+      enabled: true,
+      disabledServerIds: (value.mcp.disabledServerIds ?? []).filter(Boolean),
+    };
+  }
+
+  if (value.skills?.enabled) {
+    next.skills = {
+      enabled: true,
+      disabledSkillIds: (value.skills.disabledSkillIds ?? []).filter(Boolean),
+    };
+  }
+
+  if (value.prompt?.enabled) {
+    next.prompt = {
+      enabled: true,
+      mode: value.prompt.mode ?? "selected",
+      promptId:
+        (value.prompt.mode ?? "selected") === "selected"
+          ? value.prompt.promptId || undefined
+          : undefined,
+    };
+  }
+
+  return Object.keys(next).length > 0 ? next : undefined;
 }
 
 export function ProviderForm({
@@ -188,6 +223,22 @@ export function ProviderForm({
       initialData?.meta?.pricingModelSource,
     ),
   }));
+  const [resourceOverrides, setResourceOverrides] =
+    useState<ProviderResourceOverrides>(() => ({
+      mcp: initialData?.meta?.resourceOverrides?.mcp ?? {
+        enabled: false,
+        disabledServerIds: [],
+      },
+      skills: initialData?.meta?.resourceOverrides?.skills ?? {
+        enabled: false,
+        disabledSkillIds: [],
+      },
+      prompt: initialData?.meta?.resourceOverrides?.prompt ?? {
+        enabled: false,
+        mode: "selected",
+        promptId: undefined,
+      },
+    }));
 
   const { category } = useProviderCategory({
     appId,
@@ -220,6 +271,21 @@ export function ProviderForm({
       pricingModelSource: normalizePricingSource(
         initialData?.meta?.pricingModelSource,
       ),
+    });
+    setResourceOverrides({
+      mcp: initialData?.meta?.resourceOverrides?.mcp ?? {
+        enabled: false,
+        disabledServerIds: [],
+      },
+      skills: initialData?.meta?.resourceOverrides?.skills ?? {
+        enabled: false,
+        disabledSkillIds: [],
+      },
+      prompt: initialData?.meta?.resourceOverrides?.prompt ?? {
+        enabled: false,
+        mode: "selected",
+        promptId: undefined,
+      },
     });
   }, [appId, initialData, supportsFullUrl]);
 
@@ -597,20 +663,30 @@ export function ProviderForm({
   const handleFetchModels = useCallback(async () => {
     const parsedSettings = (() => {
       try {
-        return JSON.parse(form.getValues("settingsConfig") || "{}") as Record<string, unknown>;
+        return JSON.parse(form.getValues("settingsConfig") || "{}") as Record<
+          string,
+          unknown
+        >;
       } catch {
         return {} as Record<string, unknown>;
       }
     })();
 
     const resolveCredentials = () => {
-      if (appId === "claude") return { baseUrl: baseUrl.trim(), apiKey: apiKey.trim() };
-      if (appId === "codex") return { baseUrl: codexBaseUrl.trim(), apiKey: codexApiKey.trim() };
-      if (appId === "gemini") return { baseUrl: geminiBaseUrl.trim(), apiKey: geminiApiKey.trim() };
-      const options = parsedSettings.options && typeof parsedSettings.options === "object"
-        ? (parsedSettings.options as Record<string, unknown>) : {};
-      const fallbackBaseUrl = typeof options.baseURL === "string" ? options.baseURL.trim() : "";
-      const fallbackApiKey = typeof options.apiKey === "string" ? options.apiKey.trim() : "";
+      if (appId === "claude")
+        return { baseUrl: baseUrl.trim(), apiKey: apiKey.trim() };
+      if (appId === "codex")
+        return { baseUrl: codexBaseUrl.trim(), apiKey: codexApiKey.trim() };
+      if (appId === "gemini")
+        return { baseUrl: geminiBaseUrl.trim(), apiKey: geminiApiKey.trim() };
+      const options =
+        parsedSettings.options && typeof parsedSettings.options === "object"
+          ? (parsedSettings.options as Record<string, unknown>)
+          : {};
+      const fallbackBaseUrl =
+        typeof options.baseURL === "string" ? options.baseURL.trim() : "";
+      const fallbackApiKey =
+        typeof options.apiKey === "string" ? options.apiKey.trim() : "";
       return {
         baseUrl: opencodeForm.opencodeBaseUrl.trim() || fallbackBaseUrl,
         apiKey: opencodeForm.opencodeApiKey.trim() || fallbackApiKey,
@@ -619,11 +695,17 @@ export function ProviderForm({
 
     const { baseUrl: rawBaseUrl, apiKey: rawApiKey } = resolveCredentials();
     if (!rawBaseUrl) {
-      toast.error(t("providerForm.endpointRequired", { defaultValue: "请先填写 API 端点" }));
+      toast.error(
+        t("providerForm.endpointRequired", {
+          defaultValue: "请先填写 API 端点",
+        }),
+      );
       return;
     }
     if (!rawApiKey) {
-      toast.error(t("providerForm.apiKeyRequired", { defaultValue: "请先填写 API Key" }));
+      toast.error(
+        t("providerForm.apiKeyRequired", { defaultValue: "请先填写 API Key" }),
+      );
       return;
     }
 
@@ -639,12 +721,16 @@ export function ProviderForm({
       if (result.warnings?.length) {
         console.warn("[fetchModels] warnings:", result.warnings);
       }
-      const modelIds = [...new Set(result.models.map((m) => m.id).filter(Boolean))].sort((a, b) =>
-        a.localeCompare(b),
-      );
+      const modelIds = [
+        ...new Set(result.models.map((m) => m.id).filter(Boolean)),
+      ].sort((a, b) => a.localeCompare(b));
       setFetchedModelOptions(modelIds);
       if (modelIds.length === 0) {
-        toast.error(t("providerForm.fetchModelsEmpty", { defaultValue: "未获取到任何模型" }));
+        toast.error(
+          t("providerForm.fetchModelsEmpty", {
+            defaultValue: "未获取到任何模型",
+          }),
+        );
       } else {
         toast.success(
           t("providerForm.fetchModelsSuccess", {
@@ -656,7 +742,8 @@ export function ProviderForm({
     } catch (err) {
       toast.error(
         t("providerForm.fetchModelsFailed", {
-          defaultValue: "获取模型失败，此功能仅供参考，部分供应商可能不支持模型列表接口",
+          defaultValue:
+            "获取模型失败，此功能仅供参考，部分供应商可能不支持模型列表接口",
         }),
         { description: String(err) },
       );
@@ -664,9 +751,18 @@ export function ProviderForm({
       setIsFetchingModels(false);
     }
   }, [
-    appId, providerId, baseUrl, apiKey, codexBaseUrl, codexApiKey,
-    geminiBaseUrl, geminiApiKey, opencodeForm.opencodeBaseUrl, opencodeForm.opencodeApiKey,
-    form, t,
+    appId,
+    providerId,
+    baseUrl,
+    apiKey,
+    codexBaseUrl,
+    codexApiKey,
+    geminiBaseUrl,
+    geminiApiKey,
+    opencodeForm.opencodeBaseUrl,
+    opencodeForm.opencodeApiKey,
+    form,
+    t,
   ]);
 
   const initialOmoSettings =
@@ -693,10 +789,16 @@ export function ProviderForm({
   const handleImportFetchedModels = useCallback(() => {
     if (appId !== "opencode") return;
     if (fetchedModelOptions.length === 0) {
-      toast.error(t("opencode.noFetchedModels", { defaultValue: "暂无可导入模型，请先自动获取。" }));
+      toast.error(
+        t("opencode.noFetchedModels", {
+          defaultValue: "暂无可导入模型，请先自动获取。",
+        }),
+      );
       return;
     }
-    const merged: Record<string, Record<string, unknown>> = { ...opencodeForm.opencodeModels };
+    const merged: Record<string, Record<string, unknown>> = {
+      ...opencodeForm.opencodeModels,
+    };
     let imported = 0;
     let updated = 0;
     for (const modelId of fetchedModelOptions) {
@@ -706,17 +808,23 @@ export function ProviderForm({
       if (!existing) {
         merged[key] = { name: key };
         imported += 1;
-      } else if (!(existing as Record<string, unknown>).name || !String((existing as Record<string, unknown>).name).trim()) {
+      } else if (
+        !(existing as Record<string, unknown>).name ||
+        !String((existing as Record<string, unknown>).name).trim()
+      ) {
         merged[key] = { ...existing, name: key };
         updated += 1;
       }
     }
-    opencodeForm.handleOpencodeModelsChange(merged as Parameters<typeof opencodeForm.handleOpencodeModelsChange>[0]);
+    opencodeForm.handleOpencodeModelsChange(
+      merged as Parameters<typeof opencodeForm.handleOpencodeModelsChange>[0],
+    );
     toast.success(
       t("opencode.importFetchedModelsResult", {
         imported,
         updated,
-        defaultValue: "模型导入完成：新增 {{imported}} 个，补全名称 {{updated}} 个。",
+        defaultValue:
+          "模型导入完成：新增 {{imported}} 个，补全名称 {{updated}} 个。",
       }),
     );
   }, [appId, fetchedModelOptions, opencodeForm, t]);
@@ -1045,6 +1153,7 @@ export function ProviderForm({
         isCopilotProvider && selectedGitHubAccountId
           ? selectedGitHubAccountId
           : undefined,
+      resourceOverrides: normalizeResourceOverrides(resourceOverrides),
       testConfig: testConfig.enabled ? testConfig : undefined,
       proxyConfig: proxyConfig.enabled ? proxyConfig : undefined,
       costMultiplier: pricingConfig.enabled
@@ -1802,6 +1911,14 @@ export function ProviderForm({
             onTestConfigChange={setTestConfig}
             onProxyConfigChange={setProxyConfig}
             onPricingConfigChange={setPricingConfig}
+          />
+        )}
+
+        {!isAnyOmoCategory && appId !== "opencode" && appId !== "openclaw" && (
+          <ProviderResourceOverridesConfig
+            appId={appId}
+            value={resourceOverrides}
+            onChange={setResourceOverrides}
           />
         )}
 

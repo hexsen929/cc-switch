@@ -124,6 +124,30 @@ export interface ProviderProxyConfig {
   proxyPassword?: string;
 }
 
+export interface ProviderMcpOverrides {
+  enabled: boolean;
+  disabledServerIds?: string[];
+}
+
+export interface ProviderSkillOverrides {
+  enabled: boolean;
+  disabledSkillIds?: string[];
+}
+
+export type ProviderPromptOverrideMode = "selected" | "disabled";
+
+export interface ProviderPromptOverrides {
+  enabled: boolean;
+  mode?: ProviderPromptOverrideMode;
+  promptId?: string;
+}
+
+export interface ProviderResourceOverrides {
+  mcp?: ProviderMcpOverrides;
+  skills?: ProviderSkillOverrides;
+  prompt?: ProviderPromptOverrides;
+}
+
 export type AuthBindingSource = "provider_config" | "managed_account";
 
 export interface AuthBinding {
@@ -171,6 +195,8 @@ export interface ProviderMeta {
   providerType?: string;
   // GitHub Copilot 关联账号 ID（旧字段，保留兼容读取）
   githubAccountId?: string;
+  // Provider 级 MCP / Skill / Prompt 覆盖
+  resourceOverrides?: ProviderResourceOverrides;
 }
 
 // Skill 同步方式

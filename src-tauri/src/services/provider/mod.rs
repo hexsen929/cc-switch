@@ -53,6 +53,23 @@ pub struct SwitchResult {
     pub warnings: Vec<String>,
 }
 
+fn sync_provider_bound_resources(
+    state: &AppState,
+    app_type: &AppType,
+    include_mcp: bool,
+) -> Result<(), AppError> {
+    if include_mcp {
+        McpService::sync_effective_for_app(state, app_type)?;
+    }
+    crate::services::skill::SkillService::sync_to_app(&state.db, app_type)
+        .map_err(|e| AppError::Message(format!("同步 Skill 失败: {e}")))?;
+    crate::services::prompt::PromptService::sync_effective_prompt_to_file(
+        state,
+        app_type.clone(),
+    )?;
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -202,6 +219,7 @@ impl ProviderService {
                 .db
                 .set_current_provider(app_type.as_str(), &provider.id)?;
             write_live_with_common_config(state.db.as_ref(), &app_type, &provider)?;
+            sync_provider_bound_resources(state, &app_type, true)?;
         }
 
         Ok(true)
@@ -284,9 +302,9 @@ impl ProviderService {
                 .map_err(|e| AppError::Message(format!("更新 Live 备份失败: {e}")))?;
             } else {
                 write_live_with_common_config(state.db.as_ref(), &app_type, &provider)?;
-                // Sync MCP
-                McpService::sync_all_enabled(state)?;
             }
+
+            sync_provider_bound_resources(state, &app_type, !should_skip_live_write)?;
         }
 
         Ok(true)
@@ -511,8 +529,8 @@ impl ProviderService {
                 }
             }
 
-            // Note: No Live config write, no MCP sync
-            // The proxy server will route requests to the new provider via is_current
+            sync_provider_bound_resources(state, &app_type, false)?;
+
             return Ok(SwitchResult::default());
         }
 
@@ -603,8 +621,7 @@ impl ProviderService {
         // Sync to live (write_gemini_live handles security flag internally for Gemini)
         write_live_with_common_config(state.db.as_ref(), &app_type, provider)?;
 
-        // Sync MCP
-        McpService::sync_all_enabled(state)?;
+        sync_provider_bound_resources(state, &app_type, true)?;
 
         Ok(result)
     }
