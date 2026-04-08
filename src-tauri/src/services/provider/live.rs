@@ -891,12 +891,10 @@ pub fn sync_current_to_live(state: &AppState) -> Result<(), AppError> {
             // Continue syncing other apps, don't abort
         }
 
-        if let Err(e) =
-            crate::services::prompt::PromptService::sync_effective_prompt_to_file(
-                state,
-                app_type.clone(),
-            )
-        {
+        if let Err(e) = crate::services::prompt::PromptService::sync_effective_prompt_to_file(
+            state,
+            app_type.clone(),
+        ) {
             log::warn!("同步 Prompt 到 {app_type:?} 失败: {e}");
         }
     }

@@ -361,10 +361,7 @@ impl Default for SkillService {
 }
 
 impl SkillService {
-    fn get_current_provider_for_app(
-        db: &Arc<Database>,
-        app: &AppType,
-    ) -> Result<Option<Provider>> {
+    fn get_current_provider_for_app(db: &Arc<Database>, app: &AppType) -> Result<Option<Provider>> {
         if app.is_additive_mode() {
             return Ok(None);
         }
@@ -1227,11 +1224,8 @@ impl SkillService {
                 }
 
                 if let Some(skill) = indexed_skills.get(&dir_name.to_lowercase()) {
-                    if !Self::is_effectively_enabled_for_app(
-                        skill,
-                        app,
-                        current_provider.as_ref(),
-                    ) {
+                    if !Self::is_effectively_enabled_for_app(skill, app, current_provider.as_ref())
+                    {
                         Self::remove_path(&path)?;
                     }
                     continue;
@@ -2168,11 +2162,9 @@ impl SkillService {
         // 按 (owner, repo, branch) 分组，记录该组下哪些 skill 的 installed_at
         let mut repo_map: HashMap<(String, String, String), Vec<(String, i64)>> = HashMap::new();
         for skill in installed.values() {
-            if let (Some(owner), Some(repo), Some(branch)) = (
-                &skill.repo_owner,
-                &skill.repo_name,
-                &skill.repo_branch,
-            ) {
+            if let (Some(owner), Some(repo), Some(branch)) =
+                (&skill.repo_owner, &skill.repo_name, &skill.repo_branch)
+            {
                 repo_map
                     .entry((owner.clone(), repo.clone(), branch.clone()))
                     .or_default()
@@ -2223,7 +2215,8 @@ impl SkillService {
                             match resp.json::<CommitResponse>().await {
                                 Ok(data) => {
                                     // 解析 ISO 8601 时间字符串
-                                    if let Ok(dt) = data.commit.author.date.parse::<DateTime<Utc>>() {
+                                    if let Ok(dt) = data.commit.author.date.parse::<DateTime<Utc>>()
+                                    {
                                         let remote_ts = dt.timestamp();
                                         let ids: Vec<String> = skills
                                             .into_iter()
@@ -2234,7 +2227,12 @@ impl SkillService {
                                     }
                                 }
                                 Err(e) => {
-                                    log::warn!("[check_updates] 解析 {}/{} 响应失败: {}", owner, repo, e);
+                                    log::warn!(
+                                        "[check_updates] 解析 {}/{} 响应失败: {}",
+                                        owner,
+                                        repo,
+                                        e
+                                    );
                                 }
                             }
                         }
@@ -2324,14 +2322,13 @@ impl SkillService {
         })??;
 
         // 在下载的仓库中定位 skill 目录
-        let source_rel =
-            Self::sanitize_skill_source_path(&repo_dir).ok_or_else(|| {
-                anyhow!(format_skill_error(
-                    "INVALID_SKILL_DIRECTORY",
-                    &[("directory", &repo_dir)],
-                    Some("checkZipContent"),
-                ))
-            })?;
+        let source_rel = Self::sanitize_skill_source_path(&repo_dir).ok_or_else(|| {
+            anyhow!(format_skill_error(
+                "INVALID_SKILL_DIRECTORY",
+                &[("directory", &repo_dir)],
+                Some("checkZipContent"),
+            ))
+        })?;
         let source = temp_dir.join(&source_rel);
 
         if !source.exists() {

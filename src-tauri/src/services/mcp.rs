@@ -284,7 +284,6 @@ impl McpService {
 
                     state.db.save_mcp_server(&to_save)?;
                     existing.insert(to_save.id.clone(), to_save.clone());
-
                 }
             }
 
@@ -322,7 +321,6 @@ impl McpService {
 
                     state.db.save_mcp_server(&to_save)?;
                     existing.insert(to_save.id.clone(), to_save.clone());
-
                 }
             }
 
@@ -360,7 +358,6 @@ impl McpService {
 
                     state.db.save_mcp_server(&to_save)?;
                     existing.insert(to_save.id.clone(), to_save.clone());
-
                 }
             }
 
@@ -398,7 +395,6 @@ impl McpService {
 
                     state.db.save_mcp_server(&to_save)?;
                     existing.insert(to_save.id.clone(), to_save.clone());
-
                 }
             }
 

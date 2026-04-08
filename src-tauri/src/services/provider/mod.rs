@@ -59,10 +59,7 @@ fn sync_provider_bound_resources(
     }
     crate::services::skill::SkillService::sync_to_app(&state.db, app_type)
         .map_err(|e| AppError::Message(format!("同步 Skill 失败: {e}")))?;
-    crate::services::prompt::PromptService::sync_effective_prompt_to_file(
-        state,
-        app_type.clone(),
-    )?;
+    crate::services::prompt::PromptService::sync_effective_prompt_to_file(state, app_type.clone())?;
     Ok(())
 }
 

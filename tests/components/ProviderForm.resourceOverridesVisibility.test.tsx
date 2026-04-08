@@ -25,7 +25,9 @@ vi.mock("@/components/ui/form", () => ({
 }));
 
 vi.mock("@/components/ui/button", () => ({
-  Button: ({ children, ...props }: any) => <button {...props}>{children}</button>,
+  Button: ({ children, ...props }: any) => (
+    <button {...props}>{children}</button>
+  ),
 }));
 
 vi.mock("@/components/ui/input", () => ({
@@ -285,6 +287,8 @@ describe("ProviderForm resource overrides visibility", () => {
   it("仍会在 Claude 供应商表单中显示资源覆盖面板", () => {
     renderProviderForm("claude");
 
-    expect(screen.getByTestId("provider-resource-overrides")).toBeInTheDocument();
+    expect(
+      screen.getByTestId("provider-resource-overrides"),
+    ).toBeInTheDocument();
   });
 });

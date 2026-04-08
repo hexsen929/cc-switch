@@ -9,8 +9,7 @@ use super::super::{lock_conn, Database};
 
 impl Database {
     const CLAUDE_MODEL_ROUTE_ENABLED_KEY: &'static str = "fork_claude_model_route_enabled";
-    const CLAUDE_MODEL_FAILOVER_ENABLED_KEY: &'static str =
-        "fork_claude_model_failover_enabled";
+    const CLAUDE_MODEL_FAILOVER_ENABLED_KEY: &'static str = "fork_claude_model_failover_enabled";
 
     fn default_model_keys() -> [&'static str; 5] {
         ["sonnet", "opus", "haiku", "custom", "unknown"]
@@ -94,7 +93,11 @@ impl Database {
 
         self.set_fork_setting(
             Self::CLAUDE_MODEL_ROUTE_ENABLED_KEY,
-            if settings.route_enabled { "true" } else { "false" },
+            if settings.route_enabled {
+                "true"
+            } else {
+                "false"
+            },
         )?;
         self.set_fork_setting(
             Self::CLAUDE_MODEL_FAILOVER_ENABLED_KEY,
@@ -151,7 +154,9 @@ impl Database {
     }
 
     /// 获取 Claude 全部模型族策略（自动补齐默认行）
-    pub fn list_claude_model_route_policies(&self) -> Result<Vec<ClaudeModelRoutePolicy>, AppError> {
+    pub fn list_claude_model_route_policies(
+        &self,
+    ) -> Result<Vec<ClaudeModelRoutePolicy>, AppError> {
         {
             // 只补齐缺失行，不能覆盖用户已有配置
             let conn = lock_conn!(self.conn);
@@ -185,20 +190,20 @@ impl Database {
 
         let rows = stmt
             .query_map([], |row| {
-            let model_failover_mode_raw: String = row.get(5)?;
-            Ok(ClaudeModelRoutePolicy {
-                app_type: row.get(0)?,
-                model_key: row.get(1)?,
-                enabled: row.get::<_, i32>(2)? != 0,
-                default_provider_id: row.get(3)?,
-                model_failover_enabled: row.get::<_, i32>(4)? != 0,
-                model_failover_mode: Self::normalize_model_failover_mode(
-                    &model_failover_mode_raw,
-                )
-                .to_string(),
-                updated_at: row.get(6)?,
+                let model_failover_mode_raw: String = row.get(5)?;
+                Ok(ClaudeModelRoutePolicy {
+                    app_type: row.get(0)?,
+                    model_key: row.get(1)?,
+                    enabled: row.get::<_, i32>(2)? != 0,
+                    default_provider_id: row.get(3)?,
+                    model_failover_enabled: row.get::<_, i32>(4)? != 0,
+                    model_failover_mode: Self::normalize_model_failover_mode(
+                        &model_failover_mode_raw,
+                    )
+                    .to_string(),
+                    updated_at: row.get(6)?,
+                })
             })
-        })
             .map_err(|e| AppError::Database(e.to_string()))?;
 
         rows.collect::<Result<Vec<_>, _>>()
@@ -217,8 +222,7 @@ impl Database {
         } else {
             false
         };
-        let model_failover_mode =
-            Self::normalize_model_failover_mode(&policy.model_failover_mode);
+        let model_failover_mode = Self::normalize_model_failover_mode(&policy.model_failover_mode);
 
         conn.execute(
             "INSERT OR REPLACE INTO forkdb.fork_model_route_policy

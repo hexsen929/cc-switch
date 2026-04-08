@@ -3,9 +3,9 @@ use indexmap::IndexMap;
 use crate::app_config::AppType;
 use crate::config::write_text_file;
 use crate::error::AppError;
-use crate::provider::{Provider, ProviderPromptOverrideMode};
 use crate::prompt::Prompt;
 use crate::prompt_files::prompt_file_path;
+use crate::provider::{Provider, ProviderPromptOverrideMode};
 use crate::store::AppState;
 
 /// 安全地获取当前 Unix 时间戳
