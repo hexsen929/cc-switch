@@ -264,7 +264,9 @@ export function useSetClaudeModelRoutingSettings() {
         t("proxy.settings.toast.saved", { defaultValue: "保存成功" }),
         { closeButton: true },
       );
-      queryClient.invalidateQueries({ queryKey: ["claudeModelRoutingSettings"] });
+      queryClient.invalidateQueries({
+        queryKey: ["claudeModelRoutingSettings"],
+      });
       queryClient.invalidateQueries({ queryKey: ["proxyStatus"] });
     },
     onError: (error: Error) => {

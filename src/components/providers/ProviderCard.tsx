@@ -77,10 +77,7 @@ function isOfficialProvider(provider: Provider, appId: AppId): boolean {
   return false;
 }
 
-const extractModelName = (
-  provider: Provider,
-  appId: AppId,
-): string | null => {
+const extractModelName = (provider: Provider, appId: AppId): string | null => {
   const config = provider.settingsConfig;
   if (!config || typeof config !== "object") return null;
 

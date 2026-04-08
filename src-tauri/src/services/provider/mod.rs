@@ -1246,7 +1246,7 @@ impl ProviderService {
                 write_live_with_common_config(state.db.as_ref(), &app_type, &provider)?;
             }
 
-            sync_provider_bound_resources(state, &app_type, !should_skip_live_write)?;
+            sync_provider_bound_resources(state, &app_type, !should_sync_via_proxy)?;
         }
 
         Ok(true)

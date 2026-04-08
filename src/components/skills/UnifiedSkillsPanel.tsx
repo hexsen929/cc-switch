@@ -1,6 +1,12 @@
 import React, { useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { Sparkles, Trash2, ExternalLink, RefreshCw, ArrowUpCircle } from "lucide-react";
+import {
+  Sparkles,
+  Trash2,
+  ExternalLink,
+  RefreshCw,
+  ArrowUpCircle,
+} from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import {
@@ -318,7 +324,9 @@ const UnifiedSkillsPanel = React.forwardRef<
               >
                 <ArrowUpCircle
                   size={13}
-                  className={updateAllSkillsMutation.isPending ? "animate-spin" : ""}
+                  className={
+                    updateAllSkillsMutation.isPending ? "animate-spin" : ""
+                  }
                 />
                 {t("skills.updateAll", {
                   count: updatableSet.size,
@@ -381,7 +389,10 @@ const UnifiedSkillsPanel = React.forwardRef<
                   onUpdate={() => handleUpdate(skill.id)}
                   isLast={index === skills.length - 1}
                   hasUpdate={updatableSet.has(skill.id)}
-                  isUpdating={updateSkillMutation.isPending && updateSkillMutation.variables === skill.id}
+                  isUpdating={
+                    updateSkillMutation.isPending &&
+                    updateSkillMutation.variables === skill.id
+                  }
                 />
               ))}
             </div>
@@ -487,7 +498,10 @@ const InstalledSkillListItem: React.FC<InstalledSkillListItemProps> = ({
               onClick={onUpdate}
               disabled={isUpdating}
             >
-              <ArrowUpCircle size={12} className={isUpdating ? "animate-spin" : ""} />
+              <ArrowUpCircle
+                size={12}
+                className={isUpdating ? "animate-spin" : ""}
+              />
               {isUpdating
                 ? t("skills.updating", { defaultValue: "更新中..." })
                 : t("skills.updateAvailable", { defaultValue: "有更新" })}

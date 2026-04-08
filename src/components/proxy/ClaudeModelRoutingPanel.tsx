@@ -1,6 +1,10 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Check, ChevronsUpDown, Route, X } from "lucide-react";
-import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+import {
+  Popover,
+  PopoverContent,
+  PopoverTrigger,
+} from "@/components/ui/popover";
 import {
   Select,
   SelectContent,
@@ -69,7 +73,12 @@ function ProviderCombobox({
           disabled={disabled}
           className="flex h-8 w-full items-center justify-between rounded-md border border-border-default bg-background px-3 py-1 text-sm disabled:cursor-not-allowed disabled:opacity-50"
         >
-          <span className={cn("truncate text-left", !selected && "text-muted-foreground")}>
+          <span
+            className={cn(
+              "truncate text-left",
+              !selected && "text-muted-foreground",
+            )}
+          >
             {selected?.name ?? placeholder}
           </span>
           <span className="ml-2 flex shrink-0 items-center gap-1">
@@ -106,7 +115,10 @@ function ProviderCombobox({
                 }}
               >
                 <Check
-                  className={cn("mr-2 h-4 w-4", value === "" ? "opacity-100" : "opacity-0")}
+                  className={cn(
+                    "mr-2 h-4 w-4",
+                    value === "" ? "opacity-100" : "opacity-0",
+                  )}
                 />
                 {noneLabel}
               </CommandItem>
@@ -272,7 +284,8 @@ export function ClaudeModelRoutingPanel() {
             const routeRowEnabled = policy?.enabled ?? false;
             const defaultProviderId = policy?.defaultProviderId ?? "";
             const modelFailoverMode = policy?.modelFailoverMode ?? "random";
-            const routeActive = routeEnabled && routeRowEnabled && !!defaultProviderId;
+            const routeActive =
+              routeEnabled && routeRowEnabled && !!defaultProviderId;
             return (
               <div
                 key={key}
@@ -294,9 +307,12 @@ export function ClaudeModelRoutingPanel() {
                     noneLabel={t("proxy.claudeModelRouting.none", {
                       defaultValue: "不固定（使用全局默认）",
                     })}
-                    searchPlaceholder={t("proxy.claudeModelRouting.searchProvider", {
-                      defaultValue: "输入名称搜索供应商...",
-                    })}
+                    searchPlaceholder={t(
+                      "proxy.claudeModelRouting.searchProvider",
+                      {
+                        defaultValue: "输入名称搜索供应商...",
+                      },
+                    )}
                     emptyLabel={t("proxy.claudeModelRouting.providerNotFound", {
                       defaultValue: "未找到匹配供应商",
                     })}
@@ -304,11 +320,14 @@ export function ClaudeModelRoutingPanel() {
                       savePolicy(key, {
                         defaultProviderId: next === "__none__" ? null : next,
                         enabled: next !== "__none__",
-                        modelFailoverEnabled: next === "__none__" ? false : true,
+                        modelFailoverEnabled:
+                          next === "__none__" ? false : true,
                       })
                     }
                     disabled={
-                      !routeEnabled || upsertPolicy.isPending || providers.length === 0
+                      !routeEnabled ||
+                      upsertPolicy.isPending ||
+                      providers.length === 0
                     }
                   />
                 </div>

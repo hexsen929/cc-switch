@@ -28,7 +28,10 @@ interface ModelFailoverQueueManagerProps {
   disabled?: boolean;
 }
 
-function resolveClaudeModelName(provider: Provider | undefined, modelKey: ClaudeModelKey): string {
+function resolveClaudeModelName(
+  provider: Provider | undefined,
+  modelKey: ClaudeModelKey,
+): string {
   if (!provider) return "-";
   const env =
     provider.settingsConfig &&
@@ -84,7 +87,10 @@ export function ModelFailoverQueueManager({
     if (!selectedProviderId) return;
 
     try {
-      const nextIds = [...(queue ?? []).map((item) => item.providerId), selectedProviderId];
+      const nextIds = [
+        ...(queue ?? []).map((item) => item.providerId),
+        selectedProviderId,
+      ];
       await setModelQueue.mutateAsync({
         appType,
         modelKey,
@@ -214,7 +220,10 @@ export function ModelFailoverQueueManager({
               key={item.providerId}
               item={item}
               index={index}
-              modelName={resolveClaudeModelName(providerById[item.providerId], modelKey)}
+              modelName={resolveClaudeModelName(
+                providerById[item.providerId],
+                modelKey,
+              )}
               disabled={disabled}
               onRemove={handleRemoveProvider}
               isRemoving={setModelQueue.isPending}

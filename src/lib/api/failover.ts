@@ -130,7 +130,9 @@ export const failoverApi = {
     return invoke("set_auto_failover_enabled", { appType, enabled });
   },
 
-  async getForkFailoverChain(appType: string): Promise<ForkFailoverChainItem[]> {
+  async getForkFailoverChain(
+    appType: string,
+  ): Promise<ForkFailoverChainItem[]> {
     return invoke("get_fork_failover_chain", { appType });
   },
 

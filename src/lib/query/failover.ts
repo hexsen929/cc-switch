@@ -348,7 +348,8 @@ export function useForkFailoverChain(appType: string) {
 export function useAvailableProvidersForForkFailoverChain(appType: string) {
   return useQuery({
     queryKey: ["availableProvidersForForkFailoverChain", appType],
-    queryFn: () => failoverApi.getAvailableProvidersForForkFailoverChain(appType),
+    queryFn: () =>
+      failoverApi.getAvailableProvidersForForkFailoverChain(appType),
     enabled: !!appType,
   });
 }

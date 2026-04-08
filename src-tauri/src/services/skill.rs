@@ -2277,8 +2277,8 @@ impl SkillService {
 
         // id 格式: "owner/repo:directory"，提取仓库内相对路径
         let repo_dir = id
-            .splitn(2, ':')
-            .nth(1)
+            .split_once(':')
+            .map(|(_, repo_dir)| repo_dir)
             .unwrap_or(&skill.directory)
             .to_string();
 

@@ -47,7 +47,11 @@ import {
   useCurrentOmoSlimProviderId,
 } from "@/lib/query/omo";
 import { useCallback } from "react";
-import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+import {
+  Popover,
+  PopoverContent,
+  PopoverTrigger,
+} from "@/components/ui/popover";
 import {
   Command,
   CommandEmpty,
@@ -120,7 +124,12 @@ function SearchableProviderCombobox({
           disabled={disabled}
           className="flex h-8 w-full items-center justify-between rounded-md border border-border-default bg-background px-3 py-1 text-sm disabled:cursor-not-allowed disabled:opacity-50"
         >
-          <span className={cn("truncate text-left", !value && "text-muted-foreground")}>
+          <span
+            className={cn(
+              "truncate text-left",
+              !value && "text-muted-foreground",
+            )}
+          >
             {displayLabel}
           </span>
           <ChevronsUpDown className="ml-2 h-3.5 w-3.5 opacity-50" />
@@ -145,7 +154,10 @@ function SearchableProviderCombobox({
                 }}
               >
                 <Check
-                  className={cn("mr-2 h-4 w-4", value === "__none__" ? "opacity-100" : "opacity-0")}
+                  className={cn(
+                    "mr-2 h-4 w-4",
+                    value === "__none__" ? "opacity-100" : "opacity-0",
+                  )}
                 />
                 {noneLabel}
               </CommandItem>
@@ -321,12 +333,7 @@ export function ProviderList({
       };
       void run();
     },
-    [
-      appId,
-      isClaudeRouteModeEnabled,
-      onSwitch,
-      updateClaudeRoutingSettings,
-    ],
+    [appId, isClaudeRouteModeEnabled, onSwitch, updateClaudeRoutingSettings],
   );
 
   const [searchTerm, setSearchTerm] = useState("");
@@ -445,7 +452,8 @@ export function ProviderList({
   }, [sortedProviders]);
 
   const claudeMixedIds = useMemo(() => {
-    if (!isClaudeVirtualMode) return sortedProviders.map((provider) => provider.id);
+    if (!isClaudeVirtualMode)
+      return sortedProviders.map((provider) => provider.id);
     return [
       CLAUDE_ROUTE_MODE_NODE_ID,
       ...sortedProviders.map((provider) => provider.id),
@@ -456,7 +464,9 @@ export function ProviderList({
     if (!isClaudeVirtualMode) {
       return filteredProviders.map((provider) => provider.id);
     }
-    const filteredSet = new Set(filteredProviders.map((provider) => provider.id));
+    const filteredSet = new Set(
+      filteredProviders.map((provider) => provider.id),
+    );
     return claudeMixedIds.filter(
       (id) => id === CLAUDE_ROUTE_MODE_NODE_ID || filteredSet.has(id),
     );
@@ -524,7 +534,10 @@ export function ProviderList({
         try {
           await providersApi.updateTrayMenu();
         } catch (trayError) {
-          console.error("Failed to update tray menu after quick sort", trayError);
+          console.error(
+            "Failed to update tray menu after quick sort",
+            trayError,
+          );
         }
         toast.success(
           t("provider.sortUpdated", {
@@ -651,7 +664,9 @@ export function ProviderList({
                   activeProviderId={activeProviderId}
                   isProxyRunning={isProxyRunning}
                   isProxyTakeover={isProxyTakeover}
-                  isFailoverEnabled={appId === "claude" && isAutoFailoverEnabled === true}
+                  isFailoverEnabled={
+                    appId === "claude" && isAutoFailoverEnabled === true
+                  }
                   onOpenProxySettings={onOpenClaudeRouteSettings}
                   failoverPriority={claudeRoutePriority}
                   showPriority={isFailoverModeActive}
@@ -943,8 +958,14 @@ function SortableClaudeVirtualCard({
   const [retryCountByModelKey, setRetryCountByModelKey] = useState<
     Partial<Record<ClaudeModelKey, number>>
   >({});
-  const { attributes, listeners, setNodeRef, transform, transition, isDragging } =
-    useSortable({ id });
+  const {
+    attributes,
+    listeners,
+    setNodeRef,
+    transform,
+    transition,
+    isDragging,
+  } = useSortable({ id });
   const style: CSSProperties = {
     transform: CSS.Transform.toString(transform),
     transition,
@@ -956,12 +977,14 @@ function SortableClaudeVirtualCard({
     defaultValue: "需要先开启 Claude 代理接管，才能使用此卡片。",
   });
   const failoverHint = t("proxy.mode.virtualNotInFailoverQueue", {
-    defaultValue: "已启用 Claude 自动故障转移：该卡片不参与 P1/P2 队列排序，仅用于路由配置。",
+    defaultValue:
+      "已启用 Claude 自动故障转移：该卡片不参与 P1/P2 队列排序，仅用于路由配置。",
   });
   const isCardEnabled = isProxyRunning && isProxyTakeover;
   const isDimmedByFailover = isFailoverEnabled;
   const routeEnabled = claudeRoutingSettings?.routeEnabled ?? false;
-  const modelFailoverEnabled = claudeRoutingSettings?.modelFailoverEnabled ?? false;
+  const modelFailoverEnabled =
+    claudeRoutingSettings?.modelFailoverEnabled ?? false;
   const isVirtualModeEnabled = routeEnabled && modelFailoverEnabled;
   const useEnabledStyle = isVirtualModeEnabled;
   const enabledBorderClass = isProxyTakeover
@@ -1046,7 +1069,8 @@ function SortableClaudeVirtualCard({
           if (payload.modelKey) {
             setActualProviderByModelKey((prev) => ({
               ...prev,
-              [payload.modelKey as ClaudeModelKey]: payload.providerId as string,
+              [payload.modelKey as ClaudeModelKey]:
+                payload.providerId as string,
             }));
             if (payload.source) {
               setSourceByModelKey((prev) => ({
@@ -1113,7 +1137,10 @@ function SortableClaudeVirtualCard({
   }, []);
 
   const resolveClaudeModelName = useCallback(
-    (providerId: string | null | undefined, modelKey: ClaudeModelKey): string => {
+    (
+      providerId: string | null | undefined,
+      modelKey: ClaudeModelKey,
+    ): string => {
       if (!providerId) return "-";
       const provider = providers[providerId];
       if (!provider) return "-";
@@ -1131,9 +1158,13 @@ function SortableClaudeVirtualCard({
       const defaultModel = readEnv("ANTHROPIC_MODEL");
       switch (modelKey) {
         case "haiku":
-          return readEnv("ANTHROPIC_DEFAULT_HAIKU_MODEL") ?? defaultModel ?? "-";
+          return (
+            readEnv("ANTHROPIC_DEFAULT_HAIKU_MODEL") ?? defaultModel ?? "-"
+          );
         case "sonnet":
-          return readEnv("ANTHROPIC_DEFAULT_SONNET_MODEL") ?? defaultModel ?? "-";
+          return (
+            readEnv("ANTHROPIC_DEFAULT_SONNET_MODEL") ?? defaultModel ?? "-"
+          );
         case "opus":
           return readEnv("ANTHROPIC_DEFAULT_OPUS_MODEL") ?? defaultModel ?? "-";
         case "unknown":
@@ -1147,7 +1178,10 @@ function SortableClaudeVirtualCard({
   );
 
   const savePolicy = useCallback(
-    async (modelKey: ClaudeModelKey, patch: Partial<ClaudeModelRoutePolicy>) => {
+    async (
+      modelKey: ClaudeModelKey,
+      patch: Partial<ClaudeModelRoutePolicy>,
+    ) => {
       const base =
         policyMap.get(modelKey) ??
         ({
@@ -1179,7 +1213,12 @@ function SortableClaudeVirtualCard({
     if (!isProxyTakeover) {
       toast.info(takeoverRequiredHint);
     }
-  }, [isProxyRunning, isProxyTakeover, proxyRequiredHint, takeoverRequiredHint]);
+  }, [
+    isProxyRunning,
+    isProxyTakeover,
+    proxyRequiredHint,
+    takeoverRequiredHint,
+  ]);
 
   const handleUnsupportedAction = useCallback(() => {
     if (!isCardEnabled) {
@@ -1241,7 +1280,8 @@ function SortableClaudeVirtualCard({
           useEnabledStyle && "rounded-xl border",
           useEnabledStyle && enabledBorderClass,
           useEnabledStyle && enabledBackgroundClass,
-          isDragging && "cursor-grabbing rounded-xl border-primary shadow-lg scale-[1.01] z-10",
+          isDragging &&
+            "cursor-grabbing rounded-xl border-primary shadow-lg scale-[1.01] z-10",
         )}
       >
         <ProviderCard
@@ -1265,7 +1305,9 @@ function SortableClaudeVirtualCard({
             isDragging,
           }}
           isAutoFailoverEnabled={showPriority && !isDimmedByFailover}
-          isInFailoverQueue={Boolean(showPriority && !isDimmedByFailover && failoverPriority)}
+          isInFailoverQueue={Boolean(
+            showPriority && !isDimmedByFailover && failoverPriority,
+          )}
           failoverPriority={isDimmedByFailover ? undefined : failoverPriority}
         />
       </div>
@@ -1296,7 +1338,9 @@ function SortableClaudeVirtualCard({
             {modelRows.map((row) => {
               const policy = policyMap.get(row.key);
               const preferredId =
-                routeEnabled && policy?.enabled ? policy.defaultProviderId : null;
+                routeEnabled && policy?.enabled
+                  ? policy.defaultProviderId
+                  : null;
               const actualProviderId =
                 actualProviderByModelKey[row.key] ??
                 preferredId ??
@@ -1306,7 +1350,10 @@ function SortableClaudeVirtualCard({
                 ? providers[currentProviderId]?.name || currentProviderId
                 : "-";
               const selectedValue = preferredId ?? "__none__";
-              const modelName = resolveClaudeModelName(actualProviderId, row.key);
+              const modelName = resolveClaudeModelName(
+                actualProviderId,
+                row.key,
+              );
               const modelSource = sourceByModelKey[row.key];
               const retryCount = retryCountByModelKey[row.key] ?? 0;
               const isFailoverTag =
@@ -1321,7 +1368,9 @@ function SortableClaudeVirtualCard({
                   className="flex items-center justify-between gap-3 border-b border-border/50 py-2 last:border-0"
                 >
                   <div className="min-w-0 flex-1 text-sm flex items-center gap-2">
-                    <span className="inline-block w-[64px] font-medium">{row.label}</span>
+                    <span className="inline-block w-[64px] font-medium">
+                      {row.label}
+                    </span>
                     <span className="mx-1 text-muted-foreground">·</span>
                     <div className="w-[320px] max-w-[70vw]">
                       <SearchableProviderCombobox
@@ -1330,29 +1379,46 @@ function SortableClaudeVirtualCard({
                           id: provider.id,
                           name: provider.name,
                         }))}
-                        placeholder={t("proxy.claudeModelRouting.defaultProvider", {
-                          defaultValue: "选择首选站点",
-                        })}
+                        placeholder={t(
+                          "proxy.claudeModelRouting.defaultProvider",
+                          {
+                            defaultValue: "选择首选站点",
+                          },
+                        )}
                         noneLabel={
                           t("proxy.claudeModelRouting.none", {
                             defaultValue: "不固定（使用全局默认）",
                           }) +
-                          (fallbackProviderName !== "-" ? `：${fallbackProviderName}` : "")
+                          (fallbackProviderName !== "-"
+                            ? `：${fallbackProviderName}`
+                            : "")
                         }
-                        searchPlaceholder={t("proxy.claudeModelRouting.searchProvider", {
-                          defaultValue: "输入名称搜索供应商...",
-                        })}
-                        emptyLabel={t("proxy.claudeModelRouting.providerNotFound", {
-                          defaultValue: "未找到匹配供应商",
-                        })}
+                        searchPlaceholder={t(
+                          "proxy.claudeModelRouting.searchProvider",
+                          {
+                            defaultValue: "输入名称搜索供应商...",
+                          },
+                        )}
+                        emptyLabel={t(
+                          "proxy.claudeModelRouting.providerNotFound",
+                          {
+                            defaultValue: "未找到匹配供应商",
+                          },
+                        )}
                         onChange={(next) =>
                           savePolicy(row.key, {
-                            defaultProviderId: next === "__none__" ? null : next,
+                            defaultProviderId:
+                              next === "__none__" ? null : next,
                             enabled: next !== "__none__",
-                            modelFailoverEnabled: next === "__none__" ? false : true,
+                            modelFailoverEnabled:
+                              next === "__none__" ? false : true,
                           })
                         }
-                        disabled={!isCardEnabled || isDimmedByFailover || upsertPolicy.isPending}
+                        disabled={
+                          !isCardEnabled ||
+                          isDimmedByFailover ||
+                          upsertPolicy.isPending
+                        }
                       />
                     </div>
                     <span className="min-w-0 max-w-[260px] truncate text-xs text-muted-foreground">
@@ -1385,7 +1451,9 @@ function SortableClaudeVirtualCard({
                       </span>
                     ) : (
                       <span className="shrink-0 rounded bg-emerald-100 px-1.5 py-0.5 text-[10px] font-medium text-emerald-700 dark:bg-emerald-900/40 dark:text-emerald-200">
-                        {t("proxy.mode.tagDefault", { defaultValue: "默认路由" })}
+                        {t("proxy.mode.tagDefault", {
+                          defaultValue: "默认路由",
+                        })}
                       </span>
                     )}
                   </div>

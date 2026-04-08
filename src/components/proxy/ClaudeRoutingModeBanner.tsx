@@ -76,7 +76,9 @@ function ModeBadge({
   }
 
   return (
-    <span className={`rounded-full px-2.5 py-1 text-xs font-medium ${className}`}>
+    <span
+      className={`rounded-full px-2.5 py-1 text-xs font-medium ${className}`}
+    >
       {text}
     </span>
   );
@@ -119,7 +121,9 @@ export function ClaudeRoutingModeBanner({
           const payload = event.payload;
           if (payload?.appType !== "claude") return;
           const providerName =
-            providers[payload.providerId ?? ""]?.name ?? payload.providerId ?? "";
+            providers[payload.providerId ?? ""]?.name ??
+            payload.providerId ??
+            "";
           const modelKey = payload.modelKey;
           if (modelKey && payload.providerId) {
             setActualProviderByModelKey((prev) => ({
@@ -164,7 +168,9 @@ export function ClaudeRoutingModeBanner({
       className={cn(
         "relative overflow-hidden rounded-xl border border-border p-4 transition-all duration-300",
         "bg-card text-card-foreground group cursor-pointer",
-        routeEnabled ? "hover:border-emerald-500/50" : "hover:border-border-active",
+        routeEnabled
+          ? "hover:border-emerald-500/50"
+          : "hover:border-border-active",
         routeEnabled && "border-emerald-500/60 shadow-sm shadow-emerald-500/10",
       )}
       role="button"
@@ -180,7 +186,9 @@ export function ClaudeRoutingModeBanner({
       <div
         className={cn(
           "absolute inset-0 bg-gradient-to-r to-transparent transition-opacity duration-500 pointer-events-none",
-          routeEnabled ? "from-emerald-500/10 opacity-100" : "from-primary/10 opacity-0",
+          routeEnabled
+            ? "from-emerald-500/10 opacity-100"
+            : "from-primary/10 opacity-0",
         )}
       />
       <div
@@ -241,8 +249,12 @@ export function ClaudeRoutingModeBanner({
           const preferredId =
             routeEnabled && policy?.enabled ? policy.defaultProviderId : null;
           const providerId =
-            actualProviderByModelKey[row.modelKey] || preferredId || currentProviderId;
-          const providerName = providerId ? providers[providerId]?.name || providerId : "-";
+            actualProviderByModelKey[row.modelKey] ||
+            preferredId ||
+            currentProviderId;
+          const providerName = providerId
+            ? providers[providerId]?.name || providerId
+            : "-";
           const modelSource = sourceByModelKey[row.modelKey];
           const isGlobalFallbackTag = !preferredId;
           const isFailoverTag =
@@ -258,7 +270,9 @@ export function ClaudeRoutingModeBanner({
               <div className="min-w-0 flex-1 text-sm">
                 <span className="font-medium">{row.label}</span>
                 <span className="mx-1.5 text-muted-foreground">·</span>
-                <span className="truncate text-muted-foreground">{providerName}</span>
+                <span className="truncate text-muted-foreground">
+                  {providerName}
+                </span>
               </div>
               {isGlobalFallbackTag ? (
                 <span className="shrink-0 rounded bg-slate-100 px-1.5 py-0.5 text-[10px] font-medium text-slate-700 dark:bg-slate-800/80 dark:text-slate-200">
