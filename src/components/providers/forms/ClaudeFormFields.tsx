@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { Button } from "@/components/ui/button";
 import {
@@ -27,13 +27,18 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import EndpointSpeedTest from "./EndpointSpeedTest";
-import { ApiKeySection, EndpointField } from "./shared";
+import { ApiKeySection, EndpointField, ModelInputWithFetch } from "./shared";
 import { CopilotAuthSection } from "./CopilotAuthSection";
 import {
   copilotGetModels,
   copilotGetModelsForAccount,
 } from "@/lib/api/copilot";
 import type { CopilotModel } from "@/lib/api/copilot";
+import {
+  fetchModelsForConfig,
+  showFetchModelsError,
+  type FetchedModel,
+} from "@/lib/api/model-fetch";
 import type {
   ProviderCategory,
   ClaudeApiFormat,
@@ -186,6 +191,37 @@ export function ClaudeFormFields({
   const [copilotModels, setCopilotModels] = useState<CopilotModel[]>([]);
   const [modelsLoading, setModelsLoading] = useState(false);
 
+  // 通用模型获取（非 Copilot 供应商）
+  const [fetchedModels, setFetchedModels] = useState<FetchedModel[]>([]);
+  const [isFetchingModels, setIsFetchingModels] = useState(false);
+
+  const handleFetchModels = useCallback(() => {
+    if (!baseUrl || !apiKey) {
+      showFetchModelsError(null, t, {
+        hasApiKey: !!apiKey,
+        hasBaseUrl: !!baseUrl,
+      });
+      return;
+    }
+    setIsFetchingModels(true);
+    fetchModelsForConfig(baseUrl, apiKey, isFullUrl)
+      .then((models) => {
+        setFetchedModels(models);
+        if (models.length === 0) {
+          toast.info(t("providerForm.fetchModelsEmpty"));
+        } else {
+          toast.success(
+            t("providerForm.fetchModelsSuccess", { count: models.length }),
+          );
+        }
+      })
+      .catch((err) => {
+        console.warn("[ModelFetch] Failed:", err);
+        showFetchModelsError(err, t);
+      })
+      .finally(() => setIsFetchingModels(false));
+  }, [baseUrl, apiKey, isFullUrl, t]);
+
   // 当 Copilot 预设且已认证时，加载可用模型
   useEffect(() => {
     // 如果不是 Copilot 预设或未认证，清空模型列表
@@ -305,6 +341,7 @@ export function ClaudeFormFields({
       );
     }
 
+    // 非 Copilot 供应商: 使用 ModelInputWithFetch（获取按钮在 section 标题旁）
     return (
       <ModelSuggest
         id={id}

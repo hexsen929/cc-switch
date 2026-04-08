@@ -1,6 +1,15 @@
+import { useCallback, useState } from "react";
 import { useTranslation } from "react-i18next";
+import { Button } from "@/components/ui/button";
+import { toast } from "sonner";
+import { Download, Loader2 } from "lucide-react";
 import EndpointSpeedTest from "./EndpointSpeedTest";
-import { ApiKeySection, EndpointField } from "./shared";
+import { ApiKeySection, EndpointField, ModelInputWithFetch } from "./shared";
+import {
+  fetchModelsForConfig,
+  showFetchModelsError,
+  type FetchedModel,
+} from "@/lib/api/model-fetch";
 import type { ProviderCategory } from "@/types";
 import { Button } from "@/components/ui/button";
 import { ModelSuggest } from "@/components/ui/model-suggest";
@@ -73,6 +82,36 @@ export function CodexFormFields({
   speedTestEndpoints,
 }: CodexFormFieldsProps) {
   const { t } = useTranslation();
+
+  const [fetchedModels, setFetchedModels] = useState<FetchedModel[]>([]);
+  const [isFetchingModels, setIsFetchingModels] = useState(false);
+
+  const handleFetchModels = useCallback(() => {
+    if (!codexBaseUrl || !codexApiKey) {
+      showFetchModelsError(null, t, {
+        hasApiKey: !!codexApiKey,
+        hasBaseUrl: !!codexBaseUrl,
+      });
+      return;
+    }
+    setIsFetchingModels(true);
+    fetchModelsForConfig(codexBaseUrl, codexApiKey, isFullUrl)
+      .then((models) => {
+        setFetchedModels(models);
+        if (models.length === 0) {
+          toast.info(t("providerForm.fetchModelsEmpty"));
+        } else {
+          toast.success(
+            t("providerForm.fetchModelsSuccess", { count: models.length }),
+          );
+        }
+      })
+      .catch((err) => {
+        console.warn("[ModelFetch] Failed:", err);
+        showFetchModelsError(err, t);
+      })
+      .finally(() => setIsFetchingModels(false));
+  }, [codexBaseUrl, codexApiKey, isFullUrl, t]);
 
   return (
     <>

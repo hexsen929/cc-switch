@@ -1,10 +1,16 @@
+import { useCallback, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { FormLabel } from "@/components/ui/form";
 import { Info, Loader2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { ModelSuggest } from "@/components/ui/model-suggest";
 import EndpointSpeedTest from "./EndpointSpeedTest";
-import { ApiKeySection, EndpointField } from "./shared";
+import { ApiKeySection, EndpointField, ModelInputWithFetch } from "./shared";
+import {
+  fetchModelsForConfig,
+  showFetchModelsError,
+  type FetchedModel,
+} from "@/lib/api/model-fetch";
 import type { ProviderCategory } from "@/types";
 
 interface EndpointCandidate {
@@ -72,6 +78,36 @@ export function GeminiFormFields({
   speedTestEndpoints,
 }: GeminiFormFieldsProps) {
   const { t } = useTranslation();
+
+  const [fetchedModels, setFetchedModels] = useState<FetchedModel[]>([]);
+  const [isFetchingModels, setIsFetchingModels] = useState(false);
+
+  const handleFetchModels = useCallback(() => {
+    if (!baseUrl || !apiKey) {
+      showFetchModelsError(null, t, {
+        hasApiKey: !!apiKey,
+        hasBaseUrl: !!baseUrl,
+      });
+      return;
+    }
+    setIsFetchingModels(true);
+    fetchModelsForConfig(baseUrl, apiKey)
+      .then((models) => {
+        setFetchedModels(models);
+        if (models.length === 0) {
+          toast.info(t("providerForm.fetchModelsEmpty"));
+        } else {
+          toast.success(
+            t("providerForm.fetchModelsSuccess", { count: models.length }),
+          );
+        }
+      })
+      .catch((err) => {
+        console.warn("[ModelFetch] Failed:", err);
+        showFetchModelsError(err, t);
+      })
+      .finally(() => setIsFetchingModels(false));
+  }, [baseUrl, apiKey, t]);
 
   // 检测是否为 Google 官方（使用 OAuth）
   const isGoogleOfficial =
@@ -156,6 +192,8 @@ export function GeminiFormFields({
             onChange={(v) => onModelChange(v)}
             suggestions={modelSuggestions}
             placeholder="gemini-3-pro-preview"
+            fetchedModels={fetchedModels}
+            isLoading={isFetchingModels}
           />
         </div>
       )}

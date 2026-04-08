@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useCallback } from "react";
 import { useTranslation } from "react-i18next";
 import { FormLabel } from "@/components/ui/form";
 import { Input } from "@/components/ui/input";
@@ -12,6 +12,11 @@ import {
 } from "@/components/ui/select";
 import { Plus, Trash2, ChevronRight, Download, Loader2 } from "lucide-react";
 import { ApiKeySection } from "./shared";
+import {
+  fetchModelsForConfig,
+  showFetchModelsError,
+  type FetchedModel,
+} from "@/lib/api/model-fetch";
 import { opencodeNpmPackages } from "@/config/opencodeProviderPresets";
 import { cn } from "@/lib/utils";
 import {
@@ -136,6 +141,49 @@ function ModelOptionKeyInput({
   );
 }
 
+/** Dropdown button to select from fetched models */
+function ModelDropdown({
+  models,
+  onSelect,
+}: {
+  models: FetchedModel[];
+  onSelect: (id: string) => void;
+}) {
+  const grouped: Record<string, FetchedModel[]> = {};
+  for (const model of models) {
+    const vendor = model.ownedBy || "Other";
+    if (!grouped[vendor]) grouped[vendor] = [];
+    grouped[vendor].push(model);
+  }
+  const vendors = Object.keys(grouped).sort();
+
+  return (
+    <DropdownMenu>
+      <DropdownMenuTrigger asChild>
+        <Button variant="outline" size="icon" className="shrink-0">
+          <ChevronDown className="h-4 w-4" />
+        </Button>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent
+        align="end"
+        className="max-h-64 overflow-y-auto z-[200]"
+      >
+        {vendors.map((vendor, vi) => (
+          <div key={vendor}>
+            {vi > 0 && <DropdownMenuSeparator />}
+            <DropdownMenuLabel>{vendor}</DropdownMenuLabel>
+            {grouped[vendor].map((m) => (
+              <DropdownMenuItem key={m.id} onSelect={() => onSelect(m.id)}>
+                {m.id}
+              </DropdownMenuItem>
+            ))}
+          </div>
+        ))}
+      </DropdownMenuContent>
+    </DropdownMenu>
+  );
+}
+
 interface OpenCodeFormFieldsProps {
   // NPM Package
   npm: string;
@@ -191,6 +239,36 @@ export function OpenCodeFormFields({
   onImportFetchedModels,
 }: OpenCodeFormFieldsProps) {
   const { t } = useTranslation();
+
+  const [fetchedModels, setFetchedModels] = useState<FetchedModel[]>([]);
+  const [isFetchingModels, setIsFetchingModels] = useState(false);
+
+  const handleFetchModels = useCallback(() => {
+    if (!baseUrl || !apiKey) {
+      showFetchModelsError(null, t, {
+        hasApiKey: !!apiKey,
+        hasBaseUrl: !!baseUrl,
+      });
+      return;
+    }
+    setIsFetchingModels(true);
+    fetchModelsForConfig(baseUrl, apiKey)
+      .then((models) => {
+        setFetchedModels(models);
+        if (models.length === 0) {
+          toast.info(t("providerForm.fetchModelsEmpty"));
+        } else {
+          toast.success(
+            t("providerForm.fetchModelsSuccess", { count: models.length }),
+          );
+        }
+      })
+      .catch((err) => {
+        console.warn("[ModelFetch] Failed:", err);
+        showFetchModelsError(err, t);
+      })
+      .finally(() => setIsFetchingModels(false));
+  }, [baseUrl, apiKey, t]);
 
   // Track which models have expanded options panel
   const [expandedModels, setExpandedModels] = useState<Set<string>>(new Set());
@@ -654,13 +732,21 @@ export function OpenCodeFormFields({
                       )}
                     />
                   </Button>
-                  <ModelIdInput
-                    modelId={key}
-                    onChange={(newId) => handleModelIdChange(key, newId)}
-                    placeholder={t("opencode.modelId", {
-                      defaultValue: "Model ID",
-                    })}
-                  />
+                  <div className="flex gap-1 flex-1">
+                    <ModelIdInput
+                      modelId={key}
+                      onChange={(newId) => handleModelIdChange(key, newId)}
+                      placeholder={t("opencode.modelId", {
+                        defaultValue: "Model ID",
+                      })}
+                    />
+                    {fetchedModels.length > 0 && (
+                      <ModelDropdown
+                        models={fetchedModels}
+                        onSelect={(id) => handleModelIdChange(key, id)}
+                      />
+                    )}
+                  </div>
                   <Input
                     value={model.name}
                     onChange={(e) => handleModelNameChange(key, e.target.value)}

@@ -34,6 +34,22 @@ pub async fn open_external(app: AppHandle, url: String) -> Result<bool, String> 
     Ok(true)
 }
 
+#[tauri::command]
+pub async fn copy_text_to_clipboard(text: String) -> Result<bool, String> {
+    // Use spawn_blocking to avoid blocking the async runtime
+    // Clipboard access can block on some platforms and may have thread/loop constraints
+    tokio::task::spawn_blocking(move || {
+        let mut clipboard =
+            arboard::Clipboard::new().map_err(|e| format!("访问系统剪贴板失败: {e}"))?;
+        clipboard
+            .set_text(text)
+            .map_err(|e| format!("写入系统剪贴板失败: {e}"))?;
+        Ok(true)
+    })
+    .await
+    .map_err(|e| format!("剪贴板任务执行失败: {e}"))?
+}
+
 /// 检查更新
 #[tauri::command]
 pub async fn check_for_updates(handle: AppHandle) -> Result<bool, String> {
@@ -1100,21 +1116,21 @@ exec bash --norc --noprofile
         let pref_args = default_terminals
             .iter()
             .find(|(name, _)| *name == pref.as_str())
-            .map(|(_, args)| args.iter().map(|s| *s).collect::<Vec<&str>>())
+            .map(|(_, args)| args.to_vec())
             .unwrap_or_else(|| vec!["-e"]); // Default args for unknown terminals
 
         let mut list = vec![(pref.as_str(), pref_args)];
         // Add remaining terminals as fallbacks
         for (name, args) in &default_terminals {
             if *name != pref.as_str() {
-                list.push((*name, args.iter().map(|s| *s).collect()));
+                list.push((*name, args.to_vec()));
             }
         }
         list
     } else {
         default_terminals
             .iter()
-            .map(|(name, args)| (*name, args.iter().map(|s| *s).collect()))
+            .map(|(name, args)| (*name, args.to_vec()))
             .collect()
     };
 
