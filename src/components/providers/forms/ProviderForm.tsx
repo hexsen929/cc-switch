@@ -733,6 +733,8 @@ export function ProviderForm({
   ]);
 
   const [isCommonConfigModalOpen, setIsCommonConfigModalOpen] = useState(false);
+  const shouldShowProviderScopedExtras =
+    !isAnyOmoCategory && appId !== "opencode" && appId !== "openclaw";
 
   const handleSubmit = async (values: ProviderFormData) => {
     if (appId === "claude" && templateValueEntries.length > 0) {
@@ -1821,7 +1823,7 @@ export function ProviderForm({
           </>
         )}
 
-        {!isAnyOmoCategory && (
+        {shouldShowProviderScopedExtras && (
           <ProviderResourceOverridesConfig
             appId={appId}
             value={resourceOverrides}
@@ -1829,7 +1831,7 @@ export function ProviderForm({
           />
         )}
 
-        {!isAnyOmoCategory && appId !== "opencode" && appId !== "openclaw" && (
+        {shouldShowProviderScopedExtras && (
           <ProviderAdvancedConfig
             testConfig={testConfig}
             proxyConfig={proxyConfig}
