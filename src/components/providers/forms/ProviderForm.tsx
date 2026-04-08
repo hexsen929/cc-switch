@@ -8,8 +8,7 @@ import { Button } from "@/components/ui/button";
 import { Form, FormField, FormItem, FormMessage } from "@/components/ui/form";
 import { Input } from "@/components/ui/input";
 import { providerSchema, type ProviderFormData } from "@/lib/schemas/provider";
-import type { AppId } from "@/lib/api";
-import { providersApi } from "@/lib/api/providers";
+import { providersApi, type AppId } from "@/lib/api";
 import type {
   ProviderCategory,
   ProviderMeta,
@@ -60,12 +59,12 @@ import { ClaudeFormFields } from "./ClaudeFormFields";
 import { CodexFormFields } from "./CodexFormFields";
 import { GeminiFormFields } from "./GeminiFormFields";
 import { OmoFormFields } from "./OmoFormFields";
+import { ProviderResourceOverridesConfig } from "./ProviderResourceOverridesConfig";
 import { parseOmoOtherFieldsObject } from "@/types/omo";
 import {
   ProviderAdvancedConfig,
   type PricingModelSourceOption,
 } from "./ProviderAdvancedConfig";
-import { ProviderResourceOverridesConfig } from "./ProviderResourceOverridesConfig";
 import {
   useProviderCategory,
   useApiKeyState,
@@ -206,6 +205,11 @@ export function ProviderForm({
     return initialData?.meta?.isFullUrl ?? false;
   });
 
+  const [resourceOverrides, setResourceOverrides] =
+    useState<ProviderResourceOverrides>(
+      () => initialData?.meta?.resourceOverrides ?? {},
+    );
+
   const [testConfig, setTestConfig] = useState<ProviderTestConfig>(
     () => initialData?.meta?.testConfig ?? { enabled: false },
   );
@@ -225,22 +229,6 @@ export function ProviderForm({
       initialData?.meta?.pricingModelSource,
     ),
   }));
-  const [resourceOverrides, setResourceOverrides] =
-    useState<ProviderResourceOverrides>(() => ({
-      mcp: initialData?.meta?.resourceOverrides?.mcp ?? {
-        enabled: false,
-        disabledServerIds: [],
-      },
-      skills: initialData?.meta?.resourceOverrides?.skills ?? {
-        enabled: false,
-        disabledSkillIds: [],
-      },
-      prompt: initialData?.meta?.resourceOverrides?.prompt ?? {
-        enabled: false,
-        mode: "selected",
-        promptId: undefined,
-      },
-    }));
 
   const { category } = useProviderCategory({
     appId,
@@ -263,6 +251,7 @@ export function ProviderForm({
     setLocalIsFullUrl(
       supportsFullUrl ? (initialData?.meta?.isFullUrl ?? false) : false,
     );
+    setResourceOverrides(initialData?.meta?.resourceOverrides ?? {});
     setTestConfig(initialData?.meta?.testConfig ?? { enabled: false });
     setProxyConfig(initialData?.meta?.proxyConfig ?? { enabled: false });
     setPricingConfig({
@@ -273,21 +262,6 @@ export function ProviderForm({
       pricingModelSource: normalizePricingSource(
         initialData?.meta?.pricingModelSource,
       ),
-    });
-    setResourceOverrides({
-      mcp: initialData?.meta?.resourceOverrides?.mcp ?? {
-        enabled: false,
-        disabledServerIds: [],
-      },
-      skills: initialData?.meta?.resourceOverrides?.skills ?? {
-        enabled: false,
-        disabledSkillIds: [],
-      },
-      prompt: initialData?.meta?.resourceOverrides?.prompt ?? {
-        enabled: false,
-        mode: "selected",
-        promptId: undefined,
-      },
     });
   }, [appId, initialData, supportsFullUrl]);
 
@@ -665,119 +639,6 @@ export function ProviderForm({
     getSettingsConfig: () => form.getValues("settingsConfig"),
   });
 
-  const [isFetchingModels, setIsFetchingModels] = useState(false);
-  const [fetchedModelOptions, setFetchedModelOptions] = useState<string[]>([]);
-
-  useEffect(() => {
-    setFetchedModelOptions([]);
-    setIsFetchingModels(false);
-  }, [appId, providerId, selectedPresetId]);
-
-  const handleFetchModels = useCallback(async () => {
-    const parsedSettings = (() => {
-      try {
-        return JSON.parse(form.getValues("settingsConfig") || "{}") as Record<
-          string,
-          unknown
-        >;
-      } catch {
-        return {} as Record<string, unknown>;
-      }
-    })();
-
-    const resolveCredentials = () => {
-      if (appId === "claude")
-        return { baseUrl: baseUrl.trim(), apiKey: apiKey.trim() };
-      if (appId === "codex")
-        return { baseUrl: codexBaseUrl.trim(), apiKey: codexApiKey.trim() };
-      if (appId === "gemini")
-        return { baseUrl: geminiBaseUrl.trim(), apiKey: geminiApiKey.trim() };
-      const options =
-        parsedSettings.options && typeof parsedSettings.options === "object"
-          ? (parsedSettings.options as Record<string, unknown>)
-          : {};
-      const fallbackBaseUrl =
-        typeof options.baseURL === "string" ? options.baseURL.trim() : "";
-      const fallbackApiKey =
-        typeof options.apiKey === "string" ? options.apiKey.trim() : "";
-      return {
-        baseUrl: opencodeForm.opencodeBaseUrl.trim() || fallbackBaseUrl,
-        apiKey: opencodeForm.opencodeApiKey.trim() || fallbackApiKey,
-      };
-    };
-
-    const { baseUrl: rawBaseUrl, apiKey: rawApiKey } = resolveCredentials();
-    if (!rawBaseUrl) {
-      toast.error(
-        t("providerForm.endpointRequired", {
-          defaultValue: "请先填写 API 端点",
-        }),
-      );
-      return;
-    }
-    if (!rawApiKey) {
-      toast.error(
-        t("providerForm.apiKeyRequired", { defaultValue: "请先填写 API Key" }),
-      );
-      return;
-    }
-
-    setIsFetchingModels(true);
-    try {
-      const result = await providersApi.fetchOpenAiModels({
-        appId,
-        providerId,
-        baseUrl: rawBaseUrl,
-        apiKey: rawApiKey,
-        timeoutSecs: 15,
-      });
-      if (result.warnings?.length) {
-        console.warn("[fetchModels] warnings:", result.warnings);
-      }
-      const modelIds = [
-        ...new Set(result.models.map((m) => m.id).filter(Boolean)),
-      ].sort((a, b) => a.localeCompare(b));
-      setFetchedModelOptions(modelIds);
-      if (modelIds.length === 0) {
-        toast.error(
-          t("providerForm.fetchModelsEmpty", {
-            defaultValue: "未获取到任何模型",
-          }),
-        );
-      } else {
-        toast.success(
-          t("providerForm.fetchModelsSuccess", {
-            count: modelIds.length,
-            defaultValue: `已获取 ${modelIds.length} 个模型`,
-          }),
-        );
-      }
-    } catch (err) {
-      toast.error(
-        t("providerForm.fetchModelsFailed", {
-          defaultValue:
-            "获取模型失败，此功能仅供参考，部分供应商可能不支持模型列表接口",
-        }),
-        { description: String(err) },
-      );
-    } finally {
-      setIsFetchingModels(false);
-    }
-  }, [
-    appId,
-    providerId,
-    baseUrl,
-    apiKey,
-    codexBaseUrl,
-    codexApiKey,
-    geminiBaseUrl,
-    geminiApiKey,
-    opencodeForm.opencodeBaseUrl,
-    opencodeForm.opencodeApiKey,
-    form,
-    t,
-  ]);
-
   const initialOmoSettings =
     appId === "opencode" &&
     (initialData?.category === "omo" || initialData?.category === "omo-slim")
@@ -870,49 +731,6 @@ export function ProviderForm({
     opencodeLiveProviderIds,
     providerId,
   ]);
-
-  const handleImportFetchedModels = useCallback(() => {
-    if (appId !== "opencode") return;
-    if (fetchedModelOptions.length === 0) {
-      toast.error(
-        t("opencode.noFetchedModels", {
-          defaultValue: "暂无可导入模型，请先自动获取。",
-        }),
-      );
-      return;
-    }
-    const merged: Record<string, Record<string, unknown>> = {
-      ...opencodeForm.opencodeModels,
-    };
-    let imported = 0;
-    let updated = 0;
-    for (const modelId of fetchedModelOptions) {
-      const key = modelId.trim();
-      if (!key) continue;
-      const existing = merged[key];
-      if (!existing) {
-        merged[key] = { name: key };
-        imported += 1;
-      } else if (
-        !(existing as Record<string, unknown>).name ||
-        !String((existing as Record<string, unknown>).name).trim()
-      ) {
-        merged[key] = { ...existing, name: key };
-        updated += 1;
-      }
-    }
-    opencodeForm.handleOpencodeModelsChange(
-      merged as Parameters<typeof opencodeForm.handleOpencodeModelsChange>[0],
-    );
-    toast.success(
-      t("opencode.importFetchedModelsResult", {
-        imported,
-        updated,
-        defaultValue:
-          "模型导入完成：新增 {{imported}} 个，补全名称 {{updated}} 个。",
-      }),
-    );
-  }, [appId, fetchedModelOptions, opencodeForm, t]);
 
   const [isCommonConfigModalOpen, setIsCommonConfigModalOpen] = useState(false);
 
@@ -1252,7 +1070,6 @@ export function ProviderForm({
         isCopilotProvider && selectedGitHubAccountId
           ? selectedGitHubAccountId
           : undefined,
-      resourceOverrides: normalizeResourceOverrides(resourceOverrides),
       testConfig: testConfig.enabled ? testConfig : undefined,
       proxyConfig: proxyConfig.enabled ? proxyConfig : undefined,
       costMultiplier: pricingConfig.enabled
@@ -1262,6 +1079,7 @@ export function ProviderForm({
         pricingConfig.enabled && pricingConfig.pricingModelSource !== "inherit"
           ? pricingConfig.pricingModelSource
           : undefined,
+      resourceOverrides: normalizeResourceOverrides(resourceOverrides),
       apiFormat:
         appId === "claude" && category !== "official"
           ? localApiFormat
@@ -1752,9 +1570,6 @@ export function ProviderForm({
             onApiFormatChange={handleApiFormatChange}
             apiKeyField={localApiKeyField}
             onApiKeyFieldChange={handleApiKeyFieldChange}
-            onFetchModels={handleFetchModels}
-            isFetchingModels={isFetchingModels}
-            modelSuggestions={fetchedModelOptions}
             isFullUrl={localIsFullUrl}
             onFullUrlChange={setLocalIsFullUrl}
           />
@@ -1786,9 +1601,6 @@ export function ProviderForm({
             modelName={codexModelName}
             onModelNameChange={handleCodexModelNameChange}
             speedTestEndpoints={speedTestEndpoints}
-            onFetchModels={handleFetchModels}
-            isFetchingModels={isFetchingModels}
-            modelSuggestions={fetchedModelOptions}
           />
         )}
 
@@ -1818,9 +1630,6 @@ export function ProviderForm({
             model={geminiModel}
             onModelChange={handleGeminiModelChange}
             speedTestEndpoints={speedTestEndpoints}
-            onFetchModels={handleFetchModels}
-            isFetchingModels={isFetchingModels}
-            modelSuggestions={fetchedModelOptions}
           />
         )}
 
@@ -1841,10 +1650,6 @@ export function ProviderForm({
             onModelsChange={opencodeForm.handleOpencodeModelsChange}
             extraOptions={opencodeForm.opencodeExtraOptions}
             onExtraOptionsChange={opencodeForm.handleOpencodeExtraOptionsChange}
-            onFetchModels={handleFetchModels}
-            isFetchingModels={isFetchingModels}
-            fetchedModelOptions={fetchedModelOptions}
-            onImportFetchedModels={handleImportFetchedModels}
           />
         )}
 
@@ -2016,6 +1821,14 @@ export function ProviderForm({
           </>
         )}
 
+        {!isAnyOmoCategory && (
+          <ProviderResourceOverridesConfig
+            appId={appId}
+            value={resourceOverrides}
+            onChange={setResourceOverrides}
+          />
+        )}
+
         {!isAnyOmoCategory && appId !== "opencode" && appId !== "openclaw" && (
           <ProviderAdvancedConfig
             testConfig={testConfig}
@@ -2024,14 +1837,6 @@ export function ProviderForm({
             onTestConfigChange={setTestConfig}
             onProxyConfigChange={setProxyConfig}
             onPricingConfigChange={setPricingConfig}
-          />
-        )}
-
-        {!isAnyOmoCategory && appId !== "opencode" && appId !== "openclaw" && (
-          <ProviderResourceOverridesConfig
-            appId={appId}
-            value={resourceOverrides}
-            onChange={setResourceOverrides}
           />
         )}
 

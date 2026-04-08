@@ -21,27 +21,6 @@ export interface SwitchResult {
   warnings: string[];
 }
 
-export interface OpenAiModelDescriptor {
-  id: string;
-  ownedBy?: string;
-  created?: number;
-}
-
-export interface FetchOpenAiModelsRequest {
-  appId: AppId;
-  providerId?: string | null;
-  baseUrl: string;
-  apiKey: string;
-  timeoutSecs?: number;
-}
-
-export interface FetchOpenAiModelsResponse {
-  models: OpenAiModelDescriptor[];
-  resolvedUrl: string;
-  elapsedMs: number;
-  warnings?: string[];
-}
-
 export interface OpenTerminalOptions {
   cwd?: string;
 }
@@ -164,19 +143,6 @@ export const providersApi = {
   async importOpenClawFromLive(): Promise<number> {
     return await invoke("import_openclaw_providers_from_live");
   },
-
-  async fetchOpenAiModels(
-    payload: FetchOpenAiModelsRequest,
-  ): Promise<FetchOpenAiModelsResponse> {
-    const { appId, providerId = null, baseUrl, apiKey, timeoutSecs } = payload;
-    return await invoke("fetch_provider_models_openai", {
-      app: appId,
-      providerId,
-      baseUrl,
-      apiKey,
-      timeoutSecs,
-    });
-  },
 };
 
 // ============================================================================
@@ -217,18 +183,5 @@ export const universalProvidersApi = {
    */
   async sync(id: string): Promise<boolean> {
     return await invoke("sync_universal_provider", { id });
-  },
-
-  async fetchOpenAiModels(
-    payload: FetchOpenAiModelsRequest,
-  ): Promise<FetchOpenAiModelsResponse> {
-    const { appId, providerId = null, baseUrl, apiKey, timeoutSecs } = payload;
-    return await invoke("fetch_provider_models_openai", {
-      app: appId,
-      providerId,
-      baseUrl,
-      apiKey,
-      timeoutSecs,
-    });
   },
 };

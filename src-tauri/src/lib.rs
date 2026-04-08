@@ -914,7 +914,6 @@ pub fn run() {
             // model list fetch (OpenAI-compatible /v1/models)
             commands::fetch_models_for_config,
             // ours: endpoint speed test + custom endpoint management
-            commands::fetch_provider_models_openai,
             commands::test_api_endpoints,
             commands::get_custom_endpoints,
             commands::add_custom_endpoint,

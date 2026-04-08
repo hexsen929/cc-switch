@@ -56,6 +56,27 @@ interface ProviderCardProps {
   onSetAsDefault?: () => void;
 }
 
+function isOfficialProvider(provider: Provider, appId: AppId): boolean {
+  const config = provider.settingsConfig as Record<string, any>;
+  if (appId === "claude") {
+    const baseUrl = config?.env?.ANTHROPIC_BASE_URL;
+    return !baseUrl || (typeof baseUrl === "string" && baseUrl.trim() === "");
+  }
+  if (appId === "codex") {
+    const apiKey = config?.auth?.OPENAI_API_KEY;
+    return !apiKey || (typeof apiKey === "string" && apiKey.trim() === "");
+  }
+  if (appId === "gemini") {
+    const apiKey = config?.env?.GEMINI_API_KEY;
+    const baseUrl = config?.env?.GOOGLE_GEMINI_BASE_URL;
+    return (
+      (!apiKey || (typeof apiKey === "string" && apiKey.trim() === "")) &&
+      (!baseUrl || (typeof baseUrl === "string" && baseUrl.trim() === ""))
+    );
+  }
+  return false;
+}
+
 const extractModelName = (
   provider: Provider,
   appId: AppId,

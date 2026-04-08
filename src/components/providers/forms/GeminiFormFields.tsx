@@ -1,9 +1,9 @@
 import { useCallback, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { FormLabel } from "@/components/ui/form";
-import { Info, Loader2 } from "lucide-react";
+import { Download, Info, Loader2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { ModelSuggest } from "@/components/ui/model-suggest";
+import { toast } from "sonner";
 import EndpointSpeedTest from "./EndpointSpeedTest";
 import { ApiKeySection, EndpointField, ModelInputWithFetch } from "./shared";
 import {
@@ -43,9 +43,6 @@ interface GeminiFormFieldsProps {
   shouldShowModelField: boolean;
   model: string;
   onModelChange: (value: string) => void;
-  onFetchModels?: () => void;
-  isFetchingModels?: boolean;
-  modelSuggestions?: string[];
 
   // Speed Test Endpoints
   speedTestEndpoints: EndpointCandidate[];
@@ -72,9 +69,6 @@ export function GeminiFormFields({
   shouldShowModelField,
   model,
   onModelChange,
-  onFetchModels,
-  isFetchingModels = false,
-  modelSuggestions = [],
   speedTestEndpoints,
 }: GeminiFormFieldsProps) {
   const { t } = useTranslation();
@@ -166,31 +160,31 @@ export function GeminiFormFields({
 
       {/* Model 输入框 */}
       {shouldShowModelField && (
-        <div>
-          <div className="flex items-center justify-between gap-2 mb-1">
-            <FormLabel htmlFor="gemini-model" className="mb-0">
+        <div className="space-y-2">
+          <div className="flex items-center justify-between">
+            <FormLabel htmlFor="gemini-model">
               {t("provider.form.gemini.model", { defaultValue: "模型" })}
             </FormLabel>
-            {onFetchModels && (
-              <Button
-                type="button"
-                variant="outline"
-                size="sm"
-                onClick={onFetchModels}
-                disabled={isFetchingModels}
-              >
-                {isFetchingModels && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
-                {t("providerForm.autoFetchModels", {
-                  defaultValue: "自动获取模型",
-                })}
-              </Button>
-            )}
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              onClick={handleFetchModels}
+              disabled={isFetchingModels}
+              className="h-7 gap-1"
+            >
+              {isFetchingModels ? (
+                <Loader2 className="h-3.5 w-3.5 animate-spin" />
+              ) : (
+                <Download className="h-3.5 w-3.5" />
+              )}
+              {t("providerForm.fetchModels")}
+            </Button>
           </div>
-          <ModelSuggest
+          <ModelInputWithFetch
             id="gemini-model"
             value={model}
-            onChange={(v) => onModelChange(v)}
-            suggestions={modelSuggestions}
+            onChange={onModelChange}
             placeholder="gemini-3-pro-preview"
             fetchedModels={fetchedModels}
             isLoading={isFetchingModels}

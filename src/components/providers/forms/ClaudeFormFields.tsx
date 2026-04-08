@@ -9,8 +9,6 @@ import {
 import { toast } from "sonner";
 import { FormLabel } from "@/components/ui/form";
 import { Input } from "@/components/ui/input";
-import { ChevronDown, ChevronRight, Loader2 } from "lucide-react";
-import { ModelSuggest } from "@/components/ui/model-suggest";
 import {
   Select,
   SelectContent,
@@ -26,6 +24,7 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
+import { ChevronDown, ChevronRight, Download, Loader2 } from "lucide-react";
 import EndpointSpeedTest from "./EndpointSpeedTest";
 import { ApiKeySection, EndpointField, ModelInputWithFetch } from "./shared";
 import { CopilotAuthSection } from "./CopilotAuthSection";
@@ -114,9 +113,6 @@ interface ClaudeFormFieldsProps {
   // Auth Field (ANTHROPIC_AUTH_TOKEN or ANTHROPIC_API_KEY)
   apiKeyField: ClaudeApiKeyField;
   onApiKeyFieldChange: (field: ClaudeApiKeyField) => void;
-  onFetchModels?: () => void;
-  isFetchingModels?: boolean;
-  modelSuggestions?: string[];
 
   // Full URL mode
   isFullUrl: boolean;
@@ -162,9 +158,6 @@ export function ClaudeFormFields({
   onApiFormatChange,
   apiKeyField,
   onApiKeyFieldChange,
-  onFetchModels,
-  isFetchingModels = false,
-  modelSuggestions = [],
   isFullUrl,
   onFullUrlChange,
 }: ClaudeFormFieldsProps) {
@@ -343,12 +336,13 @@ export function ClaudeFormFields({
 
     // 非 Copilot 供应商: 使用 ModelInputWithFetch（获取按钮在 section 标题旁）
     return (
-      <ModelSuggest
+      <ModelInputWithFetch
         id={id}
         value={value}
-        onChange={(val) => onModelChange(field, val)}
+        onChange={(v) => onModelChange(field, v)}
         placeholder={placeholder}
-        suggestions={modelSuggestions}
+        fetchedModels={fetchedModels}
+        isLoading={isFetchingModels}
       />
     );
   };
@@ -546,21 +540,22 @@ export function ClaudeFormFields({
             {/* 模型映射 */}
             <div className="space-y-1 pt-2 border-t">
               <div className="flex items-center justify-between">
-                <FormLabel className="mb-0">{t("providerForm.modelMappingLabel")}</FormLabel>
-                {onFetchModels && (
+                <FormLabel>{t("providerForm.modelMappingLabel")}</FormLabel>
+                {!isCopilotPreset && (
                   <Button
                     type="button"
                     variant="outline"
                     size="sm"
-                    onClick={onFetchModels}
+                    onClick={handleFetchModels}
                     disabled={isFetchingModels}
+                    className="h-7 gap-1"
                   >
-                    {isFetchingModels && (
+                    {isFetchingModels ? (
                       <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                    ) : (
+                      <Download className="h-3.5 w-3.5" />
                     )}
-                    {t("providerForm.autoFetchModels", {
-                      defaultValue: "自动获取模型",
-                    })}
+                    {t("providerForm.fetchModels")}
                   </Button>
                 )}
               </div>
