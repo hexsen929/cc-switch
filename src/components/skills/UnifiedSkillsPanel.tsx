@@ -5,9 +5,10 @@ import {
   Trash2,
   ExternalLink,
   RefreshCw,
-  ArrowUpCircle,
+  Loader2,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { Badge } from "@/components/ui/badge";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import {
   type ImportSkillSelection,
@@ -25,6 +26,7 @@ import {
   useUpdateSkill,
   useUpdateAllSkills,
   type InstalledSkill,
+  type SkillUpdateInfo,
 } from "@/hooks/useSkills";
 import type { AppId } from "@/lib/api/types";
 import { ConfirmDialog } from "@/components/ConfirmDialog";
@@ -53,6 +55,7 @@ export interface UnifiedSkillsPanelHandle {
   openImport: () => void;
   openInstallFromZip: () => void;
   openRestoreFromBackup: () => void;
+  checkUpdates: () => void;
 }
 
 function formatSkillBackupDate(unixSeconds: number): string {
@@ -80,15 +83,6 @@ const UnifiedSkillsPanel = React.forwardRef<
 
   const { data: skills, isLoading } = useInstalledSkills();
   const {
-    data: updatableIds,
-    isFetching: isCheckingUpdates,
-    refetch: checkUpdates,
-  } = useCheckSkillUpdates();
-  const updatableSet = useMemo(
-    () => new Set(updatableIds ?? []),
-    [updatableIds],
-  );
-  const {
     data: skillBackups = [],
     refetch: refetchSkillBackups,
     isFetching: isFetchingSkillBackups,
@@ -101,8 +95,23 @@ const UnifiedSkillsPanel = React.forwardRef<
     useScanUnmanagedSkills();
   const importMutation = useImportSkillsFromApps();
   const installFromZipMutation = useInstallSkillsFromZip();
+  const {
+    data: skillUpdates,
+    refetch: checkUpdates,
+    isFetching: isCheckingUpdates,
+  } = useCheckSkillUpdates();
   const updateSkillMutation = useUpdateSkill();
   const updateAllSkillsMutation = useUpdateAllSkills();
+
+  const updatesMap = useMemo(() => {
+    const map: Record<string, SkillUpdateInfo> = {};
+    if (skillUpdates) {
+      for (const u of skillUpdates) {
+        map[u.id] = u;
+      }
+    }
+    return map;
+  }, [skillUpdates]);
 
   const enabledCounts = useMemo(() => {
     const counts = { claude: 0, codex: 0, gemini: 0, opencode: 0, openclaw: 0 };
@@ -118,30 +127,6 @@ const UnifiedSkillsPanel = React.forwardRef<
   const handleToggleApp = async (id: string, app: AppId, enabled: boolean) => {
     try {
       await toggleAppMutation.mutateAsync({ id, app, enabled });
-    } catch (error) {
-      toast.error(t("common.error"), { description: String(error) });
-    }
-  };
-
-  const handleUpdate = async (id: string) => {
-    try {
-      await updateSkillMutation.mutateAsync(id);
-      toast.success(t("skills.updateSuccess", { defaultValue: "更新成功" }));
-    } catch (error) {
-      toast.error(t("common.error"), { description: String(error) });
-    }
-  };
-
-  const handleUpdateAll = async () => {
-    try {
-      const ids = [...updatableSet];
-      await updateAllSkillsMutation.mutateAsync(ids);
-      toast.success(
-        t("skills.updateAllSuccess", {
-          count: ids.length,
-          defaultValue: `${ids.length} 个 Skill 已更新`,
-        }),
-      );
     } catch (error) {
       toast.error(t("common.error"), { description: String(error) });
     }
@@ -235,6 +220,48 @@ const UnifiedSkillsPanel = React.forwardRef<
     }
   };
 
+  const handleCheckUpdates = async () => {
+    try {
+      const result = await checkUpdates();
+      const updates = result.data || [];
+      if (updates.length === 0) {
+        toast.success(t("skills.noUpdates"), { closeButton: true });
+      } else {
+        toast.info(t("skills.updatesFound", { count: updates.length }), {
+          closeButton: true,
+        });
+      }
+    } catch (error) {
+      toast.error(t("common.error"), { description: String(error) });
+    }
+  };
+
+  const handleUpdateSkill = async (skill: InstalledSkill) => {
+    try {
+      const updated = await updateSkillMutation.mutateAsync(skill.id);
+      toast.success(t("skills.updateSuccess", { name: updated.name }), {
+        closeButton: true,
+      });
+    } catch (error) {
+      toast.error(t("skills.updateFailed"), { description: String(error) });
+    }
+  };
+
+  const handleUpdateAll = async () => {
+    if (!skillUpdates || skillUpdates.length === 0) return;
+    try {
+      const ids = skillUpdates.map((update) => update.id);
+      const updated = await updateAllSkillsMutation.mutateAsync(ids);
+      if (updated.length > 0) {
+        toast.success(t("skills.updateAllSuccess", { count: updated.length }), {
+          closeButton: true,
+        });
+      }
+    } catch (error) {
+      toast.error(t("skills.updateFailed"), { description: String(error) });
+    }
+  };
+
   const handleOpenRestoreFromBackup = async () => {
     setRestoreDialogOpen(true);
     try {
@@ -300,6 +327,7 @@ const UnifiedSkillsPanel = React.forwardRef<
     openImport: handleOpenImport,
     openInstallFromZip: handleInstallFromZip,
     openRestoreFromBackup: handleOpenRestoreFromBackup,
+    checkUpdates: handleCheckUpdates,
   }));
 
   return (
@@ -310,54 +338,53 @@ const UnifiedSkillsPanel = React.forwardRef<
           counts={enabledCounts}
           appIds={MCP_SKILLS_APP_IDS}
         />
-        {skills && skills.length > 0 && (
-          <div className="flex items-center gap-1">
-            {updatableSet.size > 0 && (
-              <Button
-                type="button"
-                variant="ghost"
-                size="sm"
-                className="h-7 gap-1.5 text-xs text-amber-600 dark:text-amber-400 hover:text-amber-700 dark:hover:text-amber-300 flex-shrink-0"
-                onClick={handleUpdateAll}
-                disabled={updateAllSkillsMutation.isPending}
-                title={t("skills.updateAll", { defaultValue: "更新全部" })}
-              >
-                <ArrowUpCircle
-                  size={13}
-                  className={
-                    updateAllSkillsMutation.isPending ? "animate-spin" : ""
-                  }
-                />
-                {t("skills.updateAll", {
-                  count: updatableSet.size,
-                  defaultValue: `更新全部 (${updatableSet.size})`,
-                })}
-              </Button>
-            )}
+        <div className="flex items-center gap-1.5">
+          <div
+            className="transition-all duration-300 ease-out overflow-hidden"
+            style={{
+              maxWidth:
+                skillUpdates && skillUpdates.length > 0 ? "200px" : "0px",
+              opacity: skillUpdates && skillUpdates.length > 0 ? 1 : 0,
+            }}
+          >
             <Button
               type="button"
-              variant="ghost"
+              variant="outline"
               size="sm"
-              className="h-7 gap-1.5 text-xs text-muted-foreground hover:text-foreground flex-shrink-0"
-              onClick={() => checkUpdates()}
-              disabled={isCheckingUpdates}
-              title={t("skills.checkUpdates", { defaultValue: "检查更新" })}
+              className="h-7 text-xs gap-1 whitespace-nowrap"
+              onClick={handleUpdateAll}
+              disabled={
+                updateAllSkillsMutation.isPending || updateSkillMutation.isPending
+              }
             >
-              <RefreshCw
-                size={13}
-                className={isCheckingUpdates ? "animate-spin" : ""}
-              />
-              {updatableIds !== undefined
-                ? updatableSet.size > 0
-                  ? t("skills.updatesAvailable", {
-                      count: updatableSet.size,
-                      defaultValue: `${updatableSet.size} 个可更新`,
-                    })
-                  : t("skills.upToDate", { defaultValue: "已是最新" })
-                : t("skills.checkUpdates", { defaultValue: "检查更新" })}
+              {updateAllSkillsMutation.isPending ? (
+                <Loader2 size={12} className="animate-spin" />
+              ) : (
+                <RefreshCw size={12} />
+              )}
+              {updateAllSkillsMutation.isPending
+                ? t("skills.updatingAll")
+                : t("skills.updateAll", { count: skillUpdates?.length ?? 0 })}
             </Button>
           </div>
-        )}
+          <Button
+            type="button"
+            variant="ghost"
+            size="sm"
+            className="h-7 text-xs gap-1"
+            onClick={handleCheckUpdates}
+            disabled={isCheckingUpdates || !skills || skills.length === 0}
+          >
+            {isCheckingUpdates ? (
+              <Loader2 size={12} className="animate-spin" />
+            ) : (
+              <RefreshCw size={12} />
+            )}
+            {isCheckingUpdates
+              ? t("skills.checkingUpdates")
+              : t("skills.checkUpdates")}
+          </Button>
+        </div>
       </div>
 
       <div className="flex-1 overflow-y-auto overflow-x-hidden pb-24">
@@ -384,15 +411,15 @@ const UnifiedSkillsPanel = React.forwardRef<
                 <InstalledSkillListItem
                   key={skill.id}
                   skill={skill}
-                  onToggleApp={handleToggleApp}
-                  onUninstall={() => handleUninstall(skill)}
-                  onUpdate={() => handleUpdate(skill.id)}
-                  isLast={index === skills.length - 1}
-                  hasUpdate={updatableSet.has(skill.id)}
+                  hasUpdate={!!updatesMap[skill.id]}
                   isUpdating={
                     updateSkillMutation.isPending &&
                     updateSkillMutation.variables === skill.id
                   }
+                  onToggleApp={handleToggleApp}
+                  onUninstall={() => handleUninstall(skill)}
+                  onUpdate={() => handleUpdateSkill(skill)}
+                  isLast={index === skills.length - 1}
                 />
               ))}
             </div>
@@ -439,12 +466,12 @@ UnifiedSkillsPanel.displayName = "UnifiedSkillsPanel";
 
 interface InstalledSkillListItemProps {
   skill: InstalledSkill;
-  onToggleApp: (id: string, app: AppId, enabled: boolean) => void;
-  onUninstall: () => void;
-  onUpdate: () => void;
-  isLast?: boolean;
   hasUpdate?: boolean;
   isUpdating?: boolean;
+  onToggleApp: (id: string, app: AppId, enabled: boolean) => void;
+  onUninstall: () => void;
+  onUpdate?: () => void;
+  isLast?: boolean;
 }
 
 const InstalledSkillListItem: React.FC<InstalledSkillListItemProps> = ({
@@ -490,26 +517,17 @@ const InstalledSkillListItem: React.FC<InstalledSkillListItemProps> = ({
               <ExternalLink size={12} />
             </button>
           )}
-          {hasUpdate && (
-            <button
-              type="button"
-              className="inline-flex items-center gap-0.5 text-xs font-medium text-amber-600 dark:text-amber-400 hover:text-amber-700 dark:hover:text-amber-300 flex-shrink-0 disabled:opacity-50"
-              title={t("skills.updateAvailable", { defaultValue: "点击更新" })}
-              onClick={onUpdate}
-              disabled={isUpdating}
-            >
-              <ArrowUpCircle
-                size={12}
-                className={isUpdating ? "animate-spin" : ""}
-              />
-              {isUpdating
-                ? t("skills.updating", { defaultValue: "更新中..." })
-                : t("skills.updateAvailable", { defaultValue: "有更新" })}
-            </button>
-          )}
           <span className="text-xs text-muted-foreground/50 flex-shrink-0">
             {sourceLabel}
           </span>
+          {hasUpdate && (
+            <Badge
+              variant="outline"
+              className="shrink-0 text-[10px] px-1.5 py-0 h-4 border-amber-500 text-amber-600 dark:text-amber-400"
+            >
+              {t("skills.updateAvailable")}
+            </Badge>
+          )}
         </div>
         {skill.description && (
           <p
@@ -527,7 +545,27 @@ const InstalledSkillListItem: React.FC<InstalledSkillListItemProps> = ({
         appIds={MCP_SKILLS_APP_IDS}
       />
 
-      <div className="flex-shrink-0 opacity-0 group-hover:opacity-100 transition-opacity">
+      <div
+        className="flex-shrink-0 flex items-center gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity"
+        style={hasUpdate ? { opacity: 1 } : undefined}
+      >
+        {hasUpdate && onUpdate && (
+          <Button
+            type="button"
+            variant="ghost"
+            size="icon"
+            className="h-7 w-7 hover:text-blue-500 hover:bg-blue-100 dark:hover:text-blue-400 dark:hover:bg-blue-500/10"
+            onClick={onUpdate}
+            disabled={isUpdating}
+            title={t("skills.update")}
+          >
+            {isUpdating ? (
+              <Loader2 size={14} className="animate-spin" />
+            ) : (
+              <RefreshCw size={14} />
+            )}
+          </Button>
+        )}
         <Button
           type="button"
           variant="ghost"

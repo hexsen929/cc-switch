@@ -1,15 +1,17 @@
 import {
+  keepPreviousData,
   useMutation,
   useQuery,
   useQueryClient,
-  keepPreviousData,
 } from "@tanstack/react-query";
 import {
   skillsApi,
-  type SkillBackupEntry,
   type DiscoverableSkill,
   type ImportSkillSelection,
   type InstalledSkill,
+  type SkillBackupEntry,
+  type SkillUpdateInfo,
+  type SkillsShSearchResult,
 } from "@/lib/api/skills";
 import type { AppId } from "@/lib/api/types";
 
@@ -60,15 +62,14 @@ export function useDiscoverableSkills() {
 }
 
 /**
- * 检查已安装 Skills 是否有更新
- * 返回有更新的 skill id 集合，手动触发（enabled: false）
+ * 检查 Skills 更新（手动触发）
  */
 export function useCheckSkillUpdates() {
   return useQuery({
     queryKey: ["skills", "updates"],
     queryFn: () => skillsApi.checkUpdates(),
     enabled: false,
-    staleTime: 0,
+    staleTime: 5 * 60 * 1000,
   });
 }
 
@@ -79,13 +80,19 @@ export function useUpdateSkill() {
     onSuccess: (updatedSkill) => {
       queryClient.setQueryData<InstalledSkill[]>(
         ["skills", "installed"],
-        (old) => {
-          if (!old) return [updatedSkill];
-          return old.map((s) => (s.id === updatedSkill.id ? updatedSkill : s));
+        (oldData) => {
+          if (!oldData) return [updatedSkill];
+          return oldData.map((s) =>
+            s.id === updatedSkill.id ? updatedSkill : s,
+          );
         },
       );
-      queryClient.setQueryData<string[]>(["skills", "updates"], (old) =>
-        old ? old.filter((id) => id !== updatedSkill.id) : [],
+      queryClient.setQueryData<SkillUpdateInfo[]>(
+        ["skills", "updates"],
+        (oldData) => {
+          if (!oldData) return oldData;
+          return oldData.filter((u) => u.id !== updatedSkill.id);
+        },
       );
     },
   });
@@ -95,16 +102,23 @@ export function useUpdateAllSkills() {
   const queryClient = useQueryClient();
   return useMutation({
     mutationFn: (ids: string[]) => skillsApi.updateAllSkills(ids),
-    onSuccess: (updatedSkills) => {
+    onSuccess: (updatedSkills, ids) => {
       queryClient.setQueryData<InstalledSkill[]>(
         ["skills", "installed"],
-        (old) => {
-          if (!old) return updatedSkills;
-          const map = new Map(updatedSkills.map((s) => [s.id, s]));
-          return old.map((s) => map.get(s.id) ?? s);
+        (oldData) => {
+          if (!oldData) return updatedSkills;
+          const updatedMap = new Map(updatedSkills.map((s) => [s.id, s]));
+          return oldData.map((s) => updatedMap.get(s.id) ?? s);
         },
       );
-      queryClient.setQueryData<string[]>(["skills", "updates"], []);
+      const updatedIds = new Set(ids);
+      queryClient.setQueryData<SkillUpdateInfo[]>(
+        ["skills", "updates"],
+        (oldData) => {
+          if (!oldData) return oldData;
+          return oldData.filter((u) => !updatedIds.has(u.id));
+        },
+      );
     },
   });
 }
@@ -123,9 +137,8 @@ export function useInstallSkill() {
       skill: DiscoverableSkill;
       currentApp: AppId;
     }) => skillsApi.installUnified(skill, currentApp),
-    onSuccess: (installedSkill, _vars, _ctx) => {
+    onSuccess: (installedSkill, _vars) => {
       const { skill } = _vars;
-      // 直接更新 installed 缓存
       queryClient.setQueryData<InstalledSkill[]>(
         ["skills", "installed"],
         (oldData) => {
@@ -134,7 +147,6 @@ export function useInstallSkill() {
         },
       );
 
-      // 更新 discoverable 缓存中对应技能的 installed 状态
       const installName =
         skill.directory.split(/[/\\]/).pop()?.toLowerCase() ||
         skill.directory.toLowerCase();
@@ -167,17 +179,15 @@ export function useUninstallSkill() {
       skillsApi
         .uninstallUnified(id)
         .then((result) => ({ ...result, skillKey })),
-    onSuccess: ({ skillKey }, _vars) => {
-      // 直接更新 installed 缓存，移除该 skill
+    onSuccess: ({ skillKey }, vars) => {
       queryClient.setQueryData<InstalledSkill[]>(
         ["skills", "installed"],
         (oldData) => {
           if (!oldData) return oldData;
-          return oldData.filter((s) => s.id !== _vars.id);
+          return oldData.filter((s) => s.id !== vars.id);
         },
       );
 
-      // 更新 discoverable 缓存中对应技能的 installed 状态
       queryClient.setQueryData<DiscoverableSkill[]>(
         ["skills", "discoverable"],
         (oldData) => {
@@ -239,7 +249,7 @@ export function useScanUnmanagedSkills() {
   return useQuery({
     queryKey: ["skills", "unmanaged"],
     queryFn: () => skillsApi.scanUnmanaged(),
-    enabled: false, // 手动触发
+    enabled: false,
   });
 }
 
@@ -253,7 +263,6 @@ export function useImportSkillsFromApps() {
     mutationFn: (imports: ImportSkillSelection[]) =>
       skillsApi.importFromApps(imports),
     onSuccess: (importedSkills) => {
-      // 直接更新 installed 缓存
       queryClient.setQueryData<InstalledSkill[]>(
         ["skills", "installed"],
         (oldData) => {
@@ -261,7 +270,6 @@ export function useImportSkillsFromApps() {
           return [...oldData, ...importedSkills];
         },
       );
-      // 刷新 unmanaged 列表（已被导入的应该移除）
       queryClient.invalidateQueries({ queryKey: ["skills", "unmanaged"] });
     },
   });
@@ -321,7 +329,6 @@ export function useInstallSkillsFromZip() {
       currentApp: AppId;
     }) => skillsApi.installFromZip(filePath, currentApp),
     onSuccess: (installedSkills) => {
-      // 直接更新 installed 缓存
       queryClient.setQueryData<InstalledSkill[]>(
         ["skills", "installed"],
         (oldData) => {
@@ -333,12 +340,34 @@ export function useInstallSkillsFromZip() {
   });
 }
 
+// ========== skills.sh 搜索 ==========
+
+/**
+ * 搜索 skills.sh 公共目录
+ * 使用 300ms staleTime 和 keepPreviousData 实现平滑搜索体验
+ */
+export function useSearchSkillsSh(
+  query: string,
+  limit: number,
+  offset: number,
+) {
+  return useQuery({
+    queryKey: ["skills", "skillssh", query, limit, offset],
+    queryFn: () => skillsApi.searchSkillsSh(query, limit, offset),
+    enabled: query.length >= 2,
+    staleTime: 5 * 60 * 1000,
+    placeholderData: keepPreviousData,
+  });
+}
+
 // ========== 辅助类型 ==========
 
 export type {
-  InstalledSkill,
+  AppId,
   DiscoverableSkill,
   ImportSkillSelection,
+  InstalledSkill,
   SkillBackupEntry,
-  AppId,
+  SkillUpdateInfo,
+  SkillsShSearchResult,
 };
