@@ -5,6 +5,20 @@ All notable changes to CC Switch will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.13.1] - 2026-04-16
+
+Patch release for the fork after syncing the latest upstream `main` and cutting a fresh release build.
+
+### Changed
+
+- Synced the fork to the latest upstream `main` and adopted the upstream fixes for proxy forwarding, stream check, session list virtualization, and OpenCode parsing.
+- Kept fork-specific provider resource override and Claude model routing capabilities while reconciling merge conflicts against upstream changes.
+- Updated frontend dependencies required by the upstream session virtualization changes for a clean typecheck and renderer build.
+
+### Fixed
+
+- Resolved merge conflicts in provider metadata typing so the fork-specific overrides continue to serialize correctly after the upstream merge.
+
 ## [3.13.0] - 2026-04-10
 
 Development since v3.12.3 focuses on quota visibility, provider workflow upgrades, stronger proxy compatibility, and lower-overhead tray / session workflows.
