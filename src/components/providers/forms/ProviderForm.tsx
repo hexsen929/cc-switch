@@ -14,7 +14,6 @@ import type {
   ProviderMeta,
   ProviderResourceOverrides,
   ProviderTestConfig,
-  ProviderProxyConfig,
   ClaudeApiFormat,
   ClaudeApiKeyField,
 } from "@/types";
@@ -232,9 +231,6 @@ export function ProviderForm({
   const [testConfig, setTestConfig] = useState<ProviderTestConfig>(
     () => initialData?.meta?.testConfig ?? { enabled: false },
   );
-  const [proxyConfig, setProxyConfig] = useState<ProviderProxyConfig>(
-    () => initialData?.meta?.proxyConfig ?? { enabled: false },
-  );
   const [pricingConfig, setPricingConfig] = useState<{
     enabled: boolean;
     costMultiplier?: string;
@@ -272,7 +268,6 @@ export function ProviderForm({
     );
     setResourceOverrides(initialData?.meta?.resourceOverrides ?? {});
     setTestConfig(initialData?.meta?.testConfig ?? { enabled: false });
-    setProxyConfig(initialData?.meta?.proxyConfig ?? { enabled: false });
     setPricingConfig({
       enabled:
         initialData?.meta?.costMultiplier !== undefined ||
@@ -1118,7 +1113,6 @@ export function ProviderForm({
           ? selectedGitHubAccountId
           : undefined,
       testConfig: testConfig.enabled ? testConfig : undefined,
-      proxyConfig: proxyConfig.enabled ? proxyConfig : undefined,
       costMultiplier: pricingConfig.enabled
         ? pricingConfig.costMultiplier
         : undefined,
@@ -1899,10 +1893,8 @@ export function ProviderForm({
             appId !== "openclaw" && (
               <ProviderAdvancedConfig
                 testConfig={testConfig}
-                proxyConfig={proxyConfig}
                 pricingConfig={pricingConfig}
                 onTestConfigChange={setTestConfig}
-                onProxyConfigChange={setProxyConfig}
                 onPricingConfigChange={setPricingConfig}
               />
             )}
