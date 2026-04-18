@@ -116,6 +116,7 @@ export interface ForkFailoverChainItem {
 export interface FailoverQueueItem {
   providerId: string;
   providerName: string;
+  providerNotes?: string;
   sortIndex?: number;
 }
 

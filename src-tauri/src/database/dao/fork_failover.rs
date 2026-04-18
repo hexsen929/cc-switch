@@ -32,7 +32,7 @@ impl Database {
 
         let mut stmt = conn
             .prepare(
-                "SELECT p.id, p.name, q.sort_index
+                "SELECT p.id, p.name, q.sort_index, p.notes
                  FROM forkdb.fork_model_failover_queue q
                  JOIN forkdb.providers p ON p.id = q.provider_id AND p.app_type = q.app_type
                  WHERE q.app_type = ?1 AND q.model_key = ?2
@@ -46,6 +46,7 @@ impl Database {
                     provider_id: row.get(0)?,
                     provider_name: row.get(1)?,
                     sort_index: row.get(2)?,
+                    provider_notes: row.get(3)?,
                 })
             })
             .map_err(|e| AppError::Database(e.to_string()))?
@@ -202,3 +203,4 @@ impl Database {
             .collect())
     }
 }
+
