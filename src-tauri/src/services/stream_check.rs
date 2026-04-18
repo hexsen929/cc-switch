@@ -451,7 +451,7 @@ impl StreamCheckService {
                 .header("accept-encoding", "identity")
                 .header("accept-language", "*")
                 // Client identification headers
-                .header("user-agent", "claude-cli/2.1.2 (external, cli)")
+                .header("user-agent", "claude-cli/2.1.114 (external, cli)")
                 .header("x-app", "cli")
                 // x-stainless SDK headers (dynamic local system info)
                 .header("x-stainless-lang", "js")
@@ -549,7 +549,7 @@ impl StreamCheckService {
                 .header("accept-encoding", "identity")
                 .header(
                     "user-agent",
-                    format!("codex_cli_rs/0.80.0 ({os_name} 15.7.2; {arch_name}) Terminal"),
+                    format!("codex_cli_rs/0.121.0 ({os_name} 15.7.2; {arch_name}) Terminal"),
                 )
                 .header("originator", "codex_cli_rs")
                 .timeout(timeout)
