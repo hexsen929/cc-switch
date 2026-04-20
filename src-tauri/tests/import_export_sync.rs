@@ -644,6 +644,110 @@ fn sync_claude_enabled_mcp_projects_to_user_config() {
 }
 
 #[test]
+fn claude_toggle_off_marks_disabled_and_reenable_strips_it() {
+    let _guard = test_mutex().lock().expect("acquire test mutex");
+    reset_test_fs();
+    let home = ensure_test_home();
+
+    // 模拟 Claude 已安装：存在 ~/.claude 目录，让 should_sync_claude_mcp() 通过
+    fs::create_dir_all(home.join(".claude")).expect("create claude dir");
+
+    // 预置 ~/.claude.json 包含一个 MCP 服务器
+    let claude_path = cc_switch_lib::get_claude_mcp_path();
+    fs::write(
+        &claude_path,
+        serde_json::to_string_pretty(&json!({
+            "mcpServers": {
+                "foo": {
+                    "command": "echo",
+                    "args": ["hi"]
+                }
+            }
+        }))
+        .expect("serialize seed json"),
+    )
+    .expect("write seed .claude.json");
+
+    // —— 场景 1：关闭开关 —— 应置 disabled:true，保留 command/args
+    cc_switch_lib::disable_server_in_claude("foo").expect("disable foo");
+
+    let after_disable: serde_json::Value = serde_json::from_str(
+        &fs::read_to_string(&claude_path).expect("read after disable"),
+    )
+    .expect("parse after disable");
+    let foo = after_disable
+        .pointer("/mcpServers/foo")
+        .expect("foo entry preserved");
+    assert_eq!(
+        foo.get("disabled"),
+        Some(&json!(true)),
+        "disabled flag should be set after toggle-off"
+    );
+    assert_eq!(
+        foo.get("command").and_then(|v| v.as_str()),
+        Some("echo"),
+        "command field should be preserved after disable"
+    );
+    assert_eq!(
+        foo.get("args"),
+        Some(&json!(["hi"])),
+        "args field should be preserved after disable"
+    );
+
+    // —— 场景 2：再次打开开关 —— 应清除 disabled 字段
+    let spec = json!({ "command": "echo", "args": ["hi"] });
+    cc_switch_lib::sync_single_server_to_claude(
+        &MultiAppConfig::default(),
+        "foo",
+        &spec,
+    )
+    .expect("re-enable foo");
+
+    let after_reenable: serde_json::Value = serde_json::from_str(
+        &fs::read_to_string(&claude_path).expect("read after re-enable"),
+    )
+    .expect("parse after re-enable");
+    let foo = after_reenable
+        .pointer("/mcpServers/foo")
+        .expect("foo entry still present after re-enable");
+    assert!(
+        foo.get("disabled").is_none(),
+        "disabled flag should be cleared on re-enable, got {foo}"
+    );
+    assert_eq!(
+        foo.get("command").and_then(|v| v.as_str()),
+        Some("echo"),
+        "command field should be preserved on re-enable"
+    );
+
+    // —— 场景 3：对不存在的 id 调用 disable —— 幂等 no-op，不新增条目
+    cc_switch_lib::disable_server_in_claude("ghost").expect("disable nonexistent ok");
+    let after_ghost: serde_json::Value = serde_json::from_str(
+        &fs::read_to_string(&claude_path).expect("read after ghost disable"),
+    )
+    .expect("parse after ghost disable");
+    let servers = after_ghost
+        .get("mcpServers")
+        .and_then(|v| v.as_object())
+        .expect("mcpServers map");
+    assert_eq!(
+        servers.len(),
+        1,
+        "disabling nonexistent id should not add entries"
+    );
+    assert!(
+        servers.get("ghost").is_none(),
+        "no ghost entry should be created"
+    );
+
+    // 确认文件位于测试 HOME 下，避免污染真实用户数据
+    assert!(
+        claude_path.starts_with(home),
+        "claude path {claude_path:?} should reside under test HOME {home:?}"
+    );
+}
+
+#[test]
 fn import_from_claude_merges_into_config() {
     let _guard = test_mutex().lock().expect("acquire test mutex");
     reset_test_fs();

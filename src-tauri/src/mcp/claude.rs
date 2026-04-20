@@ -38,6 +38,15 @@ fn collect_enabled_servers(cfg: &McpConfig) -> HashMap<String, Value> {
 }
 
 /// 将 config.json 中 enabled==true 的项投影写入 ~/.claude.json
+///
+/// ⚠️ 注意：此函数会用启用集合**完全替换** `~/.claude.json::mcpServers`，
+/// 因此会清除通过 `disable_server_in_claude` 写入的 `disabled: true` 条目。
+///
+/// 生产运行期已不调用此函数：
+/// - 单个开关走 `sync_single_server_to_claude` + `disable_server_in_claude`；
+/// - 全量同步走 `McpService::sync_effective_for_app`。
+///
+/// 目前保留仅供集成测试 `tests/import_export_sync.rs` 使用。
 pub fn sync_enabled_to_claude(config: &MultiAppConfig) -> Result<(), AppError> {
     if !should_sync_claude_mcp() {
         return Ok(());

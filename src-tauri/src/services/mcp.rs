@@ -182,6 +182,9 @@ impl McpService {
             // 这样 Claude Code 启动时不自动加载该服务器（不加载工具定义即不消耗上下文令牌），
             // 同时保留 /mcp 中手动 connect 的能力。
             // 硬删除走 remove_server_from_all_apps 的特殊分支。
+            //
+            // 注意：Codex / Gemini / OpenCode 目前仍走硬删除——它们的 live 配置
+            // 不支持 `disabled: true` 语义，保留条目反而会在启动时尝试连接。
             AppType::Claude => mcp::disable_server_in_claude(id)?,
             AppType::Codex => mcp::remove_server_from_codex(id)?,
             AppType::Gemini => mcp::remove_server_from_gemini(id)?,
