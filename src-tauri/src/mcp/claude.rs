@@ -125,7 +125,12 @@ pub fn sync_single_server_to_claude(
 
     // 创建新的 HashMap，包含现有的所有服务器 + 当前要同步的服务器
     let mut updated = current;
-    updated.insert(id.to_string(), server_spec.clone());
+    // 启用时清除 disabled 字段，避免旧值残留（disabled 方案专用）
+    let mut clean_spec = server_spec.clone();
+    if let Some(obj) = clean_spec.as_object_mut() {
+        obj.remove("disabled");
+    }
+    updated.insert(id.to_string(), clean_spec);
 
     // 写回
     crate::claude_mcp::set_mcp_servers_map(&updated)
@@ -144,4 +149,35 @@ pub fn remove_server_from_claude(id: &str) -> Result<(), AppError> {
 
     // 写回
     crate::claude_mcp::set_mcp_servers_map(&current)
+}
+
+/// 在 Claude live 配置中将单个 MCP 服务器标记为 `disabled: true`（保留条目）
+///
+/// 用于“关闭开关”而非“删除”的场景：
+/// - 保留 ~/.claude.json 中的条目，Claude Code 启动时默认不自动连接；
+/// - 用户仍可在 Claude Code `/mcp` 菜单中手动 connect 该服务器；
+/// - 相比完全删除条目，可避免重新启用时工具定义丢失，也让“开/关”更对称。
+///
+/// 若 ~/.claude.json 中不存在该条目则为幂等 no-op（不新增条目）。
+pub fn disable_server_in_claude(id: &str) -> Result<(), AppError> {
+    if !should_sync_claude_mcp() {
+        return Ok(());
+    }
+    let mut current = crate::claude_mcp::read_mcp_servers_map()?;
+
+    if let Some(entry) = current.get_mut(id) {
+        match entry {
+            Value::Object(map) => {
+                map.insert("disabled".to_string(), Value::Bool(true));
+            }
+            _ => {
+                log::warn!("MCP 服务器 '{id}' 条目不是对象，跳过 disable 标记");
+                return Ok(());
+            }
+        }
+        crate::claude_mcp::set_mcp_servers_map(&current)
+    } else {
+        // 条目不存在：无需写盘，保持幂等
+        Ok(())
+    }
 }
