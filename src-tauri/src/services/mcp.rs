@@ -166,26 +166,14 @@ impl McpService {
     ) -> Result<(), AppError> {
         // 从所有曾启用的应用中移除
         for app in server.apps.enabled_apps() {
-            // Claude 使用 disabled:true 软关闭策略，但此处是“删除 MCP 服务器”场景，
-            // 需要真正从 ~/.claude.json 中移除条目（绕过软关闭）。
-            match app {
-                AppType::Claude => mcp::remove_server_from_claude(id)?,
-                _ => Self::remove_server_from_app(state, id, &app)?,
-            }
+            Self::remove_server_from_app(state, id, &app)?;
         }
         Ok(())
     }
 
     fn remove_server_from_app(_state: &AppState, id: &str, app: &AppType) -> Result<(), AppError> {
         match app {
-            // Claude 采用 disabled:true 软关闭：关闭开关时不删除条目，仅置 disabled=true。
-            // 这样 Claude Code 启动时不自动加载该服务器（不加载工具定义即不消耗上下文令牌），
-            // 同时保留 /mcp 中手动 connect 的能力。
-            // 硬删除走 remove_server_from_all_apps 的特殊分支。
-            //
-            // 注意：Codex / Gemini / OpenCode 目前仍走硬删除——它们的 live 配置
-            // 不支持 `disabled: true` 语义，保留条目反而会在启动时尝试连接。
-            AppType::Claude => mcp::disable_server_in_claude(id)?,
+            AppType::Claude => mcp::remove_server_from_claude(id)?,
             AppType::Codex => mcp::remove_server_from_codex(id)?,
             AppType::Gemini => mcp::remove_server_from_gemini(id)?,
             AppType::OpenCode => {
