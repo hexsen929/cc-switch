@@ -1246,7 +1246,10 @@ impl ProviderService {
                 write_live_with_common_config(state.db.as_ref(), &app_type, &provider)?;
             }
 
-            sync_provider_bound_resources(state, &app_type, !should_sync_via_proxy)?;
+            // 始终同步 MCP：MCP 覆盖写入的是 live 配置里独立的 mcpServers /
+            // [mcp_servers] 段，与代理接管改写的 API endpoint 段互不影响。
+            // 之前在代理激活时跳过 MCP 同步会导致供应商级 MCP 覆盖失效。
+            sync_provider_bound_resources(state, &app_type, true)?;
         }
 
         Ok(true)
@@ -1447,7 +1450,10 @@ impl ProviderService {
             )
             .map_err(|e| AppError::Message(format!("热切换失败: {e}")))?;
 
-            sync_provider_bound_resources(state, &app_type, false)?;
+            // 代理热切换后仍需刷新 MCP：不同 provider 的 disabled_server_ids 覆盖
+            // 会变，要保证新当前 provider 的覆盖立刻生效。MCP 写的是 live 里
+            // 独立的 mcpServers / [mcp_servers] 段，与代理接管互不影响。
+            sync_provider_bound_resources(state, &app_type, true)?;
 
             return Ok(SwitchResult::default());
         }
