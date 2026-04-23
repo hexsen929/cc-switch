@@ -14,6 +14,7 @@ import {
   type SkillsShSearchResult,
 } from "@/lib/api/skills";
 import type { AppId } from "@/lib/api/types";
+import { mergeImportedSkills } from "@/hooks/useSkills.helpers";
 
 /**
  * 查询所有已安装的 Skills
@@ -265,10 +266,7 @@ export function useImportSkillsFromApps() {
     onSuccess: (importedSkills) => {
       queryClient.setQueryData<InstalledSkill[]>(
         ["skills", "installed"],
-        (oldData) => {
-          if (!oldData) return importedSkills;
-          return [...oldData, ...importedSkills];
-        },
+        (oldData) => mergeImportedSkills(oldData, importedSkills),
       );
       queryClient.invalidateQueries({ queryKey: ["skills", "unmanaged"] });
     },
