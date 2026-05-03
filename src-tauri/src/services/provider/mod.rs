@@ -56,7 +56,7 @@ fn sync_provider_bound_resources(
     include_mcp: bool,
 ) -> Result<(), AppError> {
     if include_mcp {
-        McpService::sync_effective_for_app(state, app_type)?;
+        McpService::sync_enabled(state, app_type.clone())?;
     }
     crate::services::skill::SkillService::sync_to_app(&state.db, app_type)
         .map_err(|e| AppError::Message(format!("同步 Skill 失败: {e}")))?;

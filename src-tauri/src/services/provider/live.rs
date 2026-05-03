@@ -913,7 +913,7 @@ pub fn sync_current_to_live(state: &AppState) -> Result<(), AppError> {
     }
 
     for app_type in AppType::all() {
-        if let Err(e) = McpService::sync_effective_for_app(state, &app_type) {
+        if let Err(e) = McpService::sync_enabled(state, app_type.clone()) {
             log::warn!("同步 MCP 到 {app_type:?} 失败: {e}");
         }
 
