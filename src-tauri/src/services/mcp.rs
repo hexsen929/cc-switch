@@ -1,5 +1,5 @@
 use indexmap::IndexMap;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use crate::app_config::{AppType, McpServer};
 use crate::error::AppError;
@@ -90,21 +90,68 @@ impl McpService {
     }
 
     /// 将 MCP 服务器同步到所有启用的应用
-    fn sync_server_to_apps(_state: &AppState, server: &McpServer) -> Result<(), AppError> {
+    fn sync_server_to_apps(state: &AppState, server: &McpServer) -> Result<(), AppError> {
         for app in server.apps.enabled_apps() {
-            Self::sync_server_to_app_no_config(server, &app)?;
+            Self::sync_server_to_app(state, server, &app)?;
         }
 
         Ok(())
     }
 
-    /// 将 MCP 服务器同步到指定应用
+    /// 将 MCP 服务器同步到指定应用。
+    ///
+    /// 写入前会咨询当前 provider 的 MCP 覆盖：若该 server 在覆盖列表中被禁用，
+    /// 则改为从 live 配置中移除（避免遗留旧条目）。
+    /// 这是 v3.14.6 的修复：在此之前 provider 级 MCP 覆盖完全不生效，
+    /// `services/mcp.rs` 从未读取 `resource_overrides.mcp.disabled_server_ids`，
+    /// 导致只有全局开关起作用。
     fn sync_server_to_app(
-        _state: &AppState,
+        state: &AppState,
         server: &McpServer,
         app: &AppType,
     ) -> Result<(), AppError> {
+        if Self::disabled_server_ids_for_app(state, app).contains(&server.id) {
+            return Self::remove_server_from_app(state, &server.id, app);
+        }
         Self::sync_server_to_app_no_config(server, app)
+    }
+
+    /// 读取当前 provider 在该 app 下额外禁用的 MCP 服务器 ID 集合。
+    ///
+    /// 返回空集合的情形：
+    /// - app 处于累加模式（无单一“当前 provider”概念）
+    /// - 没有当前 provider
+    /// - 当前 provider 没有 meta / resource_overrides / mcp 覆盖
+    /// - mcp 覆盖未启用（`enabled = false`）
+    fn disabled_server_ids_for_app(state: &AppState, app: &AppType) -> HashSet<String> {
+        if app.is_additive_mode() {
+            return HashSet::new();
+        }
+
+        let provider_id = match crate::settings::get_effective_current_provider(&state.db, app) {
+            Ok(Some(id)) => id,
+            _ => return HashSet::new(),
+        };
+
+        let provider = match state.db.get_provider_by_id(&provider_id, app.as_str()) {
+            Ok(Some(p)) => p,
+            _ => return HashSet::new(),
+        };
+
+        provider
+            .meta
+            .as_ref()
+            .and_then(|meta| meta.resource_overrides.as_ref())
+            .and_then(|overrides| overrides.mcp.as_ref())
+            .filter(|override_config| override_config.enabled)
+            .map(|override_config| {
+                override_config
+                    .disabled_server_ids
+                    .iter()
+                    .cloned()
+                    .collect()
+            })
+            .unwrap_or_default()
     }
 
     fn sync_server_to_app_no_config(server: &McpServer, app: &AppType) -> Result<(), AppError> {
@@ -170,7 +217,10 @@ impl McpService {
         Ok(())
     }
 
-    /// 手动同步所有启用的 MCP 服务器到对应的应用
+    /// 手动同步所有启用的 MCP 服务器到对应的应用。
+    ///
+    /// 同步时会按 app 维度读取一次当前 provider 的 MCP 覆盖列表，
+    /// 全局启用但被该 provider 覆盖禁用的 server 会从 live 配置中移除。
     pub fn sync_all_enabled(state: &AppState) -> Result<(), AppError> {
         let servers = Self::get_all_servers(state)?;
 
@@ -179,9 +229,12 @@ impl McpService {
                 continue;
             }
 
+            // 每个 app 独立计算一次覆盖集合，避免逐 server 重复查询数据库
+            let disabled = Self::disabled_server_ids_for_app(state, &app);
+
             for server in servers.values() {
-                if server.apps.is_enabled_for(&app) {
-                    Self::sync_server_to_app(state, server, &app)?;
+                if server.apps.is_enabled_for(&app) && !disabled.contains(&server.id) {
+                    Self::sync_server_to_app_no_config(server, &app)?;
                 } else {
                     Self::remove_server_from_app(state, &server.id, &app)?;
                 }
@@ -225,14 +278,22 @@ impl McpService {
         Ok(true)
     }
 
-    /// [已废弃] 同步启用的 MCP 到指定应用（兼容旧 API）
+    /// [已废弃] 同步启用的 MCP 到指定应用（兼容旧 API）。
+    ///
+    /// v3.14.6 起会读取当前 provider 的 MCP 覆盖：全局启用但被 provider 覆盖禁用的
+    /// server 会从 live 配置中显式移除，与 `sync_all_enabled` 保持一致。
     #[deprecated(since = "3.7.0", note = "Use sync_all_enabled instead")]
     pub fn sync_enabled(state: &AppState, app: AppType) -> Result<(), AppError> {
         let servers = Self::get_all_servers(state)?;
+        let disabled = Self::disabled_server_ids_for_app(state, &app);
 
         for server in servers.values() {
             if server.apps.is_enabled_for(&app) {
-                Self::sync_server_to_app(state, server, &app)?;
+                if disabled.contains(&server.id) {
+                    Self::remove_server_from_app(state, &server.id, &app)?;
+                } else {
+                    Self::sync_server_to_app_no_config(server, &app)?;
+                }
             }
         }
 
