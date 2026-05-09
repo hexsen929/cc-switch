@@ -57,7 +57,10 @@ fn sync_provider_bound_resources(
     include_mcp: bool,
 ) -> Result<(), AppError> {
     if include_mcp {
-        McpService::sync_enabled(state, app_type.clone())?;
+        // 与 sync_current_provider_for_app_to_live 一致：MCP 改为全量同步，避免
+        // 单 app 切换路径与全量同步路径行为分裂。sync_all_enabled 内部按 app 维度
+        // 计算覆盖集合，对其他 app 是幂等的。
+        McpService::sync_all_enabled(state)?;
     }
     crate::services::skill::SkillService::sync_to_app(&state.db, app_type)
         .map_err(|e| AppError::Message(format!("同步 Skill 失败: {e}")))?;

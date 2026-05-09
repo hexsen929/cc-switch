@@ -933,11 +933,13 @@ pub fn sync_current_to_live(state: &AppState) -> Result<(), AppError> {
         }
     }
 
-    for app_type in AppType::all() {
-        if let Err(e) = McpService::sync_enabled(state, app_type.clone()) {
-            log::warn!("同步 MCP 到 {app_type:?} 失败: {e}");
-        }
+    // MCP 采用全量同步（与 sync_current_provider_for_app_to_live 一致）：
+    // 内部会按 app 维度计算覆盖集合，不需在外层循环里逐个 app 调用。
+    if let Err(e) = McpService::sync_all_enabled(state) {
+        log::warn!("同步 MCP 失败: {e}");
+    }
 
+    for app_type in AppType::all() {
         if let Err(e) = crate::services::skill::SkillService::sync_to_app(&state.db, &app_type) {
             log::warn!("同步 Skill 到 {app_type:?} 失败: {e}");
             // Continue syncing other apps, don't abort
