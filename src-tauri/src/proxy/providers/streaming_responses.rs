@@ -99,7 +99,11 @@ fn resolve_content_index(
 pub fn create_anthropic_sse_stream_from_responses<E: std::error::Error + Send + 'static>(
     stream: impl Stream<Item = Result<Bytes, E>> + Send + 'static,
 ) -> impl Stream<Item = Result<Bytes, std::io::Error>> + Send {
-    async_stream::stream! {
+    // Inner generator: emits Anthropic SSE in real time as upstream Responses
+    // events arrive. Note that the `message_start` it emits has zeroed usage,
+    // because the OpenAI Responses API only delivers usage in the final
+    // `response.completed` event. This is fixed up by the outer wrapper below.
+    let inner = async_stream::stream! {
         let mut buffer = String::new();
         let mut utf8_remainder: Vec<u8> = Vec::new();
         let mut message_id: Option<String> = None;
@@ -743,6 +747,123 @@ pub fn create_anthropic_sse_stream_from_responses<E: std::error::Error + Send + 
                     break;
                 }
             }
+        }
+    };
+
+    // Outer wrapper: buffers all Anthropic SSE events from `inner`, then back-fills
+    // the `message_start.usage` with real token counts taken from the final
+    // `message_delta.usage` before flushing.
+    //
+    // Why this exists: the OpenAI Responses API only ships token usage in its
+    // final `response.completed` event, but the Anthropic streaming protocol
+    // requires `input_tokens` (and cache fields) to live on `message_start`.
+    // The Anthropic SDK used by Claude Code only updates `output_tokens` from
+    // `message_delta`, so leaving `message_start.usage` at zero causes the
+    // transcript JSONL to record 0 tokens, which in turn makes ccline show
+    // "0 tokens". Buffering until completion is the only correct fix.
+    //
+    // Trade-off: we lose live streaming UX (the client sees the full response
+    // only after upstream completes). For typical Responses-API providers the
+    // entire response usually arrives within a few seconds, which is an
+    // acceptable cost for correct usage reporting.
+    async_stream::stream! {
+        tokio::pin!(inner);
+        let mut sse_buf = String::new();
+        let mut utf_rem: Vec<u8> = Vec::new();
+        let mut events: Vec<(String, Value)> = Vec::new();
+        let mut final_usage: Option<Value> = None;
+
+        while let Some(item) = inner.next().await {
+            match item {
+                Ok(bytes) => {
+                    crate::proxy::sse::append_utf8_safe(&mut sse_buf, &mut utf_rem, &bytes);
+                    while let Some(block) = take_sse_block(&mut sse_buf) {
+                        if block.trim().is_empty() {
+                            continue;
+                        }
+                        let mut event_type: Option<String> = None;
+                        let mut data_parts: Vec<String> = Vec::new();
+                        for line in block.lines() {
+                            if let Some(evt) = strip_sse_field(line, "event") {
+                                event_type = Some(evt.trim().to_string());
+                            } else if let Some(d) = strip_sse_field(line, "data") {
+                                data_parts.push(d.to_string());
+                            }
+                        }
+                        if data_parts.is_empty() {
+                            continue;
+                        }
+                        let data_str = data_parts.join("\n");
+                        let data: Value = match serde_json::from_str(&data_str) {
+                            Ok(v) => v,
+                            Err(_) => continue,
+                        };
+                        let name = event_type.unwrap_or_default();
+                        if name == "message_delta" {
+                            if let Some(u) = data.get("usage") {
+                                if !u.is_null() {
+                                    final_usage = Some(u.clone());
+                                }
+                            }
+                        }
+                        events.push((name, data));
+                    }
+                }
+                Err(e) => {
+                    yield Err(e);
+                    return;
+                }
+            }
+        }
+
+        // Back-fill message_start.usage with real input/cache tokens from
+        // the final message_delta.usage. We keep output_tokens=0 in
+        // message_start (Anthropic standard) — the SDK fills it from
+        // message_delta.usage.output_tokens.
+        if let Some(usage) = final_usage.as_ref() {
+            for (name, data) in events.iter_mut() {
+                if name == "message_start" {
+                    if let Some(msg) = data.get_mut("message").and_then(|m| m.as_object_mut()) {
+                        let mut new_usage = serde_json::Map::new();
+                        for key in [
+                            "input_tokens",
+                            "cache_creation_input_tokens",
+                            "cache_read_input_tokens",
+                            "service_tier",
+                            "server_tool_use",
+                        ] {
+                            if let Some(v) = usage.get(key) {
+                                if !v.is_null() {
+                                    new_usage.insert(key.to_string(), v.clone());
+                                }
+                            }
+                        }
+                        new_usage
+                            .entry("input_tokens".to_string())
+                            .or_insert_with(|| json!(0));
+                        new_usage.insert("output_tokens".to_string(), json!(0));
+                        msg.insert("usage".to_string(), Value::Object(new_usage));
+                    }
+                    break;
+                }
+            }
+        }
+
+        // Flush all events in original order.
+        for (name, data) in events {
+            let sse = if name.is_empty() {
+                format!(
+                    "data: {}\n\n",
+                    serde_json::to_string(&data).unwrap_or_default()
+                )
+            } else {
+                format!(
+                    "event: {}\ndata: {}\n\n",
+                    name,
+                    serde_json::to_string(&data).unwrap_or_default()
+                )
+            };
+            yield Ok(Bytes::from(sse));
         }
     }
 }
