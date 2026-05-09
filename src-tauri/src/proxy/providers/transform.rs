@@ -194,6 +194,26 @@ pub fn anthropic_to_openai_with_reasoning_content(
         result["stream"] = v.clone();
     }
 
+    // 修复 ccline 0 tokens / Claude Code 不自动 compact：
+    // OpenAI Chat Completions 流式响应默认 usage=null，
+    // 必须显式在请求体中设 stream_options.include_usage=true
+    // 上游才会在末尾 chunk 返回 input_tokens/output_tokens。
+    if body
+        .get("stream")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false)
+    {
+        let stream_options = result
+            .as_object_mut()
+            .expect("transform result is object")
+            .entry("stream_options".to_string())
+            .or_insert_with(|| json!({}));
+        if let Some(obj) = stream_options.as_object_mut() {
+            obj.entry("include_usage".to_string())
+                .or_insert(json!(true));
+        }
+    }
+
     // Map Anthropic thinking → OpenAI reasoning_effort
     if supports_reasoning_effort(model) {
         if let Some(effort) = resolve_reasoning_effort(&body) {

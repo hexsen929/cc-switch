@@ -1210,21 +1210,38 @@ impl RequestForwarder {
             && matches!(resolved_claude_api_format.as_deref(), Some("anthropic"));
 
         // 预计算 anthropic-beta 值（仅 Claude）
+        // 修复 #2676 缓存未命中：仅对 Claude Code 官方客户端注入 `claude-code-20250219`
+        // 标记。非 Claude Code 客户端（Claude Desktop / Continue / Cline / 自写脚本等）
+        // 透传原始 anthropic-beta，避免改写后被第三方中转的缓存 key 计入而导致命中率下降。
+        let is_claude_code_client = headers
+            .get("user-agent")
+            .and_then(|v| v.to_str().ok())
+            .map(|ua| ua.contains("claude-cli"))
+            .unwrap_or(false);
         let anthropic_beta_value = if should_send_anthropic_headers {
             const CLAUDE_CODE_BETA: &str = "claude-code-20250219";
-            Some(if let Some(beta) = headers.get("anthropic-beta") {
-                if let Ok(beta_str) = beta.to_str() {
-                    if beta_str.contains(CLAUDE_CODE_BETA) {
-                        beta_str.to_string()
+            if is_claude_code_client {
+                // Claude Code 客户端：确保 beta 头中含 claude-code 标记
+                Some(if let Some(beta) = headers.get("anthropic-beta") {
+                    if let Ok(beta_str) = beta.to_str() {
+                        if beta_str.contains(CLAUDE_CODE_BETA) {
+                            beta_str.to_string()
+                        } else {
+                            format!("{CLAUDE_CODE_BETA},{beta_str}")
+                        }
                     } else {
-                        format!("{CLAUDE_CODE_BETA},{beta_str}")
+                        CLAUDE_CODE_BETA.to_string()
                     }
                 } else {
                     CLAUDE_CODE_BETA.to_string()
-                }
+                })
             } else {
-                CLAUDE_CODE_BETA.to_string()
-            })
+                // 非 Claude Code 客户端：原样透传客户端 anthropic-beta（缺失则不发）
+                headers
+                    .get("anthropic-beta")
+                    .and_then(|v| v.to_str().ok())
+                    .map(|s| s.to_string())
+            }
         } else {
             None
         };
