@@ -32,6 +32,7 @@ mod schema;
 mod tests;
 
 // DAO 类型导出供外部使用
+pub(crate) use dao::providers_seed::CLAUDE_DESKTOP_OFFICIAL_PROVIDER_ID;
 pub use dao::FailoverQueueItem;
 pub use dao::ForkFailoverChainItem;
 
