@@ -60,6 +60,11 @@ Claude Code / Codex / Gemini 官方渠道低至 3.8 / 0.2 / 0.9 折，充值更�
 </tr>
 
 <tr>
+<td width="180"><a href="https://www.volcengine.com/activity/agentplan?utm_campaign=hw&utm_content=ccswitch&utm_medium=devrel_tool_web&utm_source=OWO&utm_term=ccswitch"><img src="assets/partners/logos/huoshan.png" alt="HuoShan" width="150"></a></td>
+<td>感谢火山方舟Agent Plan 模型赞助了本项目！方舟Agent Plan 模型订阅套餐集成了包含Doubao-Seed、Doubao-Seedance、Doubao-Seedream等在内的字节跳动自研SOTA级模型，覆盖文本、代码、图像、视频等多模态任务。同时支持一站式接入DeepSeek V4、GLM 5.1等主流大模型。超全模态模型与 Harness 升级一步到位，深度支持 Agent 框架与 AI 编程工具。方舟 Agent Plan 为 CC Switch 的用户提供了专属福利：通过<a href="https://www.volcengine.com/activity/agentplan?utm_campaign=hw&utm_content=ccswitch&utm_medium=devrel_tool_web&utm_source=OWO&utm_term=ccswitch">此链接</a>订阅方舟AgentPlan，新客户首月40元起！</td>
+</tr>
+
+<tr>
 <td width="180"><a href="https://cloud.siliconflow.cn/i/drGuwc9k"><img src="assets/partners/logos/silicon_zh.jpg" alt="SiliconFlow" width="150"></a></td>
 <td>感谢硅基流动赞助了本项目！硅基流动是一个高性能 AI 基础设施与模型 API 平台，一站式提供语言、语音、图像、视频等多模态模型的快速、可靠访问。平台支持按量计费、丰富的多模态模型选择、高速推理和企业级稳定性，帮助开发者和团队更高效地构建和扩展 AI 应用。通过<a href="https://cloud.siliconflow.cn/i/drGuwc9k">此链接</a>注册并完成实名认证，即可获得 ¥16 奖励金，可在平台内跨模型使用。硅基流动现已兼容 OpenClaw，用户可接入硅基流动 API Key 免费调用主流 AI 模型。</td>
 </tr>
@@ -127,6 +132,16 @@ Claude Code / Codex / Gemini 官方渠道低至 3.8 / 0.2 / 0.9 折，充值更�
 <tr>
 <td width="180"><a href="https://ddshub.short.gy/ccswitch"><img src="assets/partners/logos/dds.png" alt="DDS" width="150"></a></td>
 <td>感谢 DDS 赞助本项目！呆呆兽是一家专注 Claude 的可靠高效 API 中转站，为个人和企业用户提供极具性价比的国内 Claude 直连加速服务。支持 Claude Haiku / Opus / Sonnet 等满血模型。充值满 1000 元即可开具发票，企业客户更可享受定制化分组和技术支持服务。CC Switch 用户专属福利：通过<a href="https://ddshub.short.gy/ccswitch">此链接</a>注册后，首单充值可额外赠送 10% 额度（充值后请联系群主领取）！</td>
+</tr>
+
+<tr>
+<td width="180"><a href="https://claudecn.top"><img src="assets/partners/logos/claudecn.jpg" alt="ClaudeCN" width="150"></a></td>
+<td>感谢 ClaudeCN 赞助本项目！ClaudeCN 由是一家实体企业运营的企业级AI中转平台。平台可提供高可用性的商用API服务，提供Claude、GPT、Deepseek等热门模型，支持企业采购流程，可对公打款、签约，服务合规有保障。点击<a href="https://claudecn.top">此链接</a>注册！</td>
+</tr>
+
+<tr>
+<td width="180"><a href="https://runapi.co"><img src="assets/partners/logos/runapi.jpg" alt="RunAPI" width="150"></a></td>
+<td>感谢 RunAPI 赞助本项目！RunAPI 是高效稳定的 AI 模型 API 中转平台，一个 API Key 即可访问 OpenAI、Claude、Gemini、DeepSeek、Grok 等 150+ 主流模型，低至 1 折，极其稳定，可以无缝兼容 Claude Code、OpenClaw 等工具。RunAPI为CC switch的用户提供了特别福利，注册后联系客服可以领取14元额度，点击<a href="https://runapi.co">此链接</a>注册！</td>
 </tr>
 
 </table>
