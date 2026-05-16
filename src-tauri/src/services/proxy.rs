@@ -12,6 +12,7 @@ use crate::proxy::types::*;
 use crate::services::provider::{
     build_effective_settings_with_common_config, write_live_with_common_config,
 };
+use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
 use serde_json::{json, Map, Value};
 use std::str::FromStr;
 use std::sync::Arc;
@@ -57,6 +58,14 @@ pub struct ProxyService {
 #[derive(Debug, Clone, Copy, Default)]
 pub struct HotSwitchOutcome {
     pub logical_target_changed: bool,
+}
+
+#[derive(Debug, Clone, Default)]
+struct CodexChatgptAccountInfo {
+    email: Option<String>,
+    plan_type: Option<String>,
+    account_id: Option<String>,
+    user_id: Option<String>,
 }
 
 impl ProxyService {
@@ -125,7 +134,7 @@ impl ProxyService {
         config: &mut Value,
         proxy_codex_base_url: &str,
         preserve_chatgpt_auth: bool,
-    ) {
+    ) -> Result<(), String> {
         if !config.is_object() {
             *config = json!({});
         }
@@ -145,6 +154,7 @@ impl ProxyService {
             auth.insert("auth_mode".to_string(), json!("chatgpt"));
             auth.insert("preferred_auth_method".to_string(), json!("chatgpt"));
             auth.insert("OPENAI_API_KEY".to_string(), Value::Null);
+            Self::ensure_codex_chatgpt_account_fields(auth)?;
         } else {
             auth.insert("OPENAI_API_KEY".to_string(), json!(PROXY_TOKEN_PLACEHOLDER));
         }
@@ -153,8 +163,10 @@ impl ProxyService {
         let mut updated_config = Self::update_toml_base_url(config_str, proxy_codex_base_url);
         if preserve_chatgpt_auth {
             updated_config = Self::update_toml_requires_openai_auth(&updated_config, true);
+            updated_config = Self::update_toml_preferred_auth_method(&updated_config, "chatgpt");
         }
         root.insert("config".to_string(), json!(updated_config));
+        Ok(())
     }
 
     async fn codex_chatgpt_auth_takeover_enabled(&self) -> bool {
@@ -204,7 +216,7 @@ impl ProxyService {
         let bearer_token = Self::codex_openai_api_key_from_settings(&effective_settings)
             .or_else(|| Self::codex_experimental_bearer_token_from_settings(&effective_settings));
 
-        self.apply_codex_chatgpt_direct_fields(&mut effective_settings, bearer_token);
+        self.apply_codex_chatgpt_direct_fields(&mut effective_settings, bearer_token)?;
         self.write_codex_live(&effective_settings)?;
         Ok(())
     }
@@ -263,7 +275,7 @@ impl ProxyService {
         &self,
         settings: &mut Value,
         bearer_token: Option<String>,
-    ) {
+    ) -> Result<(), String> {
         if !settings.is_object() {
             *settings = json!({});
         }
@@ -290,14 +302,136 @@ impl ProxyService {
         merged_auth.insert("auth_mode".to_string(), json!("chatgpt"));
         merged_auth.insert("preferred_auth_method".to_string(), json!("chatgpt"));
         merged_auth.insert("OPENAI_API_KEY".to_string(), Value::Null);
+        Self::ensure_codex_chatgpt_account_fields(&mut merged_auth)?;
         root.insert("auth".to_string(), Value::Object(merged_auth));
 
         let config_str = root.get("config").and_then(Value::as_str).unwrap_or("");
         let mut updated_config = Self::update_toml_requires_openai_auth(config_str, true);
+        updated_config = Self::update_toml_preferred_auth_method(&updated_config, "chatgpt");
         if let Some(token) = bearer_token {
             updated_config = Self::update_toml_experimental_bearer_token(&updated_config, &token);
         }
         root.insert("config".to_string(), json!(updated_config));
+        Ok(())
+    }
+
+    fn ensure_codex_chatgpt_account_fields(
+        auth: &mut serde_json::Map<String, Value>,
+    ) -> Result<(), String> {
+        let existing_email = auth
+            .get("email")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(str::to_string);
+        let existing_plan_type = auth
+            .get("plan_type")
+            .or_else(|| auth.get("planType"))
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(str::to_string);
+
+        let account_info = if existing_email.is_none() || existing_plan_type.is_none() {
+            Self::codex_chatgpt_account_info_from_auth(auth)
+        } else {
+            None
+        };
+
+        let email = existing_email
+            .or_else(|| account_info.as_ref().and_then(|info| info.email.clone()))
+            .ok_or_else(|| {
+                "Codex ChatGPT 登录信息缺少 email，请先在 Codex 完成 ChatGPT 登录".to_string()
+            })?;
+        let plan_type = existing_plan_type
+            .or_else(|| {
+                account_info
+                    .as_ref()
+                    .and_then(|info| info.plan_type.clone())
+            })
+            .ok_or_else(|| {
+                "Codex ChatGPT 登录信息缺少 plan_type，请先在 Codex 完成 ChatGPT 登录".to_string()
+            })?;
+
+        auth.insert("email".to_string(), json!(email));
+        auth.insert("plan_type".to_string(), json!(plan_type));
+
+        if auth
+            .get("account_id")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .is_none()
+        {
+            if let Some(account_id) = account_info
+                .as_ref()
+                .and_then(|info| info.account_id.as_ref())
+                .filter(|value| !value.trim().is_empty())
+            {
+                auth.insert("account_id".to_string(), json!(account_id));
+            }
+        }
+
+        if auth
+            .get("user_id")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .is_none()
+        {
+            if let Some(user_id) = account_info
+                .as_ref()
+                .and_then(|info| info.user_id.as_ref())
+                .filter(|value| !value.trim().is_empty())
+            {
+                auth.insert("user_id".to_string(), json!(user_id));
+            }
+        }
+
+        Ok(())
+    }
+
+    fn codex_chatgpt_account_info_from_auth(
+        auth: &serde_json::Map<String, Value>,
+    ) -> Option<CodexChatgptAccountInfo> {
+        let id_token = auth
+            .get("tokens")
+            .and_then(|tokens| tokens.get("id_token"))
+            .and_then(Value::as_str)?;
+        Self::codex_chatgpt_account_info_from_id_token(id_token)
+    }
+
+    fn codex_chatgpt_account_info_from_id_token(id_token: &str) -> Option<CodexChatgptAccountInfo> {
+        let payload = id_token.split('.').nth(1)?;
+        let decoded = URL_SAFE_NO_PAD.decode(payload).ok()?;
+        let claims: Value = serde_json::from_slice(&decoded).ok()?;
+        let openai_auth = claims.get("https://api.openai.com/auth");
+        Some(CodexChatgptAccountInfo {
+            email: claims
+                .get("email")
+                .and_then(Value::as_str)
+                .map(str::to_string),
+            plan_type: openai_auth
+                .and_then(|auth| auth.get("chatgpt_plan_type"))
+                .and_then(Value::as_str)
+                .or_else(|| claims.get("chatgpt_plan_type").and_then(Value::as_str))
+                .map(str::to_string),
+            account_id: openai_auth
+                .and_then(|auth| auth.get("chatgpt_account_id"))
+                .and_then(Value::as_str)
+                .or_else(|| claims.get("chatgpt_account_id").and_then(Value::as_str))
+                .map(str::to_string),
+            user_id: openai_auth
+                .and_then(|auth| auth.get("chatgpt_user_id"))
+                .and_then(Value::as_str)
+                .or_else(|| {
+                    openai_auth
+                        .and_then(|auth| auth.get("user_id"))
+                        .and_then(Value::as_str)
+                })
+                .or_else(|| claims.get("sub").and_then(Value::as_str))
+                .map(str::to_string),
+        })
     }
 
     fn build_claude_takeover_model_fields(config: &Value) -> Vec<(&'static str, String)> {
@@ -1199,7 +1333,7 @@ impl ProxyService {
                 &mut live_config,
                 &proxy_codex_base_url,
                 preserve_codex_chatgpt_auth,
-            );
+            )?;
             self.write_codex_live(&live_config)?;
             log::info!("Codex Live 配置已接管，代理地址: {proxy_codex_base_url}");
         }
@@ -1245,7 +1379,7 @@ impl ProxyService {
                     &mut live_config,
                     &proxy_codex_base_url,
                     preserve_codex_chatgpt_auth,
-                );
+                )?;
                 self.write_codex_live(&live_config)?;
                 log::info!("Codex Live 配置已接管，代理地址: {proxy_codex_base_url}");
             }
@@ -1293,7 +1427,9 @@ impl ProxyService {
                         &mut live_config,
                         &proxy_codex_base_url,
                         preserve_codex_chatgpt_auth,
-                    );
+                    )
+                    .map_err(|e| log::warn!("Codex best-effort 接管失败: {e}"))
+                    .ok();
                     let _ = self.write_codex_live(&live_config);
                 }
             }
@@ -1962,6 +2098,14 @@ impl ProxyService {
         doc.to_string()
     }
 
+    fn update_toml_preferred_auth_method(toml_str: &str, value: &str) -> String {
+        let Ok(mut doc) = toml_str.parse::<toml_edit::DocumentMut>() else {
+            return toml_str.to_string();
+        };
+        doc["preferred_auth_method"] = toml_edit::value(value.trim());
+        doc.to_string()
+    }
+
     fn update_toml_experimental_bearer_token(toml_str: &str, token: &str) -> String {
         let Ok(mut doc) = toml_str.parse::<toml_edit::DocumentMut>() else {
             return toml_str.to_string();
@@ -2409,7 +2553,7 @@ model = "gpt-5.1-codex"
                 "auth_mode": "chatgpt",
                 "preferred_auth_method": "chatgpt",
                 "OPENAI_API_KEY": "old-key",
-                "tokens": { "id_token": "keep-me" },
+                "tokens": { "id_token": "x.eyJlbWFpbCI6InVzZXJAZXhhbXBsZS5jb20iLCJodHRwczovL2FwaS5vcGVuYWkuY29tL2F1dGgiOnsiY2hhdGdwdF9wbGFuX3R5cGUiOiJmcmVlIiwiY2hhdGdwdF9hY2NvdW50X2lkIjoiYWNjLTEyMyIsImNoYXRncHRfdXNlcl9pZCI6InVzZXItMTIzIn0sInN1YiI6InN1Yi0xMjMifQ.y" },
                 "last_refresh": "2026-05-16T00:00:00Z"
             },
             "config": r#"
@@ -2426,7 +2570,8 @@ base_url = "https://third.example/v1"
             &mut live_config,
             "http://127.0.0.1:15721/v1",
             true,
-        );
+        )
+        .expect("apply takeover fields");
 
         let auth = live_config.get("auth").expect("auth should exist");
         assert_eq!(
@@ -2439,9 +2584,10 @@ base_url = "https://third.example/v1"
         );
         assert!(auth.get("OPENAI_API_KEY").is_some_and(Value::is_null));
         assert_eq!(
-            auth.pointer("/tokens/id_token").and_then(Value::as_str),
-            Some("keep-me")
+            auth.get("email").and_then(Value::as_str),
+            Some("user@example.com")
         );
+        assert_eq!(auth.get("plan_type").and_then(Value::as_str), Some("free"));
         assert_eq!(
             auth.get("last_refresh").and_then(Value::as_str),
             Some("2026-05-16T00:00:00Z")
@@ -2468,6 +2614,10 @@ base_url = "https://third.example/v1"
                 .and_then(|v| v.as_bool()),
             Some(true)
         );
+        assert_eq!(
+            parsed.get("preferred_auth_method").and_then(|v| v.as_str()),
+            Some("chatgpt")
+        );
     }
 
     #[tokio::test]
@@ -2484,7 +2634,7 @@ base_url = "https://third.example/v1"
                 "auth": {
                     "auth_mode": "chatgpt",
                     "preferred_auth_method": "chatgpt",
-                    "tokens": { "id_token": "keep-me" },
+                    "tokens": { "id_token": "x.eyJlbWFpbCI6InVzZXJAZXhhbXBsZS5jb20iLCJodHRwczovL2FwaS5vcGVuYWkuY29tL2F1dGgiOnsiY2hhdGdwdF9wbGFuX3R5cGUiOiJmcmVlIiwiY2hhdGdwdF9hY2NvdW50X2lkIjoiYWNjLTEyMyIsImNoYXRncHRfdXNlcl9pZCI6InVzZXItMTIzIn0sInN1YiI6InN1Yi0xMjMifQ.y" },
                     "OPENAI_API_KEY": null
                 },
                 "config": ""
@@ -2540,9 +2690,10 @@ base_url = "https://third.example/v1"
         );
         assert!(auth.get("OPENAI_API_KEY").is_some_and(Value::is_null));
         assert_eq!(
-            auth.pointer("/tokens/id_token").and_then(Value::as_str),
-            Some("keep-me")
+            auth.get("email").and_then(Value::as_str),
+            Some("user@example.com")
         );
+        assert_eq!(auth.get("plan_type").and_then(Value::as_str), Some("free"));
 
         let parsed: toml::Value = toml::from_str(
             live.get("config")
@@ -2569,6 +2720,10 @@ base_url = "https://third.example/v1"
                 .get("requires_openai_auth")
                 .and_then(|v| v.as_bool()),
             Some(true)
+        );
+        assert_eq!(
+            parsed.get("preferred_auth_method").and_then(|v| v.as_str()),
+            Some("chatgpt")
         );
     }
 
