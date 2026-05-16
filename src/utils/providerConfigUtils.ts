@@ -417,6 +417,8 @@ export const hasTomlCommonConfigSnippet = (
 const TOML_SECTION_HEADER_PATTERN = /^\s*\[([^\]\r\n]+)\]\s*$/;
 const TOML_BASE_URL_PATTERN =
   /^\s*base_url\s*=\s*(["'])([^"'\r\n]+)\1\s*(?:#.*)?$/;
+const TOML_EXPERIMENTAL_BEARER_TOKEN_PATTERN =
+  /^\s*experimental_bearer_token\s*=\s*(["'])([^"'\r\n]*)\1\s*(?:#.*)?$/;
 const TOML_MODEL_PATTERN = /^\s*model\s*=\s*(["'])([^"'\r\n]+)\1\s*(?:#.*)?$/;
 const TOML_MODEL_PROVIDER_LINE_PATTERN =
   /^\s*model_provider\s*=\s*(["'])([^"'\r\n]+)\1\s*(?:#.*)?$/;
@@ -518,7 +520,7 @@ const findTomlAssignmentInRange = (
 ): TomlAssignmentMatch | undefined => {
   for (let index = startIndex; index < endIndex; index += 1) {
     const match = lines[index].match(pattern);
-    if (match?.[2]) {
+    if (match && match[2] !== undefined) {
       return {
         index,
         sectionName,
@@ -545,7 +547,7 @@ const findTomlAssignments = (
     }
 
     const match = line.match(pattern);
-    if (!match?.[2]) {
+    if (!match || match[2] === undefined) {
       return;
     }
 
@@ -768,6 +770,130 @@ export const setCodexBaseUrl = (
 
   const insertIndex = topLevelEndIndex;
   lines.splice(insertIndex, 0, replacementLine);
+  return finalizeTomlText(lines);
+};
+
+// ========== Codex experimental bearer token utils ==========
+
+// 从 Codex 的 TOML 配置文本中提取 experimental_bearer_token。
+// 返回空字符串表示字段存在但值为空；返回 undefined 表示字段不存在。
+export const extractCodexBearerToken = (
+  configText: string | undefined | null,
+): string | undefined => {
+  try {
+    const raw = typeof configText === "string" ? configText : "";
+    const text = normalizeTomlText(raw);
+    if (!text) return undefined;
+
+    const lines = text.split("\n");
+    const targetSectionName = getCodexProviderSectionName(text);
+
+    if (targetSectionName) {
+      const sectionRange = getTomlSectionRange(lines, targetSectionName);
+      if (sectionRange) {
+        const match = findTomlAssignmentInRange(
+          lines,
+          TOML_EXPERIMENTAL_BEARER_TOKEN_PATTERN,
+          sectionRange.bodyStartIndex,
+          sectionRange.bodyEndIndex,
+          targetSectionName,
+        );
+        if (match) {
+          return match.value;
+        }
+      }
+    }
+
+    const topLevelMatch = findTomlAssignmentInRange(
+      lines,
+      TOML_EXPERIMENTAL_BEARER_TOKEN_PATTERN,
+      0,
+      getTopLevelEndIndex(lines),
+    );
+    if (topLevelMatch) {
+      return topLevelMatch.value;
+    }
+
+    const fallbackAssignments = findTomlAssignments(
+      lines,
+      TOML_EXPERIMENTAL_BEARER_TOKEN_PATTERN,
+    ).filter(
+      ({ sectionName }) =>
+        sectionName !== targetSectionName &&
+        !isMcpServerSection(sectionName) &&
+        !isOtherProviderSection(sectionName, targetSectionName),
+    );
+    return fallbackAssignments.length === 1
+      ? fallbackAssignments[0].value
+      : undefined;
+  } catch {
+    return undefined;
+  }
+};
+
+// 在 Codex 的 TOML 配置文本中写入或更新 experimental_bearer_token 字段。
+export const setCodexBearerToken = (
+  configText: string,
+  token: string,
+): string => {
+  const normalizedText = normalizeTomlText(configText);
+  const lines = normalizedText ? normalizedText.split("\n") : [];
+  const targetSectionName = getCodexProviderSectionName(normalizedText);
+  const replacementLine = `experimental_bearer_token = "${token.trim()}"`;
+
+  if (targetSectionName) {
+    let targetSectionRange = getTomlSectionRange(lines, targetSectionName);
+    const targetMatch = targetSectionRange
+      ? findTomlAssignmentInRange(
+          lines,
+          TOML_EXPERIMENTAL_BEARER_TOKEN_PATTERN,
+          targetSectionRange.bodyStartIndex,
+          targetSectionRange.bodyEndIndex,
+          targetSectionName,
+        )
+      : undefined;
+
+    if (targetMatch) {
+      lines[targetMatch.index] = replacementLine;
+      return finalizeTomlText(lines);
+    }
+
+    if (targetSectionRange) {
+      const insertIndex = getTomlSectionInsertIndex(lines, targetSectionRange);
+      lines.splice(insertIndex, 0, replacementLine);
+      return finalizeTomlText(lines);
+    }
+
+    if (lines.length > 0 && lines[lines.length - 1].trim() !== "") {
+      lines.push("");
+    }
+    lines.push(`[${targetSectionName}]`, replacementLine);
+    return finalizeTomlText(lines);
+  }
+
+  const topLevelEndIndex = getTopLevelEndIndex(lines);
+  const topLevelMatch = findTomlAssignmentInRange(
+    lines,
+    TOML_EXPERIMENTAL_BEARER_TOKEN_PATTERN,
+    0,
+    topLevelEndIndex,
+  );
+  if (topLevelMatch) {
+    lines[topLevelMatch.index] = replacementLine;
+    return finalizeTomlText(lines);
+  }
+
+  const modelProviderIndex = getTopLevelModelProviderLineIndex(lines);
+  if (modelProviderIndex !== -1) {
+    lines.splice(modelProviderIndex + 1, 0, replacementLine);
+    return finalizeTomlText(lines);
+  }
+
+  if (lines.length === 0) {
+    return `${replacementLine}\n`;
+  }
+
+  lines.splice(topLevelEndIndex, 0, replacementLine);
   return finalizeTomlText(lines);
 };
 

@@ -121,6 +121,50 @@ impl ProxyService {
         }
     }
 
+    fn apply_codex_takeover_fields(
+        config: &mut Value,
+        proxy_codex_base_url: &str,
+        preserve_chatgpt_auth: bool,
+    ) {
+        if !config.is_object() {
+            *config = json!({});
+        }
+
+        let root = config
+            .as_object_mut()
+            .expect("Codex config should be normalized to an object");
+        let auth = root.entry("auth".to_string()).or_insert_with(|| json!({}));
+        if !auth.is_object() {
+            *auth = json!({});
+        }
+
+        let auth = auth
+            .as_object_mut()
+            .expect("Codex auth should be normalized to an object");
+        if preserve_chatgpt_auth {
+            auth.insert("auth_mode".to_string(), json!("chatgpt"));
+            auth.insert("preferred_auth_method".to_string(), json!("chatgpt"));
+            auth.insert("OPENAI_API_KEY".to_string(), Value::Null);
+        } else {
+            auth.insert("OPENAI_API_KEY".to_string(), json!(PROXY_TOKEN_PLACEHOLDER));
+        }
+
+        let config_str = root.get("config").and_then(|v| v.as_str()).unwrap_or("");
+        let mut updated_config = Self::update_toml_base_url(config_str, proxy_codex_base_url);
+        if preserve_chatgpt_auth {
+            updated_config = Self::update_toml_requires_openai_auth(&updated_config, true);
+        }
+        root.insert("config".to_string(), json!(updated_config));
+    }
+
+    async fn codex_chatgpt_auth_takeover_enabled(&self) -> bool {
+        self.db
+            .get_proxy_config_for_app("codex")
+            .await
+            .map(|config| config.codex_chatgpt_auth_takeover)
+            .unwrap_or(false)
+    }
+
     fn build_claude_takeover_model_fields(config: &Value) -> Vec<(&'static str, String)> {
         let Some(env) = config.get("env").and_then(Value::as_object) else {
             return Vec::new();
@@ -418,6 +462,7 @@ impl ProxyService {
                 // 只看其一会出现「UI 显示已接管但 Live 已被恢复」或「Live 仍是占位符但备份丢失」
                 // 两种脏角落，下面的重建分支会把这些情况修复成一致状态。
                 if has_backup && live_taken_over {
+                    self.takeover_live_config_strict(&app).await?;
                     return Ok(());
                 }
 
@@ -1004,6 +1049,7 @@ impl ProxyService {
     /// 因此不需要在 URL 中添加应用前缀。
     async fn takeover_live_configs(&self) -> Result<(), String> {
         let (proxy_url, proxy_codex_base_url) = self.build_proxy_urls().await?;
+        let preserve_codex_chatgpt_auth = self.codex_chatgpt_auth_takeover_enabled().await;
 
         // Claude: 修改 ANTHROPIC_BASE_URL，使用占位符替代真实 Token（代理会注入真实 Token）
         if let Ok(mut live_config) = self.read_claude_live() {
@@ -1014,19 +1060,11 @@ impl ProxyService {
 
         // Codex: 修改 config.toml 的 base_url，auth.json 的 OPENAI_API_KEY（代理会注入真实 Token）
         if let Ok(mut live_config) = self.read_codex_live() {
-            // 1. 修改 auth.json 中的 OPENAI_API_KEY（使用占位符）
-            if let Some(auth) = live_config.get_mut("auth").and_then(|v| v.as_object_mut()) {
-                auth.insert("OPENAI_API_KEY".to_string(), json!(PROXY_TOKEN_PLACEHOLDER));
-            }
-
-            // 2. 修改 config.toml 中的 base_url
-            let config_str = live_config
-                .get("config")
-                .and_then(|v| v.as_str())
-                .unwrap_or("");
-            let updated_config = Self::update_toml_base_url(config_str, &proxy_codex_base_url);
-            live_config["config"] = json!(updated_config);
-
+            Self::apply_codex_takeover_fields(
+                &mut live_config,
+                &proxy_codex_base_url,
+                preserve_codex_chatgpt_auth,
+            );
             self.write_codex_live(&live_config)?;
             log::info!("Codex Live 配置已接管，代理地址: {proxy_codex_base_url}");
         }
@@ -1053,6 +1091,11 @@ impl ProxyService {
     /// 接管指定应用的 Live 配置（严格模式：目标配置不存在则返回错误）
     async fn takeover_live_config_strict(&self, app_type: &AppType) -> Result<(), String> {
         let (proxy_url, proxy_codex_base_url) = self.build_proxy_urls().await?;
+        let preserve_codex_chatgpt_auth = if matches!(app_type, AppType::Codex) {
+            self.codex_chatgpt_auth_takeover_enabled().await
+        } else {
+            false
+        };
 
         match app_type {
             AppType::Claude => {
@@ -1063,18 +1106,11 @@ impl ProxyService {
             }
             AppType::Codex => {
                 let mut live_config = self.read_codex_live()?;
-
-                if let Some(auth) = live_config.get_mut("auth").and_then(|v| v.as_object_mut()) {
-                    auth.insert("OPENAI_API_KEY".to_string(), json!(PROXY_TOKEN_PLACEHOLDER));
-                }
-
-                let config_str = live_config
-                    .get("config")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("");
-                let updated_config = Self::update_toml_base_url(config_str, &proxy_codex_base_url);
-                live_config["config"] = json!(updated_config);
-
+                Self::apply_codex_takeover_fields(
+                    &mut live_config,
+                    &proxy_codex_base_url,
+                    preserve_codex_chatgpt_auth,
+                );
                 self.write_codex_live(&live_config)?;
                 log::info!("Codex Live 配置已接管，代理地址: {proxy_codex_base_url}");
             }
@@ -1103,6 +1139,11 @@ impl ProxyService {
     /// 接管指定应用的 Live 配置（尽力而为：配置不存在/读取失败则跳过）
     async fn takeover_live_config_best_effort(&self, app_type: &AppType) -> Result<(), String> {
         let (proxy_url, proxy_codex_base_url) = self.build_proxy_urls().await?;
+        let preserve_codex_chatgpt_auth = if matches!(app_type, AppType::Codex) {
+            self.codex_chatgpt_auth_takeover_enabled().await
+        } else {
+            false
+        };
 
         match app_type {
             AppType::Claude => {
@@ -1113,19 +1154,11 @@ impl ProxyService {
             }
             AppType::Codex => {
                 if let Ok(mut live_config) = self.read_codex_live() {
-                    if let Some(auth) = live_config.get_mut("auth").and_then(|v| v.as_object_mut())
-                    {
-                        auth.insert("OPENAI_API_KEY".to_string(), json!(PROXY_TOKEN_PLACEHOLDER));
-                    }
-
-                    let config_str = live_config
-                        .get("config")
-                        .and_then(|v| v.as_str())
-                        .unwrap_or("");
-                    let updated_config =
-                        Self::update_toml_base_url(config_str, &proxy_codex_base_url);
-                    live_config["config"] = json!(updated_config);
-
+                    Self::apply_codex_takeover_fields(
+                        &mut live_config,
+                        &proxy_codex_base_url,
+                        preserve_codex_chatgpt_auth,
+                    );
                     let _ = self.write_codex_live(&live_config);
                 }
             }
@@ -1504,11 +1537,19 @@ impl ProxyService {
     }
 
     fn is_codex_live_taken_over(config: &Value) -> bool {
-        let auth = match config.get("auth").and_then(|v| v.as_object()) {
-            Some(auth) => auth,
-            None => return false,
-        };
-        auth.get("OPENAI_API_KEY").and_then(|v| v.as_str()) == Some(PROXY_TOKEN_PLACEHOLDER)
+        let has_proxy_token = config
+            .get("auth")
+            .and_then(|v| v.as_object())
+            .and_then(|auth| auth.get("OPENAI_API_KEY"))
+            .and_then(|v| v.as_str())
+            == Some(PROXY_TOKEN_PLACEHOLDER);
+
+        has_proxy_token
+            || config
+                .get("config")
+                .and_then(|v| v.as_str())
+                .map(Self::codex_toml_has_local_base_url)
+                .unwrap_or(false)
     }
 
     fn is_gemini_live_taken_over(config: &Value) -> bool {
@@ -1755,6 +1796,71 @@ impl ProxyService {
     fn update_toml_base_url(toml_str: &str, new_url: &str) -> String {
         crate::codex_config::update_codex_toml_field(toml_str, "base_url", new_url)
             .unwrap_or_else(|_| toml_str.to_string())
+    }
+
+    fn update_toml_requires_openai_auth(toml_str: &str, enabled: bool) -> String {
+        let Ok(mut doc) = toml_str.parse::<toml_edit::DocumentMut>() else {
+            return toml_str.to_string();
+        };
+
+        let provider_key = doc
+            .get("model_provider")
+            .and_then(|item| item.as_str())
+            .map(str::to_string);
+
+        if let Some(provider_key) = provider_key {
+            if doc.get("model_providers").is_none() {
+                doc["model_providers"] = toml_edit::table();
+            }
+            if let Some(model_providers) = doc["model_providers"].as_table_mut() {
+                if !model_providers.contains_key(&provider_key) {
+                    model_providers[&provider_key] = toml_edit::table();
+                }
+                if let Some(provider_table) = model_providers[&provider_key].as_table_mut() {
+                    provider_table["requires_openai_auth"] = toml_edit::value(enabled);
+                    return doc.to_string();
+                }
+            }
+        }
+
+        doc["requires_openai_auth"] = toml_edit::value(enabled);
+        doc.to_string()
+    }
+
+    fn codex_toml_has_local_base_url(toml_str: &str) -> bool {
+        let Ok(doc) = toml_str.parse::<toml_edit::DocumentMut>() else {
+            return false;
+        };
+
+        if doc
+            .get("base_url")
+            .and_then(|item| item.as_str())
+            .map(Self::is_local_proxy_url)
+            .unwrap_or(false)
+        {
+            return true;
+        }
+
+        let provider_key = doc
+            .get("model_provider")
+            .and_then(|item| item.as_str())
+            .map(str::to_string);
+
+        if let Some(provider_key) = provider_key {
+            if doc
+                .get("model_providers")
+                .and_then(|item| item.as_table())
+                .and_then(|providers| providers.get(provider_key.as_str()))
+                .and_then(|provider| provider.get("base_url"))
+                .and_then(|item| item.as_str())
+                .map(Self::is_local_proxy_url)
+                .unwrap_or(false)
+            {
+                return true;
+            }
+        }
+
+        false
     }
 
     fn read_claude_live(&self) -> Result<Value, String> {
@@ -2126,6 +2232,74 @@ model = "gpt-5.1-codex"
             .expect("base_url should exist");
 
         assert_eq!(base_url, new_url);
+    }
+
+    #[test]
+    fn codex_chatgpt_takeover_preserves_oauth_fields_and_nulls_api_key() {
+        let mut live_config = json!({
+            "auth": {
+                "auth_mode": "chatgpt",
+                "preferred_auth_method": "chatgpt",
+                "OPENAI_API_KEY": "old-key",
+                "tokens": { "id_token": "keep-me" },
+                "last_refresh": "2026-05-16T00:00:00Z"
+            },
+            "config": r#"
+model_provider = "apiname"
+model = "gpt-5.1-codex"
+
+[model_providers.apiname]
+name = "apiname"
+base_url = "https://third.example/v1"
+"#
+        });
+
+        ProxyService::apply_codex_takeover_fields(
+            &mut live_config,
+            "http://127.0.0.1:15721/v1",
+            true,
+        );
+
+        let auth = live_config.get("auth").expect("auth should exist");
+        assert_eq!(
+            auth.get("auth_mode").and_then(Value::as_str),
+            Some("chatgpt")
+        );
+        assert_eq!(
+            auth.get("preferred_auth_method").and_then(Value::as_str),
+            Some("chatgpt")
+        );
+        assert!(auth.get("OPENAI_API_KEY").is_some_and(Value::is_null));
+        assert_eq!(
+            auth.pointer("/tokens/id_token").and_then(Value::as_str),
+            Some("keep-me")
+        );
+        assert_eq!(
+            auth.get("last_refresh").and_then(Value::as_str),
+            Some("2026-05-16T00:00:00Z")
+        );
+
+        let parsed: toml::Value = toml::from_str(
+            live_config
+                .get("config")
+                .and_then(Value::as_str)
+                .expect("config should exist"),
+        )
+        .expect("updated config should be valid TOML");
+        let provider = parsed
+            .get("model_providers")
+            .and_then(|v| v.get("apiname"))
+            .expect("provider should exist");
+        assert_eq!(
+            provider.get("base_url").and_then(|v| v.as_str()),
+            Some("http://127.0.0.1:15721/v1")
+        );
+        assert_eq!(
+            provider
+                .get("requires_openai_auth")
+                .and_then(|v| v.as_bool()),
+            Some(true)
+        );
     }
 
     #[tokio::test]

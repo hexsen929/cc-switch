@@ -8,7 +8,10 @@ import { usageApi, settingsApi, type AppId } from "@/lib/api";
 import { copilotGetUsage, copilotGetUsageForAccount } from "@/lib/api/copilot";
 import { useSettingsQuery } from "@/lib/query";
 import { resolveManagedAccountId } from "@/lib/authBinding";
-import { extractCodexBaseUrl } from "@/utils/providerConfigUtils";
+import {
+  extractCodexBaseUrl,
+  extractCodexBearerToken,
+} from "@/utils/providerConfigUtils";
 import JsonEditor from "./JsonEditor";
 import * as prettier from "prettier/standalone";
 import * as parserBabel from "prettier/parser-babel";
@@ -170,11 +173,11 @@ const UsageScriptModal: React.FC<UsageScriptModalProps> = ({
           baseUrl: env.ANTHROPIC_BASE_URL,
         };
       } else if (appId === "codex") {
-        // Codex: { auth: { OPENAI_API_KEY }, config: TOML string with base_url }
+        // Codex: { auth: ChatGPT mode, config: TOML string with base_url/token }
         const auth = (config as any).auth || {};
         const configToml = (config as any).config || "";
         return {
-          apiKey: auth.OPENAI_API_KEY,
+          apiKey: extractCodexBearerToken(configToml) || auth.OPENAI_API_KEY,
           baseUrl: extractCodexBaseUrl(configToml),
         };
       } else if (appId === "gemini") {

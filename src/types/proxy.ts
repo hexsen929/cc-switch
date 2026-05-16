@@ -153,6 +153,7 @@ export interface AppProxyConfig {
   appType: string;
   enabled: boolean;
   autoFailoverEnabled: boolean;
+  codexChatgptAuthTakeover: boolean;
   maxRetries: number;
   streamingFirstByteTimeout: number;
   streamingIdleTimeout: number;

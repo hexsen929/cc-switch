@@ -10,6 +10,7 @@ use crate::provider::Provider;
 use crate::proxy::error::ProxyError;
 use regex::Regex;
 use std::sync::LazyLock;
+use toml::Value;
 
 /// 官方 Codex 客户端 User-Agent 正则
 #[allow(dead_code)]
@@ -22,6 +23,33 @@ pub struct CodexAdapter;
 impl CodexAdapter {
     pub fn new() -> Self {
         Self
+    }
+
+    fn extract_bearer_token_from_toml(config_str: &str) -> Option<String> {
+        let toml_value = toml::from_str::<Value>(config_str).ok()?;
+        let provider_name = toml_value
+            .get("model_provider")
+            .and_then(|value| value.as_str());
+        let providers = toml_value.get("model_providers")?.as_table()?;
+
+        if let Some(name) = provider_name {
+            if let Some(token) = providers
+                .get(name)
+                .and_then(|provider| provider.get("experimental_bearer_token"))
+                .and_then(|value| value.as_str())
+                .filter(|token| !token.trim().is_empty())
+            {
+                return Some(token.to_string());
+            }
+        }
+
+        providers.values().find_map(|provider| {
+            provider
+                .get("experimental_bearer_token")
+                .and_then(|value| value.as_str())
+                .filter(|token| !token.trim().is_empty())
+                .map(str::to_string)
+        })
     }
 
     /// 检测是否为官方 Codex 客户端
@@ -60,6 +88,12 @@ impl CodexAdapter {
 
         // 4. 尝试从 config 对象中获取
         if let Some(config) = provider.settings_config.get("config") {
+            if let Some(config_str) = config.as_str() {
+                if let Some(key) = Self::extract_bearer_token_from_toml(config_str) {
+                    return Some(key);
+                }
+            }
+
             if let Some(key) = config
                 .get("api_key")
                 .or_else(|| config.get("apiKey"))

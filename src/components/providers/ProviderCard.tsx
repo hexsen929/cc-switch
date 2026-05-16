@@ -18,7 +18,10 @@ import { PROVIDER_TYPES } from "@/config/constants";
 import { isHermesReadOnlyProvider } from "@/config/hermesProviderPresets";
 import { ProviderHealthBadge } from "@/components/providers/ProviderHealthBadge";
 import { FailoverPriorityBadge } from "@/components/providers/FailoverPriorityBadge";
-import { extractCodexBaseUrl } from "@/utils/providerConfigUtils";
+import {
+  extractCodexBaseUrl,
+  extractCodexBearerToken,
+} from "@/utils/providerConfigUtils";
 import { useProviderHealth } from "@/lib/query/failover";
 import { useUsageQuery } from "@/lib/query/queries";
 
@@ -71,6 +74,14 @@ function isOfficialProvider(provider: Provider, appId: AppId): boolean {
     return !baseUrl || (typeof baseUrl === "string" && baseUrl.trim() === "");
   }
   if (appId === "codex") {
+    const toml = config?.config;
+    if (typeof toml === "string") {
+      const baseUrl = extractCodexBaseUrl(toml);
+      const bearerToken = extractCodexBearerToken(toml);
+      if (baseUrl || bearerToken) {
+        return false;
+      }
+    }
     const apiKey = config?.auth?.OPENAI_API_KEY;
     return !apiKey || (typeof apiKey === "string" && apiKey.trim() === "");
   }

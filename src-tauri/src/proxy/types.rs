@@ -176,6 +176,9 @@ pub struct AppProxyConfig {
     pub enabled: bool,
     /// 该 app 自动故障转移开关
     pub auto_failover_enabled: bool,
+    /// Codex 接管时保留 ChatGPT 登录态（仅 app_type=codex 生效）
+    #[serde(default)]
+    pub codex_chatgpt_auth_takeover: bool,
     /// 最大重试次数
     pub max_retries: u32,
     /// 流式首字超时（秒）
