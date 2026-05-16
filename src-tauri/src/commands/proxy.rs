@@ -133,9 +133,27 @@ pub async fn update_proxy_config_for_app(
     config: AppProxyConfig,
 ) -> Result<(), String> {
     let db = &state.db;
+    let previous = if config.app_type == "codex" {
+        db.get_proxy_config_for_app("codex").await.ok()
+    } else {
+        None
+    };
+    let should_sync_codex_auth_mode = previous
+        .as_ref()
+        .is_some_and(|prev| prev.codex_chatgpt_auth_takeover != config.codex_chatgpt_auth_takeover);
+
     db.update_proxy_config_for_app(config)
         .await
-        .map_err(|e| e.to_string())
+        .map_err(|e| e.to_string())?;
+
+    if should_sync_codex_auth_mode {
+        state
+            .proxy_service
+            .sync_codex_auth_takeover_mode_to_live()
+            .await?;
+    }
+
+    Ok(())
 }
 
 async fn get_default_cost_multiplier_internal(

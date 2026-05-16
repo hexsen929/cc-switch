@@ -65,6 +65,7 @@ import { SettingsPage } from "@/components/settings/SettingsPage";
 import { UpdateBadge } from "@/components/UpdateBadge";
 import { EnvWarningBanner } from "@/components/env/EnvWarningBanner";
 import { ProxyToggle } from "@/components/proxy/ProxyToggle";
+import { CodexChatgptAuthToggle } from "@/components/proxy/CodexChatgptAuthToggle";
 import { ClaudeDesktopRouteToggle } from "@/components/proxy/ClaudeDesktopRouteToggle";
 import { FailoverToggle } from "@/components/proxy/FailoverToggle";
 import UsageScriptModal from "@/components/UsageScriptModal";
@@ -1273,7 +1274,10 @@ function App() {
                     <ClaudeDesktopRouteToggle />
                   ) : (
                     settingsData?.enableLocalProxy && (
-                      <ProxyToggle activeApp={activeApp} />
+                      <>
+                        <ProxyToggle activeApp={activeApp} />
+                        {activeApp === "codex" && <CodexChatgptAuthToggle />}
+                      </>
                     )
                   )}
                   {activeApp !== "claude-desktop" &&

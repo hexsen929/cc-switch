@@ -165,6 +165,141 @@ impl ProxyService {
             .unwrap_or(false)
     }
 
+    pub async fn sync_codex_auth_takeover_mode_to_live(&self) -> Result<(), String> {
+        let config = self
+            .db
+            .get_proxy_config_for_app("codex")
+            .await
+            .map_err(|e| format!("获取 Codex 代理配置失败: {e}"))?;
+
+        if config.enabled || self.detect_takeover_in_live_config_for_app(&AppType::Codex) {
+            self.takeover_live_config_strict(&AppType::Codex).await?;
+            return Ok(());
+        }
+
+        let current_id = crate::settings::get_effective_current_provider(&self.db, &AppType::Codex)
+            .map_err(|e| format!("获取 Codex 当前供应商失败: {e}"))?;
+        let Some(current_id) = current_id else {
+            return Ok(());
+        };
+
+        let provider = self
+            .db
+            .get_provider_by_id(&current_id, "codex")
+            .map_err(|e| format!("读取 Codex 当前供应商失败: {e}"))?
+            .ok_or_else(|| format!("Codex 当前供应商不存在: {current_id}"))?;
+
+        if !config.codex_chatgpt_auth_takeover {
+            write_live_with_common_config(self.db.as_ref(), &AppType::Codex, &provider)
+                .map_err(|e| format!("写入 Codex Live 配置失败: {e}"))?;
+            return Ok(());
+        }
+
+        let mut effective_settings = build_effective_settings_with_common_config(
+            self.db.as_ref(),
+            &AppType::Codex,
+            &provider,
+        )
+        .map_err(|e| format!("构建 Codex 有效配置失败: {e}"))?;
+        let bearer_token = Self::codex_openai_api_key_from_settings(&effective_settings)
+            .or_else(|| Self::codex_experimental_bearer_token_from_settings(&effective_settings));
+
+        self.apply_codex_chatgpt_direct_fields(&mut effective_settings, bearer_token);
+        self.write_codex_live(&effective_settings)?;
+        Ok(())
+    }
+
+    fn codex_openai_api_key_from_settings(settings: &Value) -> Option<String> {
+        settings
+            .get("auth")
+            .and_then(|auth| auth.get("OPENAI_API_KEY"))
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|token| !token.is_empty() && *token != PROXY_TOKEN_PLACEHOLDER)
+            .map(str::to_string)
+    }
+
+    fn codex_experimental_bearer_token_from_settings(settings: &Value) -> Option<String> {
+        let config_text = settings.get("config").and_then(Value::as_str)?;
+        Self::codex_experimental_bearer_token_from_toml(config_text)
+    }
+
+    fn codex_experimental_bearer_token_from_toml(toml_str: &str) -> Option<String> {
+        let doc = toml_str.parse::<toml_edit::DocumentMut>().ok()?;
+        let provider_key = doc
+            .get("model_provider")
+            .and_then(|item| item.as_str())
+            .map(str::to_string);
+
+        if let Some(provider_key) = provider_key {
+            if let Some(token) = doc
+                .get("model_providers")
+                .and_then(|item| item.as_table())
+                .and_then(|providers| providers.get(provider_key.as_str()))
+                .and_then(|provider| provider.get("experimental_bearer_token"))
+                .and_then(|item| item.as_str())
+                .map(str::trim)
+                .filter(|token| !token.is_empty())
+            {
+                return Some(token.to_string());
+            }
+        }
+
+        doc.get("model_providers")
+            .and_then(|item| item.as_table())
+            .and_then(|providers| {
+                providers.iter().find_map(|(_, provider)| {
+                    provider
+                        .get("experimental_bearer_token")
+                        .and_then(|item| item.as_str())
+                        .map(str::trim)
+                        .filter(|token| !token.is_empty())
+                        .map(str::to_string)
+                })
+            })
+    }
+
+    fn apply_codex_chatgpt_direct_fields(
+        &self,
+        settings: &mut Value,
+        bearer_token: Option<String>,
+    ) {
+        if !settings.is_object() {
+            *settings = json!({});
+        }
+
+        let root = settings
+            .as_object_mut()
+            .expect("Codex settings should be normalized to an object");
+        let provider_auth = root
+            .get("auth")
+            .and_then(Value::as_object)
+            .cloned()
+            .unwrap_or_default();
+        let mut merged_auth = self
+            .read_codex_live()
+            .ok()
+            .and_then(|live| live.get("auth").and_then(Value::as_object).cloned())
+            .unwrap_or_default();
+
+        for (key, value) in provider_auth {
+            if key != "OPENAI_API_KEY" {
+                merged_auth.insert(key, value);
+            }
+        }
+        merged_auth.insert("auth_mode".to_string(), json!("chatgpt"));
+        merged_auth.insert("preferred_auth_method".to_string(), json!("chatgpt"));
+        merged_auth.insert("OPENAI_API_KEY".to_string(), Value::Null);
+        root.insert("auth".to_string(), Value::Object(merged_auth));
+
+        let config_str = root.get("config").and_then(Value::as_str).unwrap_or("");
+        let mut updated_config = Self::update_toml_requires_openai_auth(config_str, true);
+        if let Some(token) = bearer_token {
+            updated_config = Self::update_toml_experimental_bearer_token(&updated_config, &token);
+        }
+        root.insert("config".to_string(), json!(updated_config));
+    }
+
     fn build_claude_takeover_model_fields(config: &Value) -> Vec<(&'static str, String)> {
         let Some(env) = config.get("env").and_then(Value::as_object) else {
             return Vec::new();
@@ -1827,6 +1962,39 @@ impl ProxyService {
         doc.to_string()
     }
 
+    fn update_toml_experimental_bearer_token(toml_str: &str, token: &str) -> String {
+        let Ok(mut doc) = toml_str.parse::<toml_edit::DocumentMut>() else {
+            return toml_str.to_string();
+        };
+        let token = token.trim();
+        if token.is_empty() {
+            return doc.to_string();
+        }
+
+        let provider_key = doc
+            .get("model_provider")
+            .and_then(|item| item.as_str())
+            .map(str::to_string);
+
+        if let Some(provider_key) = provider_key {
+            if doc.get("model_providers").is_none() {
+                doc["model_providers"] = toml_edit::table();
+            }
+            if let Some(model_providers) = doc["model_providers"].as_table_mut() {
+                if !model_providers.contains_key(&provider_key) {
+                    model_providers[&provider_key] = toml_edit::table();
+                }
+                if let Some(provider_table) = model_providers[&provider_key].as_table_mut() {
+                    provider_table["experimental_bearer_token"] = toml_edit::value(token);
+                    return doc.to_string();
+                }
+            }
+        }
+
+        doc["experimental_bearer_token"] = toml_edit::value(token);
+        doc.to_string()
+    }
+
     fn codex_toml_has_local_base_url(toml_str: &str) -> bool {
         let Ok(doc) = toml_str.parse::<toml_edit::DocumentMut>() else {
             return false;
@@ -2293,6 +2461,108 @@ base_url = "https://third.example/v1"
         assert_eq!(
             provider.get("base_url").and_then(|v| v.as_str()),
             Some("http://127.0.0.1:15721/v1")
+        );
+        assert_eq!(
+            provider
+                .get("requires_openai_auth")
+                .and_then(|v| v.as_bool()),
+            Some(true)
+        );
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn codex_chatgpt_direct_mode_writes_live_without_local_route() {
+        let _home = TempHome::new();
+        crate::settings::reload_settings().expect("reload settings");
+
+        let db = Arc::new(Database::memory().expect("init db"));
+        let service = ProxyService::new(db.clone());
+
+        service
+            .write_codex_live(&json!({
+                "auth": {
+                    "auth_mode": "chatgpt",
+                    "preferred_auth_method": "chatgpt",
+                    "tokens": { "id_token": "keep-me" },
+                    "OPENAI_API_KEY": null
+                },
+                "config": ""
+            }))
+            .expect("write initial live");
+
+        let provider = Provider::with_id(
+            "p1".to_string(),
+            "P1".to_string(),
+            json!({
+                "auth": { "OPENAI_API_KEY": "provider-key" },
+                "config": r#"
+model_provider = "p1"
+model = "gpt-5.1-codex"
+
+[model_providers.p1]
+name = "p1"
+base_url = "https://third.example/v1"
+"#
+            }),
+            None,
+        );
+        db.save_provider("codex", &provider).expect("save provider");
+        db.set_current_provider("codex", "p1")
+            .expect("set db current provider");
+        crate::settings::set_current_provider(&AppType::Codex, Some("p1"))
+            .expect("set local current provider");
+
+        let mut config = db
+            .get_proxy_config_for_app("codex")
+            .await
+            .expect("get proxy config");
+        config.enabled = false;
+        config.codex_chatgpt_auth_takeover = true;
+        db.update_proxy_config_for_app(config)
+            .await
+            .expect("update proxy config");
+
+        service
+            .sync_codex_auth_takeover_mode_to_live()
+            .await
+            .expect("sync direct mode");
+
+        let live = service.read_codex_live().expect("read live");
+        let auth = live.get("auth").expect("auth");
+        assert_eq!(
+            auth.get("auth_mode").and_then(Value::as_str),
+            Some("chatgpt")
+        );
+        assert_eq!(
+            auth.get("preferred_auth_method").and_then(Value::as_str),
+            Some("chatgpt")
+        );
+        assert!(auth.get("OPENAI_API_KEY").is_some_and(Value::is_null));
+        assert_eq!(
+            auth.pointer("/tokens/id_token").and_then(Value::as_str),
+            Some("keep-me")
+        );
+
+        let parsed: toml::Value = toml::from_str(
+            live.get("config")
+                .and_then(Value::as_str)
+                .expect("config text"),
+        )
+        .expect("parse live config");
+        let provider = parsed
+            .get("model_providers")
+            .and_then(|v| v.get("p1"))
+            .expect("provider table");
+        assert_eq!(
+            provider.get("base_url").and_then(|v| v.as_str()),
+            Some("https://third.example/v1")
+        );
+        assert_eq!(
+            provider
+                .get("experimental_bearer_token")
+                .and_then(|v| v.as_str()),
+            Some("provider-key")
         );
         assert_eq!(
             provider

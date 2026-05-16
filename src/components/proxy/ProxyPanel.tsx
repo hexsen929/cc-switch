@@ -25,8 +25,6 @@ import {
   useSetProxyTakeoverForApp,
   useGlobalProxyConfig,
   useUpdateGlobalProxyConfig,
-  useAppProxyConfig,
-  useUpdateAppProxyConfig,
 } from "@/lib/query/proxy";
 import type { ProxyStatus } from "@/types/proxy";
 import { useTranslation } from "react-i18next";
@@ -51,8 +49,6 @@ export function ProxyPanel({
   // 获取应用接管状态
   const { data: takeoverStatus } = useProxyTakeoverStatus();
   const setTakeoverForApp = useSetProxyTakeoverForApp();
-  const { data: codexProxyConfig } = useAppProxyConfig("codex");
-  const updateAppProxyConfig = useUpdateAppProxyConfig();
 
   // 获取全局代理配置
   const { data: globalConfig } = useGlobalProxyConfig();
@@ -116,35 +112,6 @@ export function ProxyPanel({
     } catch (error) {
       toast.error(
         t("proxy.logging.failed", { defaultValue: "切换日志状态失败" }),
-      );
-    }
-  };
-
-  const handleCodexChatgptTakeoverChange = async (enabled: boolean) => {
-    if (!codexProxyConfig) return;
-    try {
-      await updateAppProxyConfig.mutateAsync({
-        ...codexProxyConfig,
-        codexChatgptAuthTakeover: enabled,
-      });
-      if (takeoverStatus?.codex) {
-        await setTakeoverForApp.mutateAsync({ appType: "codex", enabled: true });
-      }
-      toast.success(
-        enabled
-          ? t("proxy.takeover.codexChatgptAuthEnabled", {
-              defaultValue: "Codex 保留 ChatGPT 登录路由已启用",
-            })
-          : t("proxy.takeover.codexChatgptAuthDisabled", {
-              defaultValue: "Codex 保留 ChatGPT 登录路由已关闭",
-            }),
-        { closeButton: true },
-      );
-    } catch {
-      toast.error(
-        t("proxy.takeover.codexChatgptAuthFailed", {
-          defaultValue: "切换 Codex 路由模式失败",
-        }),
       );
     }
   };
@@ -329,30 +296,6 @@ export function ProxyPanel({
                       "选择要接管的应用，启用后该应用的请求将通过本地代理转发",
                   })}
                 </p>
-                <div className="flex items-center justify-between rounded-md border border-primary/20 bg-background/60 px-3 py-2">
-                  <div className="space-y-0.5">
-                    <Label className="text-sm font-medium">
-                      {t("proxy.takeover.codexChatgptAuth", {
-                        defaultValue: "Codex 保留 ChatGPT 登录",
-                      })}
-                    </Label>
-                    <p className="text-xs text-muted-foreground">
-                      {t("proxy.takeover.codexChatgptAuthHint", {
-                        defaultValue:
-                          "开启后，Codex 接管会写入 chatgpt auth_mode，并继续由本地代理转发第三方 Provider。",
-                      })}
-                    </p>
-                  </div>
-                  <Switch
-                    checked={
-                      codexProxyConfig?.codexChatgptAuthTakeover ?? false
-                    }
-                    onCheckedChange={handleCodexChatgptTakeoverChange}
-                    disabled={
-                      updateAppProxyConfig.isPending || !codexProxyConfig
-                    }
-                  />
-                </div>
               </div>
             </motion.div>
           )}
