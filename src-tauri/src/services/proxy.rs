@@ -356,6 +356,8 @@ impl ProxyService {
     fn ensure_codex_chatgpt_account_fields(
         auth: &mut serde_json::Map<String, Value>,
     ) -> Result<(), String> {
+        Self::ensure_codex_chatgpt_oauth_tokens(auth)?;
+
         let existing_email = auth
             .get("email")
             .and_then(Value::as_str)
@@ -376,23 +378,18 @@ impl ProxyService {
             None
         };
 
-        let email = existing_email
-            .or_else(|| account_info.as_ref().and_then(|info| info.email.clone()))
-            .ok_or_else(|| {
-                "Codex ChatGPT 登录信息缺少 email，请先在 Codex 完成 ChatGPT 登录".to_string()
-            })?;
-        let plan_type = existing_plan_type
-            .or_else(|| {
-                account_info
-                    .as_ref()
-                    .and_then(|info| info.plan_type.clone())
-            })
-            .ok_or_else(|| {
-                "Codex ChatGPT 登录信息缺少 plan_type，请先在 Codex 完成 ChatGPT 登录".to_string()
-            })?;
-
-        auth.insert("email".to_string(), json!(email));
-        auth.insert("plan_type".to_string(), json!(plan_type));
+        if let Some(email) =
+            existing_email.or_else(|| account_info.as_ref().and_then(|info| info.email.clone()))
+        {
+            auth.insert("email".to_string(), json!(email));
+        }
+        if let Some(plan_type) = existing_plan_type.or_else(|| {
+            account_info
+                .as_ref()
+                .and_then(|info| info.plan_type.clone())
+        }) {
+            auth.insert("plan_type".to_string(), json!(plan_type));
+        }
 
         if auth
             .get("account_id")
@@ -423,6 +420,31 @@ impl ProxyService {
                 .filter(|value| !value.trim().is_empty())
             {
                 auth.insert("user_id".to_string(), json!(user_id));
+            }
+        }
+
+        Ok(())
+    }
+
+    fn ensure_codex_chatgpt_oauth_tokens(
+        auth: &serde_json::Map<String, Value>,
+    ) -> Result<(), String> {
+        let Some(tokens) = auth.get("tokens").and_then(Value::as_object) else {
+            return Err(
+                "Codex ChatGPT 登录信息缺少 tokens，请先在 Codex 完成 ChatGPT 登录".to_string(),
+            );
+        };
+
+        for key in ["access_token", "refresh_token", "id_token"] {
+            let has_token = tokens
+                .get(key)
+                .and_then(Value::as_str)
+                .map(str::trim)
+                .is_some_and(|token| !token.is_empty());
+            if !has_token {
+                return Err(format!(
+                    "Codex ChatGPT 登录信息缺少 tokens.{key}，请先在 Codex 完成 ChatGPT 登录"
+                ));
             }
         }
 
@@ -2615,7 +2637,11 @@ model = "gpt-5.1-codex"
                 "auth_mode": "chatgpt",
                 "preferred_auth_method": "chatgpt",
                 "OPENAI_API_KEY": "old-key",
-                "tokens": { "id_token": "x.eyJlbWFpbCI6InVzZXJAZXhhbXBsZS5jb20iLCJodHRwczovL2FwaS5vcGVuYWkuY29tL2F1dGgiOnsiY2hhdGdwdF9wbGFuX3R5cGUiOiJmcmVlIiwiY2hhdGdwdF9hY2NvdW50X2lkIjoiYWNjLTEyMyIsImNoYXRncHRfdXNlcl9pZCI6InVzZXItMTIzIn0sInN1YiI6InN1Yi0xMjMifQ.y" },
+                "tokens": {
+                    "access_token": "access-token",
+                    "refresh_token": "refresh-token",
+                    "id_token": "x.eyJlbWFpbCI6InVzZXJAZXhhbXBsZS5jb20iLCJodHRwczovL2FwaS5vcGVuYWkuY29tL2F1dGgiOnsiY2hhdGdwdF9wbGFuX3R5cGUiOiJmcmVlIiwiY2hhdGdwdF9hY2NvdW50X2lkIjoiYWNjLTEyMyIsImNoYXRncHRfdXNlcl9pZCI6InVzZXItMTIzIn0sInN1YiI6InN1Yi0xMjMifQ.y"
+                },
                 "last_refresh": "2026-05-16T00:00:00Z"
             },
             "config": r#"
@@ -2696,7 +2722,11 @@ base_url = "https://third.example/v1"
                 "auth": {
                     "auth_mode": "chatgpt",
                     "preferred_auth_method": "chatgpt",
-                    "tokens": { "id_token": "x.eyJlbWFpbCI6InVzZXJAZXhhbXBsZS5jb20iLCJodHRwczovL2FwaS5vcGVuYWkuY29tL2F1dGgiOnsiY2hhdGdwdF9wbGFuX3R5cGUiOiJmcmVlIiwiY2hhdGdwdF9hY2NvdW50X2lkIjoiYWNjLTEyMyIsImNoYXRncHRfdXNlcl9pZCI6InVzZXItMTIzIn0sInN1YiI6InN1Yi0xMjMifQ.y" },
+                    "tokens": {
+                        "access_token": "access-token",
+                        "refresh_token": "refresh-token",
+                        "id_token": "x.eyJlbWFpbCI6InVzZXJAZXhhbXBsZS5jb20iLCJodHRwczovL2FwaS5vcGVuYWkuY29tL2F1dGgiOnsiY2hhdGdwdF9wbGFuX3R5cGUiOiJmcmVlIiwiY2hhdGdwdF9hY2NvdW50X2lkIjoiYWNjLTEyMyIsImNoYXRncHRfdXNlcl9pZCI6InVzZXItMTIzIn0sInN1YiI6InN1Yi0xMjMifQ.y"
+                    },
                     "OPENAI_API_KEY": null
                 },
                 "config": ""
@@ -2887,8 +2917,8 @@ base_url = "https://third.example/v1"
             .validate_codex_chatgpt_auth_takeover_ready()
             .expect_err("missing chatgpt metadata should fail");
         assert!(
-            err.contains("缺少 email"),
-            "error should explain missing email, got: {err}"
+            err.contains("缺少 tokens"),
+            "error should explain missing tokens, got: {err}"
         );
     }
 

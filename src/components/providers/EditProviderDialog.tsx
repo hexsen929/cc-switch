@@ -9,6 +9,7 @@ import {
   type ProviderFormValues,
 } from "@/components/providers/forms/ProviderForm";
 import { openclawApi, providersApi, vscodeApi, type AppId } from "@/lib/api";
+import { extractCodexBaseUrl } from "@/utils/providerConfigUtils";
 
 interface EditProviderDialogProps {
   open: boolean;
@@ -20,6 +21,49 @@ interface EditProviderDialogProps {
   }) => Promise<void> | void;
   appId: AppId;
   isProxyTakeover?: boolean; // 代理接管模式下不读取 live（避免显示被接管后的代理配置）
+}
+
+const PROXY_MANAGED_PLACEHOLDER = "PROXY_MANAGED";
+
+function isLocalProxyUrl(url: string): boolean {
+  const value = url.trim();
+  if (!value.startsWith("http://")) return false;
+  const rest = value.slice("http://".length);
+  return (
+    rest.startsWith("127.0.0.1") ||
+    rest.startsWith("localhost") ||
+    rest.startsWith("0.0.0.0") ||
+    rest.startsWith("[::1]") ||
+    rest.startsWith("[::]") ||
+    rest.startsWith("::1") ||
+    rest.startsWith("::")
+  );
+}
+
+function shouldUseCodexLiveSettings(live: Record<string, unknown>): boolean {
+  const auth =
+    live.auth && typeof live.auth === "object"
+      ? (live.auth as Record<string, unknown>)
+      : {};
+
+  if (
+    typeof auth.OPENAI_API_KEY === "string" &&
+    auth.OPENAI_API_KEY.trim() === PROXY_MANAGED_PLACEHOLDER
+  ) {
+    return false;
+  }
+
+  if (
+    auth.auth_mode === "chatgpt" ||
+    auth.preferred_auth_method === "chatgpt" ||
+    (auth.tokens && typeof auth.tokens === "object")
+  ) {
+    return false;
+  }
+
+  const configText = typeof live.config === "string" ? live.config : "";
+  const baseUrl = extractCodexBaseUrl(configText);
+  return !baseUrl || !isLocalProxyUrl(baseUrl);
 }
 
 export function EditProviderDialog({
@@ -105,7 +149,11 @@ export function EditProviderDialog({
               appId,
             )) as Record<string, unknown>;
             if (!cancelled && live && typeof live === "object") {
-              setLiveSettings(live);
+              setLiveSettings(
+                appId !== "codex" || shouldUseCodexLiveSettings(live)
+                  ? live
+                  : null,
+              );
               setHasLoadedLive(true);
             }
           } catch {

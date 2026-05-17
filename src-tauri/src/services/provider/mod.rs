@@ -585,6 +585,205 @@ wire_api = "responses"
 
     #[test]
     #[serial]
+    fn switching_codex_provider_does_not_backfill_local_proxy_base_url() {
+        with_test_home(|state, _| {
+            let provider_a = Provider::with_id(
+                "a".to_string(),
+                "Codex A".to_string(),
+                json!({
+                    "auth": {
+                        "OPENAI_API_KEY": "real-key-a"
+                    },
+                    "config": r#"model_provider = "a"
+model = "gpt-5.4"
+
+[model_providers.a]
+name = "a"
+base_url = "https://a.example/v1"
+wire_api = "responses"
+"#
+                }),
+                None,
+            );
+            let provider_b = Provider::with_id(
+                "b".to_string(),
+                "Codex B".to_string(),
+                json!({
+                    "auth": {
+                        "OPENAI_API_KEY": "real-key-b"
+                    },
+                    "config": r#"model_provider = "b"
+model = "gpt-5.4"
+
+[model_providers.b]
+name = "b"
+base_url = "https://b.example/v1"
+wire_api = "responses"
+"#
+                }),
+                None,
+            );
+
+            state
+                .db
+                .save_provider("codex", &provider_a)
+                .expect("save provider a");
+            state
+                .db
+                .save_provider("codex", &provider_b)
+                .expect("save provider b");
+            state
+                .db
+                .set_current_provider("codex", "a")
+                .expect("set current provider");
+            crate::settings::set_current_provider(&AppType::Codex, Some("a"))
+                .expect("set local current provider");
+
+            crate::codex_config::write_codex_live_atomic_with_stable_provider(
+                &json!({
+                    "OPENAI_API_KEY": "PROXY_MANAGED"
+                }),
+                Some(
+                    r#"model_provider = "a"
+model = "gpt-5.4"
+
+[model_providers.a]
+name = "a"
+base_url = "http://127.0.0.1:15721/v1"
+wire_api = "responses"
+"#,
+                ),
+            )
+            .expect("seed taken-over codex live config");
+
+            ProviderService::switch(state, AppType::Codex, "b").expect("switch provider");
+
+            let stored_a = state
+                .db
+                .get_provider_by_id("a", "codex")
+                .expect("read provider a")
+                .expect("provider a exists");
+            let config_text = stored_a
+                .settings_config
+                .get("config")
+                .and_then(|value| value.as_str())
+                .expect("stored config");
+            assert!(
+                !config_text.contains("127.0.0.1"),
+                "local proxy URL should not be backfilled into provider config: {config_text}"
+            );
+        });
+    }
+
+    #[test]
+    #[serial]
+    fn switching_codex_provider_does_not_backfill_chatgpt_auth_tokens() {
+        with_test_home(|state, _| {
+            let provider_a = Provider::with_id(
+                "a".to_string(),
+                "Codex A".to_string(),
+                json!({
+                    "auth": {
+                        "OPENAI_API_KEY": "real-key-a"
+                    },
+                    "config": r#"model_provider = "a"
+model = "gpt-5.4"
+
+[model_providers.a]
+name = "a"
+base_url = "https://a.example/v1"
+wire_api = "responses"
+"#
+                }),
+                None,
+            );
+            let provider_b = Provider::with_id(
+                "b".to_string(),
+                "Codex B".to_string(),
+                json!({
+                    "auth": {
+                        "OPENAI_API_KEY": "real-key-b"
+                    },
+                    "config": r#"model_provider = "b"
+model = "gpt-5.4"
+
+[model_providers.b]
+name = "b"
+base_url = "https://b.example/v1"
+wire_api = "responses"
+"#
+                }),
+                None,
+            );
+
+            state
+                .db
+                .save_provider("codex", &provider_a)
+                .expect("save provider a");
+            state
+                .db
+                .save_provider("codex", &provider_b)
+                .expect("save provider b");
+            state
+                .db
+                .set_current_provider("codex", "a")
+                .expect("set current provider");
+            crate::settings::set_current_provider(&AppType::Codex, Some("a"))
+                .expect("set local current provider");
+
+            crate::codex_config::write_codex_live_atomic_with_stable_provider(
+                &json!({
+                    "auth_mode": "chatgpt",
+                    "preferred_auth_method": "chatgpt",
+                    "tokens": {
+                        "access_token": "access-token",
+                        "refresh_token": "refresh-token",
+                        "id_token": "id-token"
+                    },
+                    "OPENAI_API_KEY": null
+                }),
+                Some(
+                    r#"model_provider = "a"
+model = "gpt-5.4"
+
+[model_providers.a]
+name = "a"
+base_url = "https://a.example/v1"
+wire_api = "responses"
+"#,
+                ),
+            )
+            .expect("seed chatgpt codex live config");
+
+            ProviderService::switch(state, AppType::Codex, "b").expect("switch provider");
+
+            let stored_a = state
+                .db
+                .get_provider_by_id("a", "codex")
+                .expect("read provider a")
+                .expect("provider a exists");
+            let auth = stored_a
+                .settings_config
+                .get("auth")
+                .and_then(Value::as_object)
+                .expect("stored auth");
+            assert_eq!(
+                auth.get("OPENAI_API_KEY").and_then(Value::as_str),
+                Some("real-key-a")
+            );
+            assert!(
+                auth.get("tokens").is_none(),
+                "ChatGPT OAuth tokens should not be backfilled into provider config"
+            );
+            assert!(
+                auth.get("auth_mode").is_none(),
+                "ChatGPT auth mode should not be backfilled into provider config"
+            );
+        });
+    }
+
+    #[test]
+    #[serial]
     fn rename_rejects_missing_original_provider() {
         with_test_home(|state, _| {
             let original = openclaw_provider("deepseek");

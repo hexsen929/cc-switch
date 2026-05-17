@@ -595,33 +595,84 @@ fn restore_live_settings_for_provider_backfill(
     }
 
     strip_codex_proxy_placeholder_for_provider_backfill(&mut settings, &provider.settings_config);
+    restore_codex_provider_auth_for_backfill(&mut settings, &provider.settings_config);
 
     settings
+}
+
+fn restore_codex_provider_auth_for_backfill(settings: &mut Value, provider_settings: &Value) {
+    let live_has_chatgpt_auth =
+        settings
+            .get("auth")
+            .and_then(Value::as_object)
+            .is_some_and(|auth| {
+                auth.get("auth_mode").and_then(Value::as_str) == Some("chatgpt")
+                    || auth.contains_key("tokens")
+                    || auth.get("preferred_auth_method").and_then(Value::as_str) == Some("chatgpt")
+            });
+
+    if !live_has_chatgpt_auth {
+        return;
+    }
+
+    let replacement_auth = provider_settings
+        .get("auth")
+        .cloned()
+        .unwrap_or_else(|| json!({}));
+
+    if let Some(obj) = settings.as_object_mut() {
+        obj.insert("auth".to_string(), replacement_auth);
+    }
 }
 
 fn strip_codex_proxy_placeholder_for_provider_backfill(
     settings: &mut Value,
     provider_settings: &Value,
 ) {
-    let Some(auth) = settings.get_mut("auth").and_then(Value::as_object_mut) else {
-        return;
-    };
-
-    if auth.get("OPENAI_API_KEY").and_then(Value::as_str) != Some(PROXY_MANAGED_PLACEHOLDER) {
-        return;
+    if let Some(auth) = settings.get_mut("auth").and_then(Value::as_object_mut) {
+        if auth.get("OPENAI_API_KEY").and_then(Value::as_str) == Some(PROXY_MANAGED_PLACEHOLDER) {
+            if let Some(original_key) = provider_settings
+                .get("auth")
+                .and_then(|auth| auth.get("OPENAI_API_KEY"))
+                .and_then(Value::as_str)
+                .map(str::trim)
+                .filter(|key| !key.is_empty() && *key != PROXY_MANAGED_PLACEHOLDER)
+            {
+                auth.insert("OPENAI_API_KEY".to_string(), json!(original_key));
+            } else {
+                auth.remove("OPENAI_API_KEY");
+            }
+        }
     }
 
-    if let Some(original_key) = provider_settings
-        .get("auth")
-        .and_then(|auth| auth.get("OPENAI_API_KEY"))
+    if let Some(config_text) = settings
+        .get("config")
         .and_then(Value::as_str)
-        .map(str::trim)
-        .filter(|key| !key.is_empty() && *key != PROXY_MANAGED_PLACEHOLDER)
+        .map(str::to_string)
     {
-        auth.insert("OPENAI_API_KEY".to_string(), json!(original_key));
-    } else {
-        auth.remove("OPENAI_API_KEY");
+        let cleaned =
+            crate::codex_config::remove_codex_toml_base_url_if(&config_text, is_local_proxy_url);
+        if cleaned != config_text {
+            if let Some(obj) = settings.as_object_mut() {
+                obj.insert("config".to_string(), Value::String(cleaned));
+            }
+        }
     }
+}
+
+fn is_local_proxy_url(url: &str) -> bool {
+    let url = url.trim();
+    if !url.starts_with("http://") {
+        return false;
+    }
+    let rest = &url["http://".len()..];
+    rest.starts_with("127.0.0.1")
+        || rest.starts_with("localhost")
+        || rest.starts_with("0.0.0.0")
+        || rest.starts_with("[::1]")
+        || rest.starts_with("[::]")
+        || rest.starts_with("::1")
+        || rest.starts_with("::")
 }
 
 pub(crate) fn normalize_provider_common_config_for_storage(

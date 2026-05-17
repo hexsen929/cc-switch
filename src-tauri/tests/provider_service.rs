@@ -249,6 +249,8 @@ fn provider_service_switch_codex_preserves_chatgpt_auth_for_keyless_provider() {
         "auth_mode": "chatgpt",
         "preferred_auth_method": "chatgpt",
         "tokens": {
+            "access_token": "access-token",
+            "refresh_token": "refresh-token",
             "id_token": "x.eyJlbWFpbCI6InVzZXJAZXhhbXBsZS5jb20iLCJodHRwczovL2FwaS5vcGVuYWkuY29tL2F1dGgiOnsiY2hhdGdwdF9wbGFuX3R5cGUiOiJwbHVzIiwiY2hhdGdwdF9hY2NvdW50X2lkIjoiYWNjLTEyMyIsImNoYXRncHRfdXNlcl9pZCI6InVzZXItMTIzIn0sInN1YiI6InN1Yi0xMjMifQ.y"
         },
         "OPENAI_API_KEY": null
