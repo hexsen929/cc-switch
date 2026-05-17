@@ -1,9 +1,9 @@
 /**
  * Codex ChatGPT auth takeover mode toggle.
  *
- * This is a mode flag for Codex local routing. It can be changed while
- * routing is off; if routing is already active, live Codex config is rewritten
- * immediately with the selected auth mode.
+ * This is a Codex auth writing mode flag. It can be changed while routing is
+ * off or on, and live Codex config is rewritten immediately with the selected
+ * auth mode.
  */
 
 import { KeyRound, Loader2 } from "lucide-react";
@@ -38,11 +38,11 @@ export function CodexChatgptAuthToggle({
   const tooltipText = enabled
     ? t("proxy.takeover.codexChatgptAuth.enabledTooltip", {
         defaultValue:
-          "Codex 本地路由将保留 ChatGPT 登录态，auth.json 写入 chatgpt 模式",
+          "Codex 将保留 ChatGPT 登录态；路由开启或关闭都会写入 chatgpt 模式",
       })
     : t("proxy.takeover.codexChatgptAuth.disabledTooltip", {
         defaultValue:
-          "Codex 本地路由使用默认接管模式，auth.json 写入代理占位 token",
+          "Codex 使用默认认证写入逻辑；本地路由开启时写入代理占位 token",
       });
 
   return (
