@@ -240,6 +240,106 @@ command = "say"
 }
 
 #[test]
+fn provider_service_switch_codex_preserves_chatgpt_auth_for_keyless_provider() {
+    let _guard = test_mutex().lock().expect("acquire test mutex");
+    reset_test_fs();
+    let _home = ensure_test_home();
+
+    let chatgpt_auth = json!({
+        "auth_mode": "chatgpt",
+        "preferred_auth_method": "chatgpt",
+        "tokens": {
+            "id_token": "x.eyJlbWFpbCI6InVzZXJAZXhhbXBsZS5jb20iLCJodHRwczovL2FwaS5vcGVuYWkuY29tL2F1dGgiOnsiY2hhdGdwdF9wbGFuX3R5cGUiOiJwbHVzIiwiY2hhdGdwdF9hY2NvdW50X2lkIjoiYWNjLTEyMyIsImNoYXRncHRfdXNlcl9pZCI6InVzZXItMTIzIn0sInN1YiI6InN1Yi0xMjMifQ.y"
+        },
+        "OPENAI_API_KEY": null
+    });
+    write_codex_live_atomic(&chatgpt_auth, Some("")).expect("seed chatgpt auth");
+
+    let mut initial_config = MultiAppConfig::default();
+    {
+        let manager = initial_config
+            .get_manager_mut(&AppType::Codex)
+            .expect("codex manager");
+        manager.current = "old-provider".to_string();
+        manager.providers.insert(
+            "old-provider".to_string(),
+            Provider::with_id(
+                "old-provider".to_string(),
+                "Old".to_string(),
+                json!({
+                    "auth": {},
+                    "config": ""
+                }),
+                None,
+            ),
+        );
+        manager.providers.insert(
+            "keyless-provider".to_string(),
+            Provider::with_id(
+                "keyless-provider".to_string(),
+                "Keyless".to_string(),
+                json!({
+                    "config": r#"model_provider = "keyless"
+model = "gpt-5.1-codex"
+
+[model_providers.keyless]
+name = "Keyless"
+base_url = "https://third.example/v1"
+"#
+                }),
+                None,
+            ),
+        );
+    }
+
+    let state = create_test_state_with_config(&initial_config).expect("create test state");
+    let mut proxy_config = futures::executor::block_on(state.db.get_proxy_config_for_app("codex"))
+        .expect("get codex proxy config");
+    proxy_config.codex_chatgpt_auth_takeover = true;
+    futures::executor::block_on(state.db.update_proxy_config_for_app(proxy_config))
+        .expect("enable codex chatgpt auth takeover");
+
+    ProviderService::switch(&state, AppType::Codex, "keyless-provider")
+        .expect("switch provider should preserve chatgpt auth");
+
+    let auth_value: serde_json::Value =
+        read_json_file(&cc_switch_lib::get_codex_auth_path()).expect("read auth.json");
+    assert_eq!(
+        auth_value.get("auth_mode").and_then(|v| v.as_str()),
+        Some("chatgpt")
+    );
+    assert!(auth_value
+        .get("OPENAI_API_KEY")
+        .is_some_and(|v| v.is_null()));
+    assert_eq!(
+        auth_value.get("email").and_then(|v| v.as_str()),
+        Some("user@example.com")
+    );
+    assert_eq!(
+        auth_value.get("plan_type").and_then(|v| v.as_str()),
+        Some("plus")
+    );
+
+    let config_text =
+        std::fs::read_to_string(cc_switch_lib::get_codex_config_path()).expect("read config.toml");
+    let parsed: toml::Value = toml::from_str(&config_text).expect("parse config.toml");
+    let provider = parsed
+        .get("model_providers")
+        .and_then(|v| v.get("keyless"))
+        .expect("provider table");
+    assert_eq!(
+        provider
+            .get("requires_openai_auth")
+            .and_then(|v| v.as_bool()),
+        Some(true)
+    );
+    assert_eq!(
+        parsed.get("preferred_auth_method").and_then(|v| v.as_str()),
+        Some("chatgpt")
+    );
+}
+
+#[test]
 fn provider_service_switch_codex_preserves_live_model_provider_id_for_history() {
     let _guard = test_mutex().lock().expect("acquire test mutex");
     reset_test_fs();

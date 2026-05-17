@@ -1670,8 +1670,18 @@ impl ProviderService {
             state.db.set_current_provider(app_type.as_str(), id)?;
         }
 
-        // Sync to live (write_gemini_live handles security flag internally for Gemini)
-        write_live_with_common_config(state.db.as_ref(), &app_type, provider)?;
+        // Sync to live (write_gemini_live handles security flag internally for Gemini).
+        // Codex ChatGPT-preserving mode must read the existing live auth before
+        // writing the target provider, otherwise the provider auth may overwrite
+        // the ChatGPT tokens before they can be merged.
+        if Self::codex_chatgpt_auth_takeover_enabled(state, &app_type) {
+            futures::executor::block_on(
+                state.proxy_service.sync_codex_auth_takeover_mode_to_live(),
+            )
+            .map_err(|e| AppError::Message(format!("同步 Codex ChatGPT 登录态失败: {e}")))?;
+        } else {
+            write_live_with_common_config(state.db.as_ref(), &app_type, provider)?;
+        }
 
         // Hermes is additive, so "switching" doesn't overwrite a live config file
         // — we instead update the top-level `model:` section to point at this
@@ -1782,7 +1792,22 @@ impl ProviderService {
             return Ok(());
         }
 
-        sync_current_provider_for_app_to_live(state, &app_type)
+        if Self::codex_chatgpt_auth_takeover_enabled(state, &app_type) {
+            futures::executor::block_on(state.proxy_service.sync_codex_auth_takeover_mode_to_live())
+                .map_err(|e| AppError::Message(format!("同步 Codex ChatGPT 登录态失败: {e}")))
+        } else {
+            sync_current_provider_for_app_to_live(state, &app_type)
+        }
+    }
+
+    fn codex_chatgpt_auth_takeover_enabled(state: &AppState, app_type: &AppType) -> bool {
+        if !matches!(app_type, AppType::Codex) {
+            return false;
+        }
+
+        futures::executor::block_on(state.db.get_proxy_config_for_app("codex"))
+            .map(|config| config.codex_chatgpt_auth_takeover)
+            .unwrap_or(false)
     }
 
     pub fn migrate_legacy_common_config_usage(
