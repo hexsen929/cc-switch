@@ -1210,7 +1210,7 @@ function App() {
               <div className="flex items-center gap-2">
                 <div className="relative inline-flex items-center">
                   <a
-                    href="https://github.com/hexsen929/cc-switch"
+                    href="https://ccswitch.io"
                     target="_blank"
                     rel="noreferrer"
                     className={cn(

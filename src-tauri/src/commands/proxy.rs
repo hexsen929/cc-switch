@@ -133,7 +133,8 @@ pub async fn update_proxy_config_for_app(
     config: AppProxyConfig,
 ) -> Result<(), String> {
     let db = &state.db;
-    let previous = if config.app_type == "codex" {
+    let app_type = config.app_type.clone();
+    let previous = if app_type == "codex" {
         db.get_proxy_config_for_app("codex").await.ok()
     } else {
         None
@@ -141,10 +142,16 @@ pub async fn update_proxy_config_for_app(
     let should_sync_codex_auth_mode = previous
         .as_ref()
         .is_some_and(|prev| prev.codex_chatgpt_auth_takeover != config.codex_chatgpt_auth_takeover);
+    let circuit_config = CircuitBreakerConfig::from(&config);
 
     db.update_proxy_config_for_app(config)
         .await
         .map_err(|e| e.to_string())?;
+
+    state
+        .proxy_service
+        .update_circuit_breaker_config_for_app(&app_type, circuit_config)
+        .await?;
 
     if should_sync_codex_auth_mode {
         state
