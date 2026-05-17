@@ -1965,6 +1965,11 @@ impl ProxyService {
             if matches!(app_type_enum, AppType::Claude) {
                 self.sync_claude_live_from_provider_while_proxy_active(&provider)
                     .await?;
+            } else if matches!(app_type_enum, AppType::Codex) {
+                let preserve_chatgpt_auth = self.codex_chatgpt_auth_takeover_enabled().await;
+                if preserve_chatgpt_auth {
+                    self.takeover_live_config_strict(&AppType::Codex).await?;
+                }
             }
         }
 

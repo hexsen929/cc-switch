@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   extractCodexBaseUrl,
   extractCodexModelName,
+  getApiKeyFromConfig,
   setCodexBaseUrl,
   setCodexModelName,
 } from "@/utils/providerConfigUtils";
@@ -147,5 +148,26 @@ describe("Codex TOML utils", () => {
 
     expect(extractCodexBaseUrl(input)).toBe("https://api.example.com/v1");
     expect(extractCodexModelName(input)).toBe("gpt-5");
+  });
+
+  it("does not expose proxy managed placeholder as a user API key", () => {
+    expect(
+      getApiKeyFromConfig(
+        JSON.stringify({ env: { CODEX_API_KEY: "PROXY_MANAGED" } }),
+        "codex",
+      ),
+    ).toBe("");
+    expect(
+      getApiKeyFromConfig(
+        JSON.stringify({ env: { GEMINI_API_KEY: "PROXY_MANAGED" } }),
+        "gemini",
+      ),
+    ).toBe("");
+    expect(
+      getApiKeyFromConfig(
+        JSON.stringify({ env: { ANTHROPIC_AUTH_TOKEN: "PROXY_MANAGED" } }),
+        "claude",
+      ),
+    ).toBe("");
   });
 });

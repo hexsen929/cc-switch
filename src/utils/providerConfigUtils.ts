@@ -4,6 +4,11 @@ import type { TemplateValueConfig } from "../config/claudeProviderPresets";
 import { normalizeTomlText } from "@/utils/textNormalization";
 import { parse as parseToml, stringify as stringifyToml } from "smol-toml";
 
+const PROXY_MANAGED_PLACEHOLDER = "PROXY_MANAGED";
+
+const isProxyManagedPlaceholder = (value: unknown): boolean =>
+  typeof value === "string" && value.trim() === PROXY_MANAGED_PLACEHOLDER;
+
 const isPlainObject = (value: unknown): value is Record<string, any> => {
   return Object.prototype.toString.call(value) === "[object Object]";
 };
@@ -178,6 +183,7 @@ export const getApiKeyFromConfig = (
     if (
       typeof config?.apiKey === "string" &&
       config.apiKey &&
+      !isProxyManagedPlaceholder(config.apiKey) &&
       !config.apiKey.includes("${")
     ) {
       return config.apiKey;
@@ -190,13 +196,19 @@ export const getApiKeyFromConfig = (
     // Gemini API Key
     if (appType === "gemini") {
       const geminiKey = env.GEMINI_API_KEY;
-      return typeof geminiKey === "string" ? geminiKey : "";
+      return typeof geminiKey === "string" &&
+        !isProxyManagedPlaceholder(geminiKey)
+        ? geminiKey
+        : "";
     }
 
     // Codex API Key
     if (appType === "codex") {
       const codexKey = env.CODEX_API_KEY;
-      return typeof codexKey === "string" ? codexKey : "";
+      return typeof codexKey === "string" &&
+        !isProxyManagedPlaceholder(codexKey)
+        ? codexKey
+        : "";
     }
 
     // Claude API Key (优先 ANTHROPIC_AUTH_TOKEN，其次 ANTHROPIC_API_KEY)
@@ -208,7 +220,7 @@ export const getApiKeyFromConfig = (
         : typeof apiKey === "string"
           ? apiKey
           : "";
-    return value;
+    return isProxyManagedPlaceholder(value) ? "" : value;
   } catch (err) {
     return "";
   }

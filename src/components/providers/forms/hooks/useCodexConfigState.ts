@@ -2,10 +2,22 @@ import { useState, useCallback, useEffect, useRef } from "react";
 import {
   extractCodexBaseUrl,
   setCodexBaseUrl as setCodexBaseUrlInConfig,
+  extractCodexBearerToken,
+  setCodexBearerToken,
   extractCodexModelName,
   setCodexModelName as setCodexModelNameInConfig,
 } from "@/utils/providerConfigUtils";
 import { normalizeTomlText } from "@/utils/textNormalization";
+
+const PROXY_MANAGED_PLACEHOLDER = "PROXY_MANAGED";
+
+const isProxyManagedPlaceholder = (value: unknown): boolean =>
+  typeof value === "string" && value.trim() === PROXY_MANAGED_PLACEHOLDER;
+
+const normalizeUserApiKey = (value: unknown): string =>
+  typeof value === "string" && !isProxyManagedPlaceholder(value)
+    ? value.trim()
+    : "";
 
 interface UseCodexConfigStateProps {
   initialData?: {
@@ -59,9 +71,10 @@ export function useCodexConfigState({ initialData }: UseCodexConfigStateProps) {
 
       // 提取 API Key
       try {
-        if (auth && typeof auth.OPENAI_API_KEY === "string") {
-          setCodexApiKey(auth.OPENAI_API_KEY);
-        }
+        setCodexApiKey(
+          normalizeUserApiKey(auth?.OPENAI_API_KEY) ||
+            normalizeUserApiKey(extractCodexBearerToken(configStr)),
+        );
       } catch {
         // ignore
       }
@@ -90,7 +103,10 @@ export function useCodexConfigState({ initialData }: UseCodexConfigStateProps) {
   const getCodexAuthApiKey = useCallback((authString: string): string => {
     try {
       const auth = JSON.parse(authString || "{}");
-      return typeof auth.OPENAI_API_KEY === "string" ? auth.OPENAI_API_KEY : "";
+      if (isProxyManagedPlaceholder(auth.OPENAI_API_KEY)) {
+        return "";
+      }
+      return normalizeUserApiKey(auth.OPENAI_API_KEY);
     } catch {
       return "";
     }
@@ -98,11 +114,13 @@ export function useCodexConfigState({ initialData }: UseCodexConfigStateProps) {
 
   // 从 codexAuth 中提取并同步 API Key
   useEffect(() => {
-    const extractedKey = getCodexAuthApiKey(codexAuth);
+    const extractedKey =
+      getCodexAuthApiKey(codexAuth) ||
+      normalizeUserApiKey(extractCodexBearerToken(codexConfig));
     if (extractedKey !== codexApiKey) {
       setCodexApiKey(extractedKey);
     }
-  }, [codexAuth, codexApiKey]);
+  }, [codexAuth, codexConfig, codexApiKey, getCodexAuthApiKey]);
 
   // 验证 Codex Auth JSON
   const validateCodexAuth = useCallback((value: string): string => {
@@ -151,8 +169,9 @@ export function useCodexConfigState({ initialData }: UseCodexConfigStateProps) {
       } catch {
         // ignore
       }
+      setCodexConfig((prev) => setCodexBearerToken(prev, trimmed));
     },
-    [codexAuth, setCodexAuth],
+    [codexAuth, setCodexAuth, setCodexConfig],
   );
 
   // 处理 Codex Base URL 变化
@@ -230,11 +249,10 @@ export function useCodexConfigState({ initialData }: UseCodexConfigStateProps) {
 
       // 提取 API Key
       try {
-        if (auth && typeof auth.OPENAI_API_KEY === "string") {
-          setCodexApiKey(auth.OPENAI_API_KEY);
-        } else {
-          setCodexApiKey("");
-        }
+        setCodexApiKey(
+          normalizeUserApiKey(auth?.OPENAI_API_KEY) ||
+            normalizeUserApiKey(extractCodexBearerToken(config)),
+        );
       } catch {
         setCodexApiKey("");
       }

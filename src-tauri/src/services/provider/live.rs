@@ -23,6 +23,8 @@ use super::gemini_auth::{
 };
 use super::normalize_claude_models_in_value;
 
+const PROXY_MANAGED_PLACEHOLDER: &str = "PROXY_MANAGED";
+
 pub(crate) fn sanitize_claude_settings_for_live(settings: &Value) -> Value {
     let mut v = settings.clone();
     if let Some(obj) = v.as_object_mut() {
@@ -592,7 +594,34 @@ fn restore_live_settings_for_provider_backfill(
         );
     }
 
+    strip_codex_proxy_placeholder_for_provider_backfill(&mut settings, &provider.settings_config);
+
     settings
+}
+
+fn strip_codex_proxy_placeholder_for_provider_backfill(
+    settings: &mut Value,
+    provider_settings: &Value,
+) {
+    let Some(auth) = settings.get_mut("auth").and_then(Value::as_object_mut) else {
+        return;
+    };
+
+    if auth.get("OPENAI_API_KEY").and_then(Value::as_str) != Some(PROXY_MANAGED_PLACEHOLDER) {
+        return;
+    }
+
+    if let Some(original_key) = provider_settings
+        .get("auth")
+        .and_then(|auth| auth.get("OPENAI_API_KEY"))
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|key| !key.is_empty() && *key != PROXY_MANAGED_PLACEHOLDER)
+    {
+        auth.insert("OPENAI_API_KEY".to_string(), json!(original_key));
+    } else {
+        auth.remove("OPENAI_API_KEY");
+    }
 }
 
 pub(crate) fn normalize_provider_common_config_for_storage(

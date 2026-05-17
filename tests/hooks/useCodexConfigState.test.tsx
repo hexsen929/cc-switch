@@ -1,0 +1,61 @@
+import { act, renderHook } from "@testing-library/react";
+import { describe, expect, it } from "vitest";
+import { useCodexConfigState } from "@/components/providers/forms/hooks/useCodexConfigState";
+
+describe("useCodexConfigState", () => {
+  it("uses experimental_bearer_token when auth API key is a proxy placeholder", () => {
+    const { result } = renderHook(() =>
+      useCodexConfigState({
+        initialData: {
+          settingsConfig: {
+            auth: {
+              OPENAI_API_KEY: "PROXY_MANAGED",
+            },
+            config: `model_provider = "custom"
+
+[model_providers.custom]
+name = "custom"
+base_url = "https://api.example/v1"
+experimental_bearer_token = "real-provider-key"
+`,
+          },
+        },
+      }),
+    );
+
+    expect(result.current.codexApiKey).toBe("real-provider-key");
+    expect(result.current.getCodexAuthApiKey(result.current.codexAuth)).toBe(
+      "",
+    );
+  });
+
+  it("writes API key to auth and experimental_bearer_token", () => {
+    const initialData = {
+      settingsConfig: {
+        auth: {},
+        config: `model_provider = "custom"
+
+[model_providers.custom]
+name = "custom"
+base_url = "https://api.example/v1"
+`,
+      },
+    };
+    const { result } = renderHook(() =>
+      useCodexConfigState({
+        initialData,
+      }),
+    );
+
+    act(() => {
+      result.current.handleCodexApiKeyChange("new-provider-key");
+    });
+
+    expect(JSON.parse(result.current.codexAuth).OPENAI_API_KEY).toBe(
+      "new-provider-key",
+    );
+    expect(result.current.codexConfig).toContain(
+      'experimental_bearer_token = "new-provider-key"',
+    );
+  });
+});
