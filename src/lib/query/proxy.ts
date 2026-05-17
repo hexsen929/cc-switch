@@ -2,6 +2,7 @@ import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { proxyApi } from "@/lib/api/proxy";
 import { toast } from "sonner";
 import { useTranslation } from "react-i18next";
+import { extractErrorMessage } from "@/utils/errorUtils";
 import type {
   GlobalProxyConfig,
   AppProxyConfig,
@@ -199,8 +200,11 @@ export function useUpdateGlobalProxyConfig() {
       queryClient.invalidateQueries({ queryKey: ["proxyStatus"] });
     },
     onError: (error: Error) => {
+      const detail =
+        extractErrorMessage(error) ||
+        t("common.unknown", { defaultValue: "未知错误" });
       toast.error(
-        t("proxy.settings.toast.saveFailed", { error: error.message }),
+        t("proxy.settings.toast.saveFailed", { error: detail }),
       );
     },
   });
@@ -240,8 +244,11 @@ export function useUpdateAppProxyConfig() {
       queryClient.invalidateQueries({ queryKey: ["proxyStatus"] });
     },
     onError: (error: Error) => {
+      const detail =
+        extractErrorMessage(error) ||
+        t("common.unknown", { defaultValue: "未知错误" });
       toast.error(
-        t("proxy.settings.toast.saveFailed", { error: error.message }),
+        t("proxy.settings.toast.saveFailed", { error: detail }),
       );
     },
   });
@@ -274,8 +281,11 @@ export function useSetClaudeModelRoutingSettings() {
       queryClient.invalidateQueries({ queryKey: ["proxyStatus"] });
     },
     onError: (error: Error) => {
+      const detail =
+        extractErrorMessage(error) ||
+        t("common.unknown", { defaultValue: "未知错误" });
       toast.error(
-        t("proxy.settings.toast.saveFailed", { error: error.message }),
+        t("proxy.settings.toast.saveFailed", { error: detail }),
       );
     },
   });
@@ -304,8 +314,11 @@ export function useUpsertClaudeModelRoutePolicy() {
       queryClient.invalidateQueries({ queryKey: ["proxyStatus"] });
     },
     onError: (error: Error) => {
+      const detail =
+        extractErrorMessage(error) ||
+        t("common.unknown", { defaultValue: "未知错误" });
       toast.error(
-        t("proxy.settings.toast.saveFailed", { error: error.message }),
+        t("proxy.settings.toast.saveFailed", { error: detail }),
       );
     },
   });

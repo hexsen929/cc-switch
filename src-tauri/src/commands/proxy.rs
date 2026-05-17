@@ -144,6 +144,12 @@ pub async fn update_proxy_config_for_app(
         .is_some_and(|prev| prev.codex_chatgpt_auth_takeover != config.codex_chatgpt_auth_takeover);
     let circuit_config = CircuitBreakerConfig::from(&config);
 
+    if should_sync_codex_auth_mode && app_type == "codex" && config.codex_chatgpt_auth_takeover {
+        state
+            .proxy_service
+            .validate_codex_chatgpt_auth_takeover_ready()?;
+    }
+
     db.update_proxy_config_for_app(config)
         .await
         .map_err(|e| e.to_string())?;

@@ -177,12 +177,50 @@ impl ProxyService {
             .unwrap_or(false)
     }
 
+    async fn codex_chatgpt_auth_takeover_enabled_for_route(&self) -> bool {
+        if !self.codex_chatgpt_auth_takeover_enabled().await {
+            return false;
+        }
+
+        match self.validate_codex_chatgpt_auth_takeover_ready() {
+            Ok(()) => true,
+            Err(e) => {
+                log::warn!(
+                    "Codex 保留 ChatGPT 登录态不可用，将按默认本地路由接管并关闭该模式: {e}"
+                );
+                if let Ok(mut config) = self.db.get_proxy_config_for_app("codex").await {
+                    config.codex_chatgpt_auth_takeover = false;
+                    if let Err(update_err) = self.db.update_proxy_config_for_app(config).await {
+                        log::warn!("关闭 Codex 保留 ChatGPT 登录态模式失败: {update_err}");
+                    }
+                }
+                false
+            }
+        }
+    }
+
+    pub fn validate_codex_chatgpt_auth_takeover_ready(&self) -> Result<(), String> {
+        let live_config = self
+            .read_codex_live()
+            .map_err(|e| format!("读取 Codex ChatGPT 登录信息失败: {e}"))?;
+        let mut auth = live_config
+            .get("auth")
+            .and_then(Value::as_object)
+            .cloned()
+            .unwrap_or_default();
+        Self::ensure_codex_chatgpt_account_fields(&mut auth)
+    }
+
     pub async fn sync_codex_auth_takeover_mode_to_live(&self) -> Result<(), String> {
         let config = self
             .db
             .get_proxy_config_for_app("codex")
             .await
             .map_err(|e| format!("获取 Codex 代理配置失败: {e}"))?;
+
+        if config.codex_chatgpt_auth_takeover {
+            self.validate_codex_chatgpt_auth_takeover_ready()?;
+        }
 
         if config.enabled || self.detect_takeover_in_live_config_for_app(&AppType::Codex) {
             self.takeover_live_config_strict(&AppType::Codex).await?;
@@ -1318,7 +1356,8 @@ impl ProxyService {
     /// 因此不需要在 URL 中添加应用前缀。
     async fn takeover_live_configs(&self) -> Result<(), String> {
         let (proxy_url, proxy_codex_base_url) = self.build_proxy_urls().await?;
-        let preserve_codex_chatgpt_auth = self.codex_chatgpt_auth_takeover_enabled().await;
+        let preserve_codex_chatgpt_auth =
+            self.codex_chatgpt_auth_takeover_enabled_for_route().await;
 
         // Claude: 修改 ANTHROPIC_BASE_URL，使用占位符替代真实 Token（代理会注入真实 Token）
         if let Ok(mut live_config) = self.read_claude_live() {
@@ -1361,7 +1400,7 @@ impl ProxyService {
     async fn takeover_live_config_strict(&self, app_type: &AppType) -> Result<(), String> {
         let (proxy_url, proxy_codex_base_url) = self.build_proxy_urls().await?;
         let preserve_codex_chatgpt_auth = if matches!(app_type, AppType::Codex) {
-            self.codex_chatgpt_auth_takeover_enabled().await
+            self.codex_chatgpt_auth_takeover_enabled_for_route().await
         } else {
             false
         };
@@ -1409,7 +1448,7 @@ impl ProxyService {
     async fn takeover_live_config_best_effort(&self, app_type: &AppType) -> Result<(), String> {
         let (proxy_url, proxy_codex_base_url) = self.build_proxy_urls().await?;
         let preserve_codex_chatgpt_auth = if matches!(app_type, AppType::Codex) {
-            self.codex_chatgpt_auth_takeover_enabled().await
+            self.codex_chatgpt_auth_takeover_enabled_for_route().await
         } else {
             false
         };
@@ -1966,7 +2005,8 @@ impl ProxyService {
                 self.sync_claude_live_from_provider_while_proxy_active(&provider)
                     .await?;
             } else if matches!(app_type_enum, AppType::Codex) {
-                let preserve_chatgpt_auth = self.codex_chatgpt_auth_takeover_enabled().await;
+                let preserve_chatgpt_auth =
+                    self.codex_chatgpt_auth_takeover_enabled_for_route().await;
                 if preserve_chatgpt_auth {
                     self.takeover_live_config_strict(&AppType::Codex).await?;
                 }
@@ -2746,6 +2786,109 @@ base_url = "https://third.example/v1"
         assert_eq!(
             parsed.get("preferred_auth_method").and_then(|v| v.as_str()),
             Some("chatgpt")
+        );
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn codex_local_route_falls_back_when_chatgpt_metadata_missing() {
+        let _home = TempHome::new();
+        crate::settings::reload_settings().expect("reload settings");
+
+        let db = Arc::new(Database::memory().expect("init db"));
+        let service = ProxyService::new(db.clone());
+
+        service
+            .write_codex_live(&json!({
+                "auth": {
+                    "OPENAI_API_KEY": "provider-key"
+                },
+                "config": r#"
+model_provider = "p1"
+model = "gpt-5.1-codex"
+
+[model_providers.p1]
+name = "p1"
+base_url = "https://third.example/v1"
+"#
+            }))
+            .expect("write initial live without chatgpt metadata");
+
+        let mut config = db
+            .get_proxy_config_for_app("codex")
+            .await
+            .expect("get proxy config");
+        config.enabled = false;
+        config.codex_chatgpt_auth_takeover = true;
+        db.update_proxy_config_for_app(config)
+            .await
+            .expect("seed stale chatgpt auth flag");
+
+        service
+            .takeover_live_config_strict(&AppType::Codex)
+            .await
+            .expect("default route takeover should still work");
+
+        let live = service.read_codex_live().expect("read live");
+        let auth = live.get("auth").expect("auth");
+        assert_eq!(
+            auth.get("OPENAI_API_KEY").and_then(Value::as_str),
+            Some(PROXY_TOKEN_PLACEHOLDER)
+        );
+        assert_ne!(
+            auth.get("auth_mode").and_then(Value::as_str),
+            Some("chatgpt")
+        );
+
+        let parsed: toml::Value = toml::from_str(
+            live.get("config")
+                .and_then(Value::as_str)
+                .expect("config text"),
+        )
+        .expect("parse live config");
+        let provider = parsed
+            .get("model_providers")
+            .and_then(|v| v.get("p1"))
+            .expect("provider table");
+        assert_eq!(
+            provider.get("base_url").and_then(|v| v.as_str()),
+            Some("http://127.0.0.1:15721/v1")
+        );
+
+        let updated = db
+            .get_proxy_config_for_app("codex")
+            .await
+            .expect("get updated proxy config");
+        assert!(
+            !updated.codex_chatgpt_auth_takeover,
+            "stale chatgpt auth mode should be cleared after fallback"
+        );
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn codex_chatgpt_auth_ready_validation_requires_account_metadata() {
+        let _home = TempHome::new();
+        crate::settings::reload_settings().expect("reload settings");
+
+        let db = Arc::new(Database::memory().expect("init db"));
+        let service = ProxyService::new(db.clone());
+
+        service
+            .write_codex_live(&json!({
+                "auth": {
+                    "OPENAI_API_KEY": "provider-key"
+                },
+                "config": ""
+            }))
+            .expect("write live without chatgpt metadata");
+
+        let err = service
+            .validate_codex_chatgpt_auth_takeover_ready()
+            .expect_err("missing chatgpt metadata should fail");
+        assert!(
+            err.contains("缺少 email"),
+            "error should explain missing email, got: {err}"
         );
     }
 
