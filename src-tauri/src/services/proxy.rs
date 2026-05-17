@@ -153,7 +153,7 @@ impl ProxyService {
         if preserve_chatgpt_auth {
             auth.insert("auth_mode".to_string(), json!("chatgpt"));
             auth.insert("preferred_auth_method".to_string(), json!("chatgpt"));
-            auth.insert("OPENAI_API_KEY".to_string(), json!(PROXY_TOKEN_PLACEHOLDER));
+            auth.insert("OPENAI_API_KEY".to_string(), Value::Null);
             Self::ensure_codex_chatgpt_account_fields(auth)?;
         } else {
             auth.insert("OPENAI_API_KEY".to_string(), json!(PROXY_TOKEN_PLACEHOLDER));
@@ -2547,7 +2547,7 @@ model = "gpt-5.1-codex"
     }
 
     #[test]
-    fn codex_chatgpt_takeover_preserves_oauth_fields_and_uses_proxy_placeholder() {
+    fn codex_chatgpt_takeover_preserves_oauth_fields_and_nulls_api_key() {
         let mut live_config = json!({
             "auth": {
                 "auth_mode": "chatgpt",
@@ -2582,10 +2582,7 @@ base_url = "https://third.example/v1"
             auth.get("preferred_auth_method").and_then(Value::as_str),
             Some("chatgpt")
         );
-        assert_eq!(
-            auth.get("OPENAI_API_KEY").and_then(Value::as_str),
-            Some(PROXY_TOKEN_PLACEHOLDER)
-        );
+        assert!(auth.get("OPENAI_API_KEY").is_some_and(Value::is_null));
         assert_eq!(
             auth.get("email").and_then(Value::as_str),
             Some("user@example.com")
