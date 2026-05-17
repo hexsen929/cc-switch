@@ -1838,6 +1838,12 @@ impl ProviderService {
                 if !app_type.is_additive_mode() {
                     // Only backfill when switching to a different provider
                     if let Ok(live_config) = read_live_settings(app_type.clone()) {
+                        if matches!(app_type, AppType::Codex) {
+                            state
+                                .proxy_service
+                                .cache_codex_chatgpt_auth_snapshot_from_live_config(&live_config);
+                        }
+
                         if let Some(mut current_provider) = providers.get(&current_id).cloned() {
                             current_provider.settings_config =
                                 strip_common_config_from_live_settings(

@@ -342,6 +342,125 @@ base_url = "https://third.example/v1"
 }
 
 #[test]
+fn provider_service_switch_codex_caches_chatgpt_auth_for_later_takeover() {
+    let _guard = test_mutex().lock().expect("acquire test mutex");
+    reset_test_fs();
+    let _home = ensure_test_home();
+
+    let chatgpt_auth = json!({
+        "auth_mode": "chatgpt",
+        "preferred_auth_method": "chatgpt",
+        "tokens": {
+            "access_token": "access-token",
+            "refresh_token": "refresh-token",
+            "id_token": "x.eyJlbWFpbCI6InVzZXJAZXhhbXBsZS5jb20iLCJodHRwczovL2FwaS5vcGVuYWkuY29tL2F1dGgiOnsiY2hhdGdwdF9wbGFuX3R5cGUiOiJwbHVzIiwiY2hhdGdwdF9hY2NvdW50X2lkIjoiYWNjLTEyMyIsImNoYXRncHRfdXNlcl9pZCI6InVzZXItMTIzIn0sInN1YiI6InN1Yi0xMjMifQ.y"
+        },
+        "OPENAI_API_KEY": null
+    });
+    write_codex_live_atomic(&chatgpt_auth, Some("")).expect("seed chatgpt auth");
+
+    let mut initial_config = MultiAppConfig::default();
+    {
+        let manager = initial_config
+            .get_manager_mut(&AppType::Codex)
+            .expect("codex manager");
+        manager.current = "chatgpt-source".to_string();
+        manager.providers.insert(
+            "chatgpt-source".to_string(),
+            Provider::with_id(
+                "chatgpt-source".to_string(),
+                "ChatGPT Source".to_string(),
+                json!({
+                    "auth": {},
+                    "config": ""
+                }),
+                None,
+            ),
+        );
+        manager.providers.insert(
+            "plain-provider".to_string(),
+            Provider::with_id(
+                "plain-provider".to_string(),
+                "Plain".to_string(),
+                json!({
+                    "auth": { "OPENAI_API_KEY": "plain-key" },
+                    "config": r#"model_provider = "plain"
+model = "gpt-5.1-codex"
+
+[model_providers.plain]
+name = "Plain"
+base_url = "https://plain.example/v1"
+"#
+                }),
+                None,
+            ),
+        );
+    }
+
+    let state = create_test_state_with_config(&initial_config).expect("create test state");
+
+    ProviderService::switch(&state, AppType::Codex, "plain-provider")
+        .expect("switch should cache chatgpt auth before writing plain provider");
+
+    let auth_after_switch: serde_json::Value =
+        read_json_file(&cc_switch_lib::get_codex_auth_path()).expect("read auth after switch");
+    assert_eq!(
+        auth_after_switch
+            .get("OPENAI_API_KEY")
+            .and_then(|v| v.as_str()),
+        Some("plain-key"),
+        "plain provider should still use the original non-preserve write path"
+    );
+
+    let mut proxy_config = futures::executor::block_on(state.db.get_proxy_config_for_app("codex"))
+        .expect("get codex proxy config");
+    proxy_config.codex_chatgpt_auth_takeover = true;
+    futures::executor::block_on(state.db.update_proxy_config_for_app(proxy_config))
+        .expect("enable codex chatgpt auth takeover");
+
+    futures::executor::block_on(state.proxy_service.sync_codex_auth_takeover_mode_to_live())
+        .expect("preserve mode should restore cached ChatGPT auth");
+
+    let restored_auth: serde_json::Value =
+        read_json_file(&cc_switch_lib::get_codex_auth_path()).expect("read restored auth");
+    assert_eq!(
+        restored_auth.get("auth_mode").and_then(|v| v.as_str()),
+        Some("chatgpt")
+    );
+    assert!(restored_auth
+        .get("OPENAI_API_KEY")
+        .is_some_and(|v| v.is_null()));
+    assert_eq!(
+        restored_auth.get("email").and_then(|v| v.as_str()),
+        Some("user@example.com")
+    );
+    assert_eq!(
+        restored_auth.get("plan_type").and_then(|v| v.as_str()),
+        Some("plus")
+    );
+
+    let config_text =
+        std::fs::read_to_string(cc_switch_lib::get_codex_config_path()).expect("read config.toml");
+    let parsed: toml::Value = toml::from_str(&config_text).expect("parse config.toml");
+    let provider = parsed
+        .get("model_providers")
+        .and_then(|v| v.get("plain"))
+        .expect("provider table");
+    assert_eq!(
+        provider
+            .get("experimental_bearer_token")
+            .and_then(|v| v.as_str()),
+        Some("plain-key")
+    );
+    assert_eq!(
+        provider
+            .get("requires_openai_auth")
+            .and_then(|v| v.as_bool()),
+        Some(true)
+    );
+}
+
+#[test]
 fn provider_service_switch_codex_preserves_live_model_provider_id_for_history() {
     let _guard = test_mutex().lock().expect("acquire test mutex");
     reset_test_fs();

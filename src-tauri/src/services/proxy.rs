@@ -3,7 +3,9 @@
 //! 提供代理服务器的启动、停止和配置管理
 
 use crate::app_config::AppType;
-use crate::config::{get_claude_settings_path, read_json_file, write_json_file};
+use crate::config::{
+    get_app_config_dir, get_claude_settings_path, read_json_file, write_json_file,
+};
 use crate::database::Database;
 use crate::provider::Provider;
 use crate::proxy::server::ProxyServer;
@@ -14,6 +16,7 @@ use crate::services::provider::{
 };
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
 use serde_json::{json, Map, Value};
+use std::path::PathBuf;
 use std::str::FromStr;
 use std::sync::Arc;
 use tauri::Emitter;
@@ -21,6 +24,7 @@ use tokio::sync::RwLock;
 
 /// 用于接管 Live 配置时的占位符（避免客户端提示缺少 key，同时不泄露真实 Token）
 const PROXY_TOKEN_PLACEHOLDER: &str = "PROXY_MANAGED";
+const CODEX_CHATGPT_AUTH_SNAPSHOT_FILE: &str = "codex_chatgpt_auth_snapshot.json";
 
 /// 代理接管模式下需要从 Claude Live 配置中移除的"模型覆盖"字段。
 ///
@@ -131,6 +135,7 @@ impl ProxyService {
     }
 
     fn apply_codex_takeover_fields(
+        &self,
         config: &mut Value,
         proxy_codex_base_url: &str,
         preserve_chatgpt_auth: bool,
@@ -151,10 +156,10 @@ impl ProxyService {
             .as_object_mut()
             .expect("Codex auth should be normalized to an object");
         if preserve_chatgpt_auth {
-            auth.insert("auth_mode".to_string(), json!("chatgpt"));
-            auth.insert("preferred_auth_method".to_string(), json!("chatgpt"));
-            auth.insert("OPENAI_API_KEY".to_string(), Value::Null);
-            Self::ensure_codex_chatgpt_account_fields(auth)?;
+            let normalized_auth = self
+                .normalize_and_store_codex_chatgpt_auth(auth.clone())
+                .or_else(|_| self.load_codex_chatgpt_auth_for_takeover())?;
+            *auth = normalized_auth;
         } else {
             auth.insert("OPENAI_API_KEY".to_string(), json!(PROXY_TOKEN_PLACEHOLDER));
         }
@@ -167,6 +172,156 @@ impl ProxyService {
         }
         root.insert("config".to_string(), json!(updated_config));
         Ok(())
+    }
+
+    fn codex_chatgpt_auth_snapshot_path() -> PathBuf {
+        get_app_config_dir().join(CODEX_CHATGPT_AUTH_SNAPSHOT_FILE)
+    }
+
+    fn read_codex_chatgpt_auth_snapshot(&self) -> Result<Option<Map<String, Value>>, String> {
+        let path = Self::codex_chatgpt_auth_snapshot_path();
+        if !path.exists() {
+            return Ok(None);
+        }
+
+        let value: Value =
+            read_json_file(&path).map_err(|e| format!("读取 Codex ChatGPT 登录态快照失败: {e}"))?;
+        let auth_value = value.get("auth").cloned().unwrap_or(value);
+        let Value::Object(auth) = auth_value else {
+            return Err("Codex ChatGPT 登录态快照格式无效".to_string());
+        };
+
+        Self::normalize_codex_chatgpt_auth(auth).map(Some)
+    }
+
+    fn write_codex_chatgpt_auth_snapshot(&self, auth: &Map<String, Value>) -> Result<(), String> {
+        let path = Self::codex_chatgpt_auth_snapshot_path();
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent)
+                .map_err(|e| format!("创建 Codex ChatGPT 登录态快照目录失败: {e}"))?;
+        }
+
+        let content = serde_json::to_string_pretty(&Value::Object(auth.clone()))
+            .map_err(|e| format!("序列化 Codex ChatGPT 登录态快照失败: {e}"))?;
+        let parent = path
+            .parent()
+            .ok_or_else(|| "Codex ChatGPT 登录态快照路径无效".to_string())?;
+        let file_name = path
+            .file_name()
+            .ok_or_else(|| "Codex ChatGPT 登录态快照文件名无效".to_string())?
+            .to_string_lossy()
+            .to_string();
+        let ts = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_nanos();
+        let tmp_path = parent.join(format!("{file_name}.tmp.{ts}"));
+
+        #[cfg(unix)]
+        {
+            use std::io::Write;
+            use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
+
+            let mut file = std::fs::OpenOptions::new()
+                .create_new(true)
+                .write(true)
+                .mode(0o600)
+                .open(&tmp_path)
+                .map_err(|e| format!("创建 Codex ChatGPT 登录态快照临时文件失败: {e}"))?;
+            file.write_all(content.as_bytes())
+                .map_err(|e| format!("写入 Codex ChatGPT 登录态快照失败: {e}"))?;
+            file.flush()
+                .map_err(|e| format!("刷新 Codex ChatGPT 登录态快照失败: {e}"))?;
+            std::fs::rename(&tmp_path, &path)
+                .map_err(|e| format!("替换 Codex ChatGPT 登录态快照失败: {e}"))?;
+            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600))
+                .map_err(|e| format!("设置 Codex ChatGPT 登录态快照权限失败: {e}"))?;
+        }
+
+        #[cfg(windows)]
+        {
+            use std::io::Write;
+
+            let mut file = std::fs::OpenOptions::new()
+                .create_new(true)
+                .write(true)
+                .open(&tmp_path)
+                .map_err(|e| format!("创建 Codex ChatGPT 登录态快照临时文件失败: {e}"))?;
+            file.write_all(content.as_bytes())
+                .map_err(|e| format!("写入 Codex ChatGPT 登录态快照失败: {e}"))?;
+            file.flush()
+                .map_err(|e| format!("刷新 Codex ChatGPT 登录态快照失败: {e}"))?;
+            if path.exists() {
+                let _ = std::fs::remove_file(&path);
+            }
+            std::fs::rename(&tmp_path, &path)
+                .map_err(|e| format!("替换 Codex ChatGPT 登录态快照失败: {e}"))?;
+        }
+
+        Ok(())
+    }
+
+    fn normalize_codex_chatgpt_auth(
+        mut auth: Map<String, Value>,
+    ) -> Result<Map<String, Value>, String> {
+        auth.insert("auth_mode".to_string(), json!("chatgpt"));
+        auth.insert("preferred_auth_method".to_string(), json!("chatgpt"));
+        auth.insert("OPENAI_API_KEY".to_string(), Value::Null);
+        Self::ensure_codex_chatgpt_account_fields(&mut auth)?;
+        Ok(auth)
+    }
+
+    fn normalize_and_store_codex_chatgpt_auth(
+        &self,
+        auth: Map<String, Value>,
+    ) -> Result<Map<String, Value>, String> {
+        let normalized = Self::normalize_codex_chatgpt_auth(auth)?;
+        if let Err(e) = self.write_codex_chatgpt_auth_snapshot(&normalized) {
+            log::warn!("保存 Codex ChatGPT 登录态快照失败: {e}");
+        }
+        Ok(normalized)
+    }
+
+    fn cache_codex_chatgpt_auth_from_live_config(&self, live_config: &Value) {
+        let Some(auth) = live_config.get("auth").and_then(Value::as_object).cloned() else {
+            return;
+        };
+
+        if let Err(e) = self.normalize_and_store_codex_chatgpt_auth(auth) {
+            log::debug!("跳过 Codex ChatGPT 登录态快照更新: {e}");
+        }
+    }
+
+    pub fn cache_codex_chatgpt_auth_snapshot_from_live_config(&self, live_config: &Value) {
+        self.cache_codex_chatgpt_auth_from_live_config(live_config);
+    }
+
+    fn load_codex_chatgpt_auth_for_takeover(&self) -> Result<Map<String, Value>, String> {
+        let live_error = match self.read_codex_live() {
+            Ok(live_config) => {
+                if let Some(auth) = live_config.get("auth").and_then(Value::as_object).cloned() {
+                    match self.normalize_and_store_codex_chatgpt_auth(auth) {
+                        Ok(auth) => return Ok(auth),
+                        Err(e) => Some(e),
+                    }
+                } else {
+                    Some("Codex auth.json 格式无效，缺少对象内容".to_string())
+                }
+            }
+            Err(e) => Some(format!("读取 Codex ChatGPT 登录信息失败: {e}")),
+        };
+
+        match self.read_codex_chatgpt_auth_snapshot() {
+            Ok(Some(auth)) => Ok(auth),
+            Ok(None) => Err(format!(
+                "{}；也没有可用的 ChatGPT 登录态快照。请先在 Codex 完成一次 ChatGPT 登录，再打开“保留 ChatGPT 登录态”。",
+                live_error.unwrap_or_else(|| "Codex ChatGPT 登录信息不可用".to_string())
+            )),
+            Err(snapshot_error) => Err(format!(
+                "{}；读取本地 ChatGPT 登录态快照也失败: {snapshot_error}",
+                live_error.unwrap_or_else(|| "Codex ChatGPT 登录信息不可用".to_string())
+            )),
+        }
     }
 
     async fn codex_chatgpt_auth_takeover_enabled(&self) -> bool {
@@ -200,15 +355,7 @@ impl ProxyService {
     }
 
     pub fn validate_codex_chatgpt_auth_takeover_ready(&self) -> Result<(), String> {
-        let live_config = self
-            .read_codex_live()
-            .map_err(|e| format!("读取 Codex ChatGPT 登录信息失败: {e}"))?;
-        let mut auth = live_config
-            .get("auth")
-            .and_then(Value::as_object)
-            .cloned()
-            .unwrap_or_default();
-        Self::ensure_codex_chatgpt_account_fields(&mut auth)
+        self.load_codex_chatgpt_auth_for_takeover().map(|_| ())
     }
 
     pub async fn sync_codex_auth_takeover_mode_to_live(&self) -> Result<(), String> {
@@ -326,21 +473,26 @@ impl ProxyService {
             .and_then(Value::as_object)
             .cloned()
             .unwrap_or_default();
-        let mut merged_auth = self
-            .read_codex_live()
-            .ok()
-            .and_then(|live| live.get("auth").and_then(Value::as_object).cloned())
-            .unwrap_or_default();
+        let mut merged_auth = self.load_codex_chatgpt_auth_for_takeover()?;
 
         for (key, value) in provider_auth {
-            if key != "OPENAI_API_KEY" {
+            if !matches!(
+                key.as_str(),
+                "OPENAI_API_KEY"
+                    | "auth_mode"
+                    | "preferred_auth_method"
+                    | "tokens"
+                    | "last_refresh"
+                    | "email"
+                    | "plan_type"
+                    | "planType"
+                    | "account_id"
+                    | "user_id"
+            ) {
                 merged_auth.insert(key, value);
             }
         }
-        merged_auth.insert("auth_mode".to_string(), json!("chatgpt"));
-        merged_auth.insert("preferred_auth_method".to_string(), json!("chatgpt"));
-        merged_auth.insert("OPENAI_API_KEY".to_string(), Value::Null);
-        Self::ensure_codex_chatgpt_account_fields(&mut merged_auth)?;
+        merged_auth = Self::normalize_codex_chatgpt_auth(merged_auth)?;
         root.insert("auth".to_string(), Value::Object(merged_auth));
 
         let config_str = root.get("config").and_then(Value::as_str).unwrap_or("");
@@ -372,11 +524,7 @@ impl ProxyService {
             .filter(|value| !value.is_empty())
             .map(str::to_string);
 
-        let account_info = if existing_email.is_none() || existing_plan_type.is_none() {
-            Self::codex_chatgpt_account_info_from_auth(auth)
-        } else {
-            None
-        };
+        let account_info = Self::codex_chatgpt_account_info_from_auth(auth);
 
         if let Some(email) =
             existing_email.or_else(|| account_info.as_ref().and_then(|info| info.email.clone()))
@@ -404,6 +552,24 @@ impl ProxyService {
                 .filter(|value| !value.trim().is_empty())
             {
                 auth.insert("account_id".to_string(), json!(account_id));
+            }
+        }
+
+        if let Some(tokens) = auth.get_mut("tokens").and_then(Value::as_object_mut) {
+            let token_account_id_missing = tokens
+                .get("account_id")
+                .and_then(Value::as_str)
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .is_none();
+            if token_account_id_missing {
+                if let Some(account_id) = account_info
+                    .as_ref()
+                    .and_then(|info| info.account_id.as_ref())
+                    .filter(|value| !value.trim().is_empty())
+                {
+                    tokens.insert("account_id".to_string(), json!(account_id));
+                }
             }
         }
 
@@ -937,6 +1103,10 @@ impl ProxyService {
             _ => return Err("该应用不支持代理功能".to_string()),
         };
 
+        if matches!(app_type, AppType::Codex) {
+            self.cache_codex_chatgpt_auth_from_live_config(&live_config);
+        }
+
         self.sync_live_config_to_provider(app_type, &live_config)
             .await
     }
@@ -946,6 +1116,11 @@ impl ProxyService {
         app_type: &AppType,
         live_config: &Value,
     ) -> Result<(), String> {
+        match app_type {
+            AppType::Codex => self.cache_codex_chatgpt_auth_from_live_config(live_config),
+            _ => {}
+        }
+
         match app_type {
             AppType::Claude => {
                 let provider_id =
@@ -1299,6 +1474,7 @@ impl ProxyService {
 
         // Codex
         if let Ok(config) = self.read_codex_live() {
+            self.cache_codex_chatgpt_auth_from_live_config(&config);
             let json_str = serde_json::to_string(&config)
                 .map_err(|e| format!("序列化 Codex 配置失败: {e}"))?;
             self.db
@@ -1329,6 +1505,10 @@ impl ProxyService {
             AppType::Gemini => ("gemini", self.read_gemini_live()?),
             _ => return Err("该应用不支持代理功能".to_string()),
         };
+
+        if matches!(app_type, AppType::Codex) {
+            self.cache_codex_chatgpt_auth_from_live_config(&config);
+        }
 
         let json_str = serde_json::to_string(&config)
             .map_err(|e| format!("序列化 {app_type_str} 配置失败: {e}"))?;
@@ -1390,7 +1570,7 @@ impl ProxyService {
 
         // Codex: 修改 config.toml 的 base_url，auth.json 的 OPENAI_API_KEY（代理会注入真实 Token）
         if let Ok(mut live_config) = self.read_codex_live() {
-            Self::apply_codex_takeover_fields(
+            self.apply_codex_takeover_fields(
                 &mut live_config,
                 &proxy_codex_base_url,
                 preserve_codex_chatgpt_auth,
@@ -1436,7 +1616,7 @@ impl ProxyService {
             }
             AppType::Codex => {
                 let mut live_config = self.read_codex_live()?;
-                Self::apply_codex_takeover_fields(
+                self.apply_codex_takeover_fields(
                     &mut live_config,
                     &proxy_codex_base_url,
                     preserve_codex_chatgpt_auth,
@@ -1484,7 +1664,7 @@ impl ProxyService {
             }
             AppType::Codex => {
                 if let Ok(mut live_config) = self.read_codex_live() {
-                    Self::apply_codex_takeover_fields(
+                    self.apply_codex_takeover_fields(
                         &mut live_config,
                         &proxy_codex_base_url,
                         preserve_codex_chatgpt_auth,
@@ -2631,7 +2811,13 @@ model = "gpt-5.1-codex"
     }
 
     #[test]
+    #[serial]
     fn codex_chatgpt_takeover_preserves_oauth_fields_and_nulls_api_key() {
+        let _home = TempHome::new();
+        crate::settings::reload_settings().expect("reload settings");
+
+        let db = Arc::new(Database::memory().expect("init db"));
+        let service = ProxyService::new(db);
         let mut live_config = json!({
             "auth": {
                 "auth_mode": "chatgpt",
@@ -2654,12 +2840,9 @@ base_url = "https://third.example/v1"
 "#
         });
 
-        ProxyService::apply_codex_takeover_fields(
-            &mut live_config,
-            "http://127.0.0.1:15721/v1",
-            true,
-        )
-        .expect("apply takeover fields");
+        service
+            .apply_codex_takeover_fields(&mut live_config, "http://127.0.0.1:15721/v1", true)
+            .expect("apply takeover fields");
 
         let auth = live_config.get("auth").expect("auth should exist");
         assert_eq!(
@@ -2816,6 +2999,216 @@ base_url = "https://third.example/v1"
         assert_eq!(
             parsed.get("preferred_auth_method").and_then(|v| v.as_str()),
             Some("chatgpt")
+        );
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn codex_chatgpt_direct_mode_restores_snapshot_when_live_lacks_tokens() {
+        let _home = TempHome::new();
+        crate::settings::reload_settings().expect("reload settings");
+
+        let db = Arc::new(Database::memory().expect("init db"));
+        let service = ProxyService::new(db.clone());
+
+        service
+            .write_codex_chatgpt_auth_snapshot(
+                &json!({
+                    "auth_mode": "chatgpt",
+                    "preferred_auth_method": "chatgpt",
+                    "tokens": {
+                        "access_token": "access-token",
+                        "refresh_token": "refresh-token",
+                        "id_token": "x.eyJlbWFpbCI6InVzZXJAZXhhbXBsZS5jb20iLCJodHRwczovL2FwaS5vcGVuYWkuY29tL2F1dGgiOnsiY2hhdGdwdF9wbGFuX3R5cGUiOiJwbHVzIiwiY2hhdGdwdF9hY2NvdW50X2lkIjoiYWNjLTEyMyIsImNoYXRncHRfdXNlcl9pZCI6InVzZXItMTIzIn0sInN1YiI6InN1Yi0xMjMifQ.y"
+                    },
+                    "OPENAI_API_KEY": null
+                })
+                .as_object()
+                .expect("snapshot auth object"),
+            )
+            .expect("write snapshot");
+
+        service
+            .write_codex_live(&json!({
+                "auth": {
+                    "OPENAI_API_KEY": "provider-key"
+                },
+                "config": ""
+            }))
+            .expect("write live without chatgpt tokens");
+
+        let provider = Provider::with_id(
+            "p1".to_string(),
+            "P1".to_string(),
+            json!({
+                "auth": { "OPENAI_API_KEY": "provider-key" },
+                "config": r#"
+model_provider = "p1"
+model = "gpt-5.1-codex"
+
+[model_providers.p1]
+name = "p1"
+base_url = "https://third.example/v1"
+"#
+            }),
+            None,
+        );
+        db.save_provider("codex", &provider).expect("save provider");
+        db.set_current_provider("codex", "p1")
+            .expect("set db current provider");
+        crate::settings::set_current_provider(&AppType::Codex, Some("p1"))
+            .expect("set local current provider");
+
+        let mut config = db
+            .get_proxy_config_for_app("codex")
+            .await
+            .expect("get proxy config");
+        config.enabled = false;
+        config.codex_chatgpt_auth_takeover = true;
+        db.update_proxy_config_for_app(config)
+            .await
+            .expect("update proxy config");
+
+        service
+            .sync_codex_auth_takeover_mode_to_live()
+            .await
+            .expect("sync direct mode from snapshot");
+
+        let live = service.read_codex_live().expect("read live");
+        let auth = live.get("auth").expect("auth");
+        assert_eq!(
+            auth.get("auth_mode").and_then(Value::as_str),
+            Some("chatgpt")
+        );
+        assert!(auth.get("OPENAI_API_KEY").is_some_and(Value::is_null));
+        assert_eq!(
+            auth.get("email").and_then(Value::as_str),
+            Some("user@example.com")
+        );
+        assert_eq!(auth.get("plan_type").and_then(Value::as_str), Some("plus"));
+
+        let parsed: toml::Value = toml::from_str(
+            live.get("config")
+                .and_then(Value::as_str)
+                .expect("config text"),
+        )
+        .expect("parse live config");
+        let provider = parsed
+            .get("model_providers")
+            .and_then(|v| v.get("p1"))
+            .expect("provider table");
+        assert_eq!(
+            provider
+                .get("experimental_bearer_token")
+                .and_then(|v| v.as_str()),
+            Some("provider-key")
+        );
+        assert_eq!(
+            provider
+                .get("requires_openai_auth")
+                .and_then(|v| v.as_bool()),
+            Some(true)
+        );
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn codex_local_route_restores_snapshot_when_live_lacks_tokens() {
+        let _home = TempHome::new();
+        crate::settings::reload_settings().expect("reload settings");
+
+        let db = Arc::new(Database::memory().expect("init db"));
+        let service = ProxyService::new(db.clone());
+
+        service
+            .write_codex_chatgpt_auth_snapshot(
+                &json!({
+                    "auth_mode": "chatgpt",
+                    "preferred_auth_method": "chatgpt",
+                    "tokens": {
+                        "access_token": "access-token",
+                        "refresh_token": "refresh-token",
+                        "id_token": "x.eyJlbWFpbCI6InVzZXJAZXhhbXBsZS5jb20iLCJodHRwczovL2FwaS5vcGVuYWkuY29tL2F1dGgiOnsiY2hhdGdwdF9wbGFuX3R5cGUiOiJwbHVzIiwiY2hhdGdwdF9hY2NvdW50X2lkIjoiYWNjLTEyMyIsImNoYXRncHRfdXNlcl9pZCI6InVzZXItMTIzIn0sInN1YiI6InN1Yi0xMjMifQ.y"
+                    },
+                    "OPENAI_API_KEY": null
+                })
+                .as_object()
+                .expect("snapshot auth object"),
+            )
+            .expect("write snapshot");
+
+        service
+            .write_codex_live(&json!({
+                "auth": {
+                    "OPENAI_API_KEY": "provider-key"
+                },
+                "config": r#"
+model_provider = "p1"
+model = "gpt-5.1-codex"
+
+[model_providers.p1]
+name = "p1"
+base_url = "https://third.example/v1"
+"#
+            }))
+            .expect("write live without chatgpt tokens");
+
+        let mut config = db
+            .get_proxy_config_for_app("codex")
+            .await
+            .expect("get proxy config");
+        config.enabled = false;
+        config.codex_chatgpt_auth_takeover = true;
+        db.update_proxy_config_for_app(config)
+            .await
+            .expect("update proxy config");
+
+        service
+            .takeover_live_config_strict(&AppType::Codex)
+            .await
+            .expect("route takeover should restore cached chatgpt auth");
+
+        let live = service.read_codex_live().expect("read live");
+        let auth = live.get("auth").expect("auth");
+        assert_eq!(
+            auth.get("auth_mode").and_then(Value::as_str),
+            Some("chatgpt")
+        );
+        assert!(auth.get("OPENAI_API_KEY").is_some_and(Value::is_null));
+        assert_eq!(
+            auth.get("email").and_then(Value::as_str),
+            Some("user@example.com")
+        );
+        assert_eq!(auth.get("plan_type").and_then(Value::as_str), Some("plus"));
+
+        let parsed: toml::Value = toml::from_str(
+            live.get("config")
+                .and_then(Value::as_str)
+                .expect("config text"),
+        )
+        .expect("parse live config");
+        let provider = parsed
+            .get("model_providers")
+            .and_then(|v| v.get("p1"))
+            .expect("provider table");
+        assert_eq!(
+            provider.get("base_url").and_then(|v| v.as_str()),
+            Some("http://127.0.0.1:15721/v1")
+        );
+        assert_eq!(
+            provider
+                .get("requires_openai_auth")
+                .and_then(|v| v.as_bool()),
+            Some(true)
+        );
+
+        let updated = db
+            .get_proxy_config_for_app("codex")
+            .await
+            .expect("get updated proxy config");
+        assert!(
+            updated.codex_chatgpt_auth_takeover,
+            "valid snapshot should keep chatgpt auth mode enabled"
         );
     }
 
