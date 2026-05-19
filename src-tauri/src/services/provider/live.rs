@@ -595,23 +595,25 @@ fn restore_live_settings_for_provider_backfill(
     }
 
     strip_codex_proxy_placeholder_for_provider_backfill(&mut settings, &provider.settings_config);
+    restore_codex_provider_config_for_backfill(&mut settings, &provider.settings_config);
     restore_codex_provider_auth_for_backfill(&mut settings, &provider.settings_config);
 
     settings
 }
 
-fn restore_codex_provider_auth_for_backfill(settings: &mut Value, provider_settings: &Value) {
-    let live_has_chatgpt_auth =
-        settings
-            .get("auth")
-            .and_then(Value::as_object)
-            .is_some_and(|auth| {
-                auth.get("auth_mode").and_then(Value::as_str) == Some("chatgpt")
-                    || auth.contains_key("tokens")
-                    || auth.get("preferred_auth_method").and_then(Value::as_str) == Some("chatgpt")
-            });
+fn codex_settings_has_chatgpt_auth(settings: &Value) -> bool {
+    settings
+        .get("auth")
+        .and_then(Value::as_object)
+        .is_some_and(|auth| {
+            auth.get("auth_mode").and_then(Value::as_str) == Some("chatgpt")
+                || auth.contains_key("tokens")
+                || auth.get("preferred_auth_method").and_then(Value::as_str) == Some("chatgpt")
+        })
+}
 
-    if !live_has_chatgpt_auth {
+fn restore_codex_provider_auth_for_backfill(settings: &mut Value, provider_settings: &Value) {
+    if !codex_settings_has_chatgpt_auth(settings) {
         return;
     }
 
@@ -622,6 +624,94 @@ fn restore_codex_provider_auth_for_backfill(settings: &mut Value, provider_setti
 
     if let Some(obj) = settings.as_object_mut() {
         obj.insert("auth".to_string(), replacement_auth);
+    }
+}
+
+fn active_codex_model_provider_id(doc: &DocumentMut) -> Option<String> {
+    doc.get("model_provider")
+        .and_then(|item| item.as_str())
+        .map(str::trim)
+        .filter(|id| !id.is_empty())
+        .map(str::to_string)
+}
+
+fn sync_toml_top_level_item_from_provider(
+    target_doc: &mut DocumentMut,
+    provider_doc: &DocumentMut,
+    key: &str,
+) {
+    if let Some(provider_item) = provider_doc.get(key).cloned() {
+        target_doc[key] = provider_item;
+    } else {
+        target_doc.as_table_mut().remove(key);
+    }
+}
+
+fn sync_toml_provider_item_from_provider(
+    target_doc: &mut DocumentMut,
+    provider_doc: &DocumentMut,
+    key: &str,
+) {
+    let Some(target_provider_id) = active_codex_model_provider_id(target_doc) else {
+        return;
+    };
+    let provider_provider_id = active_codex_model_provider_id(provider_doc);
+    let provider_item = provider_provider_id.as_deref().and_then(|provider_id| {
+        provider_doc
+            .get("model_providers")
+            .and_then(|item| item.as_table())
+            .and_then(|providers| providers.get(provider_id))
+            .and_then(|provider| provider.get(key))
+            .cloned()
+    });
+
+    let Some(target_provider_table) = target_doc
+        .get_mut("model_providers")
+        .and_then(|item| item.as_table_mut())
+        .and_then(|providers| providers.get_mut(target_provider_id.as_str()))
+        .and_then(|provider| provider.as_table_mut())
+    else {
+        return;
+    };
+
+    if let Some(provider_item) = provider_item {
+        target_provider_table[key] = provider_item;
+    } else {
+        target_provider_table.remove(key);
+    }
+}
+
+fn restore_codex_provider_config_for_backfill(settings: &mut Value, provider_settings: &Value) {
+    if !codex_settings_has_chatgpt_auth(settings) {
+        return;
+    }
+
+    let Some(config_text) = settings
+        .get("config")
+        .and_then(Value::as_str)
+        .map(str::to_string)
+    else {
+        return;
+    };
+    let Some(provider_config_text) = provider_settings.get("config").and_then(Value::as_str) else {
+        return;
+    };
+
+    let Ok(mut target_doc) = config_text.parse::<DocumentMut>() else {
+        return;
+    };
+    let Ok(provider_doc) = provider_config_text.parse::<DocumentMut>() else {
+        return;
+    };
+
+    sync_toml_top_level_item_from_provider(&mut target_doc, &provider_doc, "preferred_auth_method");
+    for key in ["requires_openai_auth", "experimental_bearer_token"] {
+        sync_toml_top_level_item_from_provider(&mut target_doc, &provider_doc, key);
+        sync_toml_provider_item_from_provider(&mut target_doc, &provider_doc, key);
+    }
+
+    if let Some(obj) = settings.as_object_mut() {
+        obj.insert("config".to_string(), Value::String(target_doc.to_string()));
     }
 }
 

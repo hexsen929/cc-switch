@@ -745,11 +745,14 @@ wire_api = "responses"
                 Some(
                     r#"model_provider = "a"
 model = "gpt-5.4"
+preferred_auth_method = "chatgpt"
 
 [model_providers.a]
 name = "a"
 base_url = "https://a.example/v1"
 wire_api = "responses"
+requires_openai_auth = true
+experimental_bearer_token = "real-key-a"
 "#,
                 ),
             )
@@ -778,6 +781,28 @@ wire_api = "responses"
             assert!(
                 auth.get("auth_mode").is_none(),
                 "ChatGPT auth mode should not be backfilled into provider config"
+            );
+            let config_text = stored_a
+                .settings_config
+                .get("config")
+                .and_then(Value::as_str)
+                .expect("stored config");
+            let parsed: toml::Value = toml::from_str(config_text).expect("parse stored config");
+            assert!(
+                parsed.get("preferred_auth_method").is_none(),
+                "temporary ChatGPT preferred_auth_method should not be backfilled"
+            );
+            let provider = parsed
+                .get("model_providers")
+                .and_then(|v| v.get("a"))
+                .expect("provider table");
+            assert!(
+                provider.get("requires_openai_auth").is_none(),
+                "temporary requires_openai_auth should not be backfilled"
+            );
+            assert!(
+                provider.get("experimental_bearer_token").is_none(),
+                "temporary experimental_bearer_token should not be backfilled"
             );
         });
     }
@@ -1745,6 +1770,10 @@ impl ProviderService {
         // Check if proxy takeover mode is active AND proxy server is actually running
         // Both conditions must be true to use hot-switch mode
         // Use blocking wait since this is a sync function
+        let proxy_config_enabled =
+            futures::executor::block_on(state.db.get_proxy_config_for_app(app_type.as_str()))
+                .map(|config| config.enabled)
+                .unwrap_or(false);
         let is_app_taken_over =
             futures::executor::block_on(state.db.get_live_backup(app_type.as_str()))
                 .ok()
@@ -1756,7 +1785,8 @@ impl ProviderService {
             .detect_takeover_in_live_config_for_app(&app_type);
 
         // Hot-switch only when BOTH: this app is taken over AND proxy server is actually running
-        let should_hot_switch = (is_app_taken_over || live_taken_over) && is_proxy_running;
+        let should_hot_switch =
+            proxy_config_enabled && (is_app_taken_over || live_taken_over) && is_proxy_running;
 
         // Block switching to official providers when proxy takeover is active.
         // Using a proxy with official APIs (Anthropic/OpenAI/Google) may cause account bans.
