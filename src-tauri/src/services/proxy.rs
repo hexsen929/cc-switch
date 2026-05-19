@@ -174,6 +174,53 @@ impl ProxyService {
         Ok(())
     }
 
+    async fn build_codex_takeover_config_from_current_provider(
+        &self,
+        proxy_codex_base_url: &str,
+        preserve_chatgpt_auth: bool,
+    ) -> Result<Value, String> {
+        let provider_settings_result = async {
+            let current_id =
+                crate::settings::get_effective_current_provider(&self.db, &AppType::Codex)
+                    .map_err(|e| format!("获取 Codex 当前供应商失败: {e}"))?
+                    .ok_or_else(|| "Codex 当前供应商未设置".to_string())?;
+
+            let provider = self
+                .db
+                .get_provider_by_id(&current_id, "codex")
+                .map_err(|e| format!("读取 Codex 当前供应商失败: {e}"))?
+                .ok_or_else(|| format!("Codex 当前供应商不存在: {current_id}"))?;
+
+            let mut effective_settings = build_effective_settings_with_common_config(
+                self.db.as_ref(),
+                &AppType::Codex,
+                &provider,
+            )
+            .map_err(|e| format!("构建 Codex 有效配置失败: {e}"))?;
+            self.apply_codex_takeover_fields(
+                &mut effective_settings,
+                proxy_codex_base_url,
+                preserve_chatgpt_auth,
+            )?;
+            Ok::<Value, String>(effective_settings)
+        }
+        .await;
+
+        match provider_settings_result {
+            Ok(settings) => Ok(settings),
+            Err(err) => {
+                log::warn!("Codex 接管将回退到现有 live config: {err}");
+                let mut live_config = self.read_codex_live()?;
+                self.apply_codex_takeover_fields(
+                    &mut live_config,
+                    proxy_codex_base_url,
+                    preserve_chatgpt_auth,
+                )?;
+                Ok(live_config)
+            }
+        }
+    }
+
     fn codex_chatgpt_auth_snapshot_path() -> PathBuf {
         get_app_config_dir().join(CODEX_CHATGPT_AUTH_SNAPSHOT_FILE)
     }
@@ -1568,13 +1615,14 @@ impl ProxyService {
             log::info!("Claude Live 配置已接管，代理地址: {proxy_url}");
         }
 
-        // Codex: 修改 config.toml 的 base_url，auth.json 的 OPENAI_API_KEY（代理会注入真实 Token）
-        if let Ok(mut live_config) = self.read_codex_live() {
-            self.apply_codex_takeover_fields(
-                &mut live_config,
+        // Codex: 从当前供应商配置生成接管配置，避免把旧 live config 的用户级字段带入新供应商。
+        if let Ok(live_config) = self
+            .build_codex_takeover_config_from_current_provider(
                 &proxy_codex_base_url,
                 preserve_codex_chatgpt_auth,
-            )?;
+            )
+            .await
+        {
             self.write_codex_live(&live_config)?;
             log::info!("Codex Live 配置已接管，代理地址: {proxy_codex_base_url}");
         }
@@ -1615,12 +1663,12 @@ impl ProxyService {
                 log::info!("Claude Live 配置已接管，代理地址: {proxy_url}");
             }
             AppType::Codex => {
-                let mut live_config = self.read_codex_live()?;
-                self.apply_codex_takeover_fields(
-                    &mut live_config,
+                let live_config = self
+                    .build_codex_takeover_config_from_current_provider(
                     &proxy_codex_base_url,
                     preserve_codex_chatgpt_auth,
-                )?;
+                    )
+                    .await?;
                 self.write_codex_live(&live_config)?;
                 log::info!("Codex Live 配置已接管，代理地址: {proxy_codex_base_url}");
             }
@@ -1663,15 +1711,16 @@ impl ProxyService {
                 }
             }
             AppType::Codex => {
-                if let Ok(mut live_config) = self.read_codex_live() {
-                    self.apply_codex_takeover_fields(
-                        &mut live_config,
+                if let Ok(live_config) = self
+                    .build_codex_takeover_config_from_current_provider(
                         &proxy_codex_base_url,
                         preserve_codex_chatgpt_auth,
                     )
-                    .map_err(|e| log::warn!("Codex best-effort 接管失败: {e}"))
-                    .ok();
+                    .await
+                {
                     let _ = self.write_codex_live(&live_config);
+                } else {
+                    log::warn!("Codex best-effort 接管失败");
                 }
             }
             AppType::Gemini => {
@@ -2207,11 +2256,7 @@ impl ProxyService {
                 self.sync_claude_live_from_provider_while_proxy_active(&provider)
                     .await?;
             } else if matches!(app_type_enum, AppType::Codex) {
-                let preserve_chatgpt_auth =
-                    self.codex_chatgpt_auth_takeover_enabled_for_route().await;
-                if preserve_chatgpt_auth {
-                    self.takeover_live_config_strict(&AppType::Codex).await?;
-                }
+                self.takeover_live_config_strict(&AppType::Codex).await?;
             }
         }
 
