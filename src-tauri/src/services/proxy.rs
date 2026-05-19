@@ -510,86 +510,72 @@ impl ProxyService {
     ) -> Result<(), String> {
         Self::ensure_codex_chatgpt_oauth_tokens(auth)?;
 
-        let existing_email = auth
-            .get("email")
-            .and_then(Value::as_str)
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
-            .map(str::to_string);
-        let existing_plan_type = auth
-            .get("plan_type")
-            .or_else(|| auth.get("planType"))
-            .and_then(Value::as_str)
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
-            .map(str::to_string);
-
         let account_info = Self::codex_chatgpt_account_info_from_auth(auth);
 
-        if let Some(email) =
-            existing_email.or_else(|| account_info.as_ref().and_then(|info| info.email.clone()))
-        {
-            auth.insert("email".to_string(), json!(email));
-        }
-        if let Some(plan_type) = existing_plan_type.or_else(|| {
-            account_info
-                .as_ref()
-                .and_then(|info| info.plan_type.clone())
-        }) {
-            auth.insert("plan_type".to_string(), json!(plan_type));
+        let email = account_info
+            .as_ref()
+            .and_then(|info| info.email.clone())
+            .or_else(|| Self::auth_string_field(auth, &["email"]))
+            .ok_or_else(|| {
+                "Codex ChatGPT 登录信息缺少 email，请先在 Codex 完成 ChatGPT 登录".to_string()
+            })?;
+        auth.insert("email".to_string(), json!(email));
+
+        let plan_type = account_info
+            .as_ref()
+            .and_then(|info| info.plan_type.clone())
+            .or_else(|| Self::auth_string_field(auth, &["plan_type", "planType"]))
+            .ok_or_else(|| {
+                "Codex ChatGPT 登录信息缺少 plan_type，请先在 Codex 完成 ChatGPT 登录".to_string()
+            })?;
+        auth.insert("plan_type".to_string(), json!(plan_type));
+        auth.remove("planType");
+
+        let account_id_from_token = account_info
+            .as_ref()
+            .and_then(|info| info.account_id.clone())
+            .filter(|value| !value.trim().is_empty())
+            .map(|value| value.trim().to_string());
+        if let Some(account_id) = account_id_from_token.as_ref() {
+            auth.insert("account_id".to_string(), json!(account_id));
         }
 
-        if auth
-            .get("account_id")
-            .and_then(Value::as_str)
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
-            .is_none()
-        {
-            if let Some(account_id) = account_info
-                .as_ref()
-                .and_then(|info| info.account_id.as_ref())
-                .filter(|value| !value.trim().is_empty())
-            {
-                auth.insert("account_id".to_string(), json!(account_id));
-            }
-        }
-
+        let account_id_for_tokens =
+            account_id_from_token.or_else(|| Self::auth_string_field(auth, &["account_id"]));
         if let Some(tokens) = auth.get_mut("tokens").and_then(Value::as_object_mut) {
-            let token_account_id_missing = tokens
+            if let Some(account_id) = account_id_for_tokens.as_ref() {
+                tokens.insert("account_id".to_string(), json!(account_id));
+            } else if tokens
                 .get("account_id")
                 .and_then(Value::as_str)
                 .map(str::trim)
                 .filter(|value| !value.is_empty())
-                .is_none();
-            if token_account_id_missing {
-                if let Some(account_id) = account_info
-                    .as_ref()
-                    .and_then(|info| info.account_id.as_ref())
-                    .filter(|value| !value.trim().is_empty())
-                {
-                    tokens.insert("account_id".to_string(), json!(account_id));
-                }
+                .is_none()
+            {
+                tokens.remove("account_id");
             }
         }
 
-        if auth
-            .get("user_id")
-            .and_then(Value::as_str)
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
-            .is_none()
-        {
-            if let Some(user_id) = account_info
-                .as_ref()
-                .and_then(|info| info.user_id.as_ref())
-                .filter(|value| !value.trim().is_empty())
-            {
-                auth.insert("user_id".to_string(), json!(user_id));
-            }
+        let user_id_from_token = account_info
+            .as_ref()
+            .and_then(|info| info.user_id.clone())
+            .filter(|value| !value.trim().is_empty())
+            .map(|value| value.trim().to_string());
+        if let Some(user_id) = user_id_from_token.as_ref() {
+            auth.insert("user_id".to_string(), json!(user_id));
         }
 
         Ok(())
+    }
+
+    fn auth_string_field(auth: &serde_json::Map<String, Value>, keys: &[&str]) -> Option<String> {
+        keys.iter().find_map(|key| {
+            auth.get(*key)
+                .and_then(Value::as_str)
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .map(str::to_string)
+        })
     }
 
     fn ensure_codex_chatgpt_oauth_tokens(
@@ -3108,6 +3094,129 @@ base_url = "https://third.example/v1"
                 .get("requires_openai_auth")
                 .and_then(|v| v.as_bool()),
             Some(true)
+        );
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn codex_chatgpt_snapshot_refreshes_when_live_account_changes() {
+        let _home = TempHome::new();
+        crate::settings::reload_settings().expect("reload settings");
+
+        let db = Arc::new(Database::memory().expect("init db"));
+        let service = ProxyService::new(db.clone());
+
+        service
+            .write_codex_chatgpt_auth_snapshot(
+                &json!({
+                    "auth_mode": "chatgpt",
+                    "preferred_auth_method": "chatgpt",
+                    "email": "old@example.com",
+                    "plan_type": "plus",
+                    "account_id": "acc-old",
+                    "tokens": {
+                        "access_token": "old-access-token",
+                        "refresh_token": "old-refresh-token",
+                        "account_id": "acc-old",
+                        "id_token": "x.eyJlbWFpbCI6Im9sZEBleGFtcGxlLmNvbSIsImh0dHBzOi8vYXBpLm9wZW5haS5jb20vYXV0aCI6eyJjaGF0Z3B0X3BsYW5fdHlwZSI6InBsdXMiLCJjaGF0Z3B0X2FjY291bnRfaWQiOiJhY2Mtb2xkIiwiY2hhdGdwdF91c2VyX2lkIjoidXNlci1vbGQifSwic3ViIjoic3ViLW9sZCJ9.y"
+                    },
+                    "OPENAI_API_KEY": null
+                })
+                .as_object()
+                .expect("snapshot auth object"),
+            )
+            .expect("write stale snapshot");
+
+        service
+            .write_codex_live(&json!({
+                "auth": {
+                    "auth_mode": "chatgpt",
+                    "preferred_auth_method": "chatgpt",
+                    "email": "old@example.com",
+                    "plan_type": "plus",
+                    "account_id": "acc-old",
+                    "tokens": {
+                        "access_token": "new-access-token",
+                        "refresh_token": "new-refresh-token",
+                        "account_id": "acc-old",
+                        "id_token": "x.eyJlbWFpbCI6Im5ld0BleGFtcGxlLmNvbSIsImh0dHBzOi8vYXBpLm9wZW5haS5jb20vYXV0aCI6eyJjaGF0Z3B0X3BsYW5fdHlwZSI6InBybyIsImNoYXRncHRfYWNjb3VudF9pZCI6ImFjYy1uZXciLCJjaGF0Z3B0X3VzZXJfaWQiOiJ1c2VyLW5ldyJ9LCJzdWIiOiJzdWItbmV3In0.y"
+                    },
+                    "OPENAI_API_KEY": null
+                },
+                "config": ""
+            }))
+            .expect("write live with changed account");
+
+        let provider = Provider::with_id(
+            "p1".to_string(),
+            "P1".to_string(),
+            json!({
+                "auth": { "OPENAI_API_KEY": "provider-key" },
+                "config": r#"
+model_provider = "p1"
+model = "gpt-5.1-codex"
+
+[model_providers.p1]
+name = "p1"
+base_url = "https://third.example/v1"
+"#
+            }),
+            None,
+        );
+        db.save_provider("codex", &provider).expect("save provider");
+        db.set_current_provider("codex", "p1")
+            .expect("set db current provider");
+        crate::settings::set_current_provider(&AppType::Codex, Some("p1"))
+            .expect("set local current provider");
+
+        let mut config = db
+            .get_proxy_config_for_app("codex")
+            .await
+            .expect("get proxy config");
+        config.enabled = false;
+        config.codex_chatgpt_auth_takeover = true;
+        db.update_proxy_config_for_app(config)
+            .await
+            .expect("update proxy config");
+
+        service
+            .sync_codex_auth_takeover_mode_to_live()
+            .await
+            .expect("sync direct mode");
+
+        let live = service.read_codex_live().expect("read live");
+        let auth = live.get("auth").expect("auth");
+        assert_eq!(
+            auth.get("email").and_then(Value::as_str),
+            Some("new@example.com")
+        );
+        assert_eq!(auth.get("plan_type").and_then(Value::as_str), Some("pro"));
+        assert_eq!(
+            auth.get("account_id").and_then(Value::as_str),
+            Some("acc-new")
+        );
+        assert_eq!(
+            auth.get("user_id").and_then(Value::as_str),
+            Some("user-new")
+        );
+        assert_eq!(
+            auth.get("tokens")
+                .and_then(|tokens| tokens.get("account_id"))
+                .and_then(Value::as_str),
+            Some("acc-new")
+        );
+
+        let snapshot = service
+            .read_codex_chatgpt_auth_snapshot()
+            .expect("read snapshot")
+            .expect("snapshot should exist");
+        assert_eq!(
+            snapshot.get("email").and_then(Value::as_str),
+            Some("new@example.com")
+        );
+        assert_eq!(
+            snapshot.get("account_id").and_then(Value::as_str),
+            Some("acc-new")
         );
     }
 
