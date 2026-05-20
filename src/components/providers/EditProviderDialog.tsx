@@ -10,6 +10,7 @@ import {
 } from "@/components/providers/forms/ProviderForm";
 import { openclawApi, providersApi, vscodeApi, type AppId } from "@/lib/api";
 import { extractCodexBaseUrl } from "@/utils/providerConfigUtils";
+import { CodexToolStripPanel } from "@/components/providers/CodexToolStripPanel";
 
 interface EditProviderDialogProps {
   open: boolean;
@@ -186,6 +187,26 @@ export function EditProviderDialog({
     >;
   }, [liveSettings, provider?.settingsConfig]); // 只依赖 settingsConfig，不依赖整个 provider
 
+  // Codex 中转兼容性：tools 剥除清单
+  // 数据源：provider.settings_config.codex_strip_tools（数组，元素是工具 type 字符串）
+  // 仅 codex provider 用到。Save 时合并回 settings_config 顶层
+  const initialCodexStripTools = useMemo<string[]>(() => {
+    if (appId !== "codex") return [];
+    const raw = (initialSettingsConfig as Record<string, unknown>)
+      .codex_strip_tools;
+    if (!Array.isArray(raw)) return [];
+    return raw.filter((v): v is string => typeof v === "string");
+  }, [appId, initialSettingsConfig]);
+
+  const [codexStripTools, setCodexStripTools] = useState<string[]>(
+    initialCodexStripTools,
+  );
+
+  // 当 dialog 重新打开 / provider 切换时，重置剥除清单
+  useEffect(() => {
+    setCodexStripTools(initialCodexStripTools);
+  }, [initialCodexStripTools]);
+
   // 固定 initialData，防止 provider 对象更新时重置表单
   const initialData = useMemo(() => {
     if (!provider) return null;
@@ -216,6 +237,17 @@ export function EditProviderDialog({
         string,
         unknown
       >;
+
+      // Codex 中转兼容性：把"剥除工具清单"合并进 settings_config 顶层
+      // 写空数组也保留为字段（明确表达"无剥除"语义）；用户可手动改 JSON 删该字段
+      if (appId === "codex") {
+        if (codexStripTools.length > 0) {
+          parsedConfig.codex_strip_tools = codexStripTools;
+        } else {
+          // 数组为空时移除字段，保持配置干净
+          delete parsedConfig.codex_strip_tools;
+        }
+      }
       const nextProviderId =
         (appId === "opencode" || appId === "openclaw") &&
         values.providerKey?.trim()
@@ -242,7 +274,7 @@ export function EditProviderDialog({
       });
       onOpenChange(false);
     },
-    [appId, onSubmit, onOpenChange, provider],
+    [appId, codexStripTools, onSubmit, onOpenChange, provider],
   );
 
   if (!provider || !initialData) {
@@ -276,6 +308,14 @@ export function EditProviderDialog({
         initialData={initialData}
         showButtons={false}
       />
+      {appId === "codex" && (
+        <div className="mt-4">
+          <CodexToolStripPanel
+            value={codexStripTools}
+            onChange={setCodexStripTools}
+          />
+        </div>
+      )}
     </FullScreenPanel>
   );
 }

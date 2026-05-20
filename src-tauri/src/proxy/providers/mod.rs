@@ -16,6 +16,7 @@ mod auth;
 mod claude;
 mod codex;
 pub mod codex_oauth_auth;
+pub mod codex_tool_strip;
 pub mod copilot_auth;
 pub mod copilot_model_map;
 mod gemini;

@@ -1154,6 +1154,40 @@ impl RequestForwarder {
             mapped_body
         };
 
+        // Codex 中转兼容性补丁：按 provider.settings_config.codex_strip_tools 配置剔除
+        // 内置工具项（如 image_generation / web_search_preview / computer_use_preview）。
+        // 背景：Codex CLI 在 ChatGPT 登录态或加载官方 plugin 时会在请求 tools 数组里
+        // 自动注入 OpenAI 内置工具。许多第三方中转（如 ai.huaibao.top）对这些工具不
+        // 开放权限，会返回 403 "Image generation is not enabled for this group"。该
+        // 补丁让用户在 provider 级精细勾选剥除哪些工具。默认列表为空 = 全部透传，
+        // 不破坏现有行为。仅 Codex adapter 生效。
+        let mut request_body = request_body;
+        if adapter.name() == "Codex" {
+            if let Some(strip_types) = provider
+                .settings_config
+                .get("codex_strip_tools")
+                .and_then(Value::as_array)
+            {
+                let strip_list: Vec<String> = strip_types
+                    .iter()
+                    .filter_map(|v| v.as_str().map(str::to_string))
+                    .collect();
+                if !strip_list.is_empty() {
+                    let removed = super::providers::codex_tool_strip::strip_codex_tools_by_type(
+                        &mut request_body,
+                        &strip_list,
+                    );
+                    if removed > 0 {
+                        log::info!(
+                            "[Codex] 已按 provider 配置剥除 {} 个内置工具项: {:?}",
+                            removed,
+                            strip_list
+                        );
+                    }
+                }
+            }
+        }
+
         // 过滤私有参数（以 `_` 开头的字段），防止内部信息泄露到上游
         // 默认使用空白名单，过滤所有 _ 前缀字段
         let filtered_body = prepare_upstream_request_body(request_body);
