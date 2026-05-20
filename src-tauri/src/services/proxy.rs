@@ -2,7 +2,7 @@
 //!
 //! 提供代理服务器的启动、停止和配置管理
 
-use crate::app_config::AppType;
+use crate::app_config::{AppType, McpApps};
 use crate::config::{
     get_app_config_dir, get_claude_settings_path, read_json_file, write_json_file,
 };
@@ -11,9 +11,13 @@ use crate::provider::Provider;
 use crate::proxy::server::ProxyServer;
 use crate::proxy::switch_lock::SwitchLockManager;
 use crate::proxy::types::*;
+use crate::services::mcp::McpService;
+use crate::services::prompt::PromptService;
 use crate::services::provider::{
     build_effective_settings_with_common_config, write_live_with_common_config,
 };
+use crate::services::skill::SkillService;
+use crate::store::AppState;
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
 use serde_json::{json, Map, Value};
 use std::path::PathBuf;
@@ -442,6 +446,16 @@ impl ProxyService {
         self.load_codex_chatgpt_auth_for_takeover().map(|_| ())
     }
 
+    fn sync_codex_provider_bound_resources(&self) -> Result<(), String> {
+        let state = AppState::new(self.db.clone());
+        McpService::sync_all_enabled(&state).map_err(|e| format!("同步 MCP 失败: {e}"))?;
+        SkillService::sync_to_app(&self.db, &AppType::Codex)
+            .map_err(|e| format!("同步 Skill 失败: {e}"))?;
+        PromptService::sync_effective_prompt_to_file(&state, AppType::Codex)
+            .map_err(|e| format!("同步 Prompt 失败: {e}"))?;
+        Ok(())
+    }
+
     pub async fn sync_codex_auth_takeover_mode_to_live(&self) -> Result<(), String> {
         let config = self
             .db
@@ -469,6 +483,7 @@ impl ProxyService {
         if !config.codex_chatgpt_auth_takeover {
             write_live_with_common_config(self.db.as_ref(), &AppType::Codex, &provider)
                 .map_err(|e| format!("写入 Codex Live 配置失败: {e}"))?;
+            self.sync_codex_provider_bound_resources()?;
             return Ok(());
         }
 
@@ -483,6 +498,7 @@ impl ProxyService {
 
         self.apply_codex_chatgpt_direct_fields(&mut effective_settings, bearer_token)?;
         self.write_codex_live(&effective_settings)?;
+        self.sync_codex_provider_bound_resources()?;
         Ok(())
     }
 
@@ -1661,6 +1677,7 @@ impl ProxyService {
             .await
         {
             self.write_codex_live(&live_config)?;
+            self.sync_codex_provider_bound_resources()?;
             log::info!("Codex Live 配置已接管，代理地址: {proxy_codex_base_url}");
         }
 
@@ -1707,6 +1724,7 @@ impl ProxyService {
                     )
                     .await?;
                 self.write_codex_live(&live_config)?;
+                self.sync_codex_provider_bound_resources()?;
                 log::info!("Codex Live 配置已接管，代理地址: {proxy_codex_base_url}");
             }
             AppType::Gemini => {
@@ -1756,6 +1774,9 @@ impl ProxyService {
                     .await
                 {
                     let _ = self.write_codex_live(&live_config);
+                    if let Err(e) = self.sync_codex_provider_bound_resources() {
+                        log::warn!("Codex best-effort 资源同步失败: {e}");
+                    }
                 } else {
                     log::warn!("Codex best-effort 接管失败");
                 }
@@ -2778,7 +2799,13 @@ impl ProxyService {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::provider::ProviderMeta;
+    use crate::app_config::{InstalledSkill, McpServer, SkillApps};
+    use crate::prompt::Prompt;
+    use crate::provider::{
+        ProviderMeta, ProviderPromptOverrideMode, ProviderPromptOverrides,
+        ProviderResourceOverrides, ProviderSkillOverrides,
+    };
+    use crate::services::skill::SkillService;
     use serial_test::serial;
     use std::env;
     use tempfile::TempDir;
@@ -3148,13 +3175,30 @@ command = "echo"
             .expect("set db current provider");
         crate::settings::set_current_provider(&AppType::Codex, Some("p1"))
             .expect("set local current provider");
+        db.save_mcp_server(&McpServer {
+            id: "echo".to_string(),
+            name: "Echo".to_string(),
+            server: json!({
+                "type": "stdio",
+                "command": "echo"
+            }),
+            apps: McpApps {
+                codex: true,
+                ..McpApps::default()
+            },
+            description: None,
+            homepage: None,
+            docs: None,
+            tags: vec![],
+        })
+        .expect("save mcp server");
 
         let mut config = db
             .get_proxy_config_for_app("codex")
             .await
             .expect("get proxy config");
         config.enabled = false;
-        config.codex_chatgpt_auth_takeover = true;
+        config.codex_chatgpt_auth_takeover = false;
         db.update_proxy_config_for_app(config)
             .await
             .expect("update proxy config");
@@ -3167,23 +3211,14 @@ command = "echo"
         let live = service.read_codex_live().expect("read live");
         let auth = live.get("auth").expect("auth");
         assert_eq!(
-            auth.get("auth_mode").and_then(Value::as_str),
-            Some("chatgpt")
+            auth.get("OPENAI_API_KEY").and_then(Value::as_str),
+            Some("provider-key")
         );
-        assert_eq!(
-            auth.get("preferred_auth_method").and_then(Value::as_str),
-            Some("chatgpt")
-        );
-        assert!(auth.get("OPENAI_API_KEY").is_some_and(Value::is_null));
-        assert_eq!(
-            auth.get("email").and_then(Value::as_str),
-            Some("user@example.com")
-        );
-        assert_eq!(auth.get("plan_type").and_then(Value::as_str), Some("free"));
         assert_eq!(
             auth.get("provider_custom_auth").and_then(Value::as_str),
             Some("keep-me")
         );
+        assert!(auth.get("auth_mode").is_none());
 
         let parsed: toml::Value = toml::from_str(
             live.get("config")
@@ -3191,62 +3226,6 @@ command = "echo"
                 .expect("config text"),
         )
         .expect("parse live config");
-        let provider = parsed
-            .get("model_providers")
-            .and_then(|v| v.get("p1"))
-            .expect("provider table");
-        assert_eq!(
-            provider.get("base_url").and_then(|v| v.as_str()),
-            Some("https://third.example/v1")
-        );
-        assert_ne!(
-            provider.get("base_url").and_then(|v| v.as_str()),
-            Some("http://127.0.0.1:15721/v1")
-        );
-        assert_eq!(
-            provider
-                .get("experimental_bearer_token")
-                .and_then(|v| v.as_str()),
-            Some("provider-key")
-        );
-        assert_eq!(
-            provider.get("wire_api").and_then(|v| v.as_str()),
-            Some("responses")
-        );
-        assert_eq!(
-            provider
-                .get("request_max_retries")
-                .and_then(|v| v.as_integer()),
-            Some(2)
-        );
-        assert_eq!(
-            provider
-                .get("requires_openai_auth")
-                .and_then(|v| v.as_bool()),
-            Some(true)
-        );
-        assert_eq!(
-            parsed.get("approval_policy").and_then(|v| v.as_str()),
-            Some("never")
-        );
-        assert_eq!(
-            parsed
-                .get("model_reasoning_effort")
-                .and_then(|v| v.as_str()),
-            Some("high")
-        );
-        assert_eq!(
-            parsed
-                .get("model_instructions_file")
-                .and_then(|v| v.as_str()),
-            Some("/tmp/current-provider-instructions.md")
-        );
-        assert_eq!(
-            parsed
-                .get("disable_response_storage")
-                .and_then(|v| v.as_bool()),
-            Some(true)
-        );
         assert_eq!(
             parsed
                 .get("mcp_servers")
@@ -3255,9 +3234,183 @@ command = "echo"
                 .and_then(|v| v.as_str()),
             Some("echo")
         );
+        assert!(parsed.get("preferred_auth_method").is_none());
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn codex_chatgpt_direct_mode_syncs_prompt_and_skill_overrides() {
+        let _home = TempHome::new();
+        crate::settings::reload_settings().expect("reload settings");
+
+        let db = Arc::new(Database::memory().expect("init db"));
+        let service = ProxyService::new(db.clone());
+
+        let mut provider = Provider::with_id(
+            "p1".to_string(),
+            "P1".to_string(),
+            json!({
+                "auth": {
+                    "OPENAI_API_KEY": "provider-key"
+                },
+                "config": r#"
+model_provider = "p1"
+model = "gpt-5.1-codex"
+approval_policy = "never"
+model_reasoning_effort = "high"
+disable_response_storage = true
+
+[model_providers.p1]
+name = "p1"
+base_url = "https://third.example/v1"
+wire_api = "responses"
+request_max_retries = 2
+
+[mcp_servers.echo]
+command = "echo"
+"#
+            }),
+            None,
+        );
+        provider.meta = Some(ProviderMeta {
+            resource_overrides: Some(ProviderResourceOverrides {
+                mcp: None,
+                skills: Some(ProviderSkillOverrides {
+                    enabled: true,
+                    disabled_skill_ids: vec!["skill-echo".to_string()],
+                }),
+                prompt: Some(ProviderPromptOverrides {
+                    enabled: true,
+                    mode: ProviderPromptOverrideMode::Selected,
+                    prompt_id: Some("provider-prompt".to_string()),
+                }),
+            }),
+            ..ProviderMeta::default()
+        });
+        db.save_provider("codex", &provider).expect("save provider");
+        db.set_current_provider("codex", "p1")
+            .expect("set db current provider");
+        crate::settings::set_current_provider(&AppType::Codex, Some("p1"))
+            .expect("set local current provider");
+        db.save_mcp_server(&McpServer {
+            id: "echo".to_string(),
+            name: "Echo".to_string(),
+            server: json!({
+                "type": "stdio",
+                "command": "echo"
+            }),
+            apps: McpApps {
+                codex: true,
+                ..McpApps::default()
+            },
+            description: None,
+            homepage: None,
+            docs: None,
+            tags: vec![],
+        })
+        .expect("save mcp server");
+
+        db.save_prompt(
+            "codex",
+            &Prompt {
+                id: "global-prompt".to_string(),
+                name: "Global Prompt".to_string(),
+                content: "global prompt".to_string(),
+                description: None,
+                enabled: true,
+                created_at: Some(1),
+                updated_at: Some(1),
+            },
+        )
+        .expect("save global prompt");
+        db.save_prompt(
+            "codex",
+            &Prompt {
+                id: "provider-prompt".to_string(),
+                name: "Provider Prompt".to_string(),
+                content: "provider prompt".to_string(),
+                description: None,
+                enabled: false,
+                created_at: Some(2),
+                updated_at: Some(2),
+            },
+        )
+        .expect("save provider prompt");
+
+        let ssot_dir = SkillService::get_ssot_dir().expect("skill ssot dir");
+        let skill_ssot_dir = ssot_dir.join("echo-skill");
+        std::fs::create_dir_all(&skill_ssot_dir).expect("create skill ssot dir");
+        std::fs::write(
+            skill_ssot_dir.join("SKILL.md"),
+            "---\nname: Echo Skill\ndescription: provider override skill\n---\n",
+        )
+        .expect("write skill metadata");
+
+        db.save_skill(&InstalledSkill {
+            id: "skill-echo".to_string(),
+            name: "Echo Skill".to_string(),
+            description: Some("provider override skill".to_string()),
+            directory: "echo-skill".to_string(),
+            repo_owner: Some("local".to_string()),
+            repo_name: Some("echo".to_string()),
+            repo_branch: Some("main".to_string()),
+            readme_url: None,
+            apps: SkillApps {
+                codex: true,
+                ..SkillApps::default()
+            },
+            installed_at: 1,
+            content_hash: None,
+            updated_at: 0,
+        })
+        .expect("save skill");
+
+        let codex_skill_dir = SkillService::get_app_skills_dir(&AppType::Codex)
+            .expect("codex skill dir")
+            .join("echo-skill");
+        std::fs::create_dir_all(&codex_skill_dir).expect("seed stale codex skill dir");
+        std::fs::write(codex_skill_dir.join("stale.txt"), "stale").expect("seed stale skill file");
+
+        let mut config = db
+            .get_proxy_config_for_app("codex")
+            .await
+            .expect("get proxy config");
+        config.enabled = false;
+        config.codex_chatgpt_auth_takeover = false;
+        db.update_proxy_config_for_app(config)
+            .await
+            .expect("update proxy config");
+
+        service
+            .sync_codex_auth_takeover_mode_to_live()
+            .await
+            .expect("sync direct mode");
+
+        let live = service.read_codex_live().expect("read live");
+        let parsed: toml::Value = toml::from_str(
+            live.get("config")
+                .and_then(Value::as_str)
+                .expect("config text"),
+        )
+        .expect("parse live config");
         assert_eq!(
-            parsed.get("preferred_auth_method").and_then(|v| v.as_str()),
-            Some("chatgpt")
+            parsed
+                .get("mcp_servers")
+                .and_then(|v| v.get("echo"))
+                .and_then(|v| v.get("command"))
+                .and_then(|v| v.as_str()),
+            Some("echo")
+        );
+
+        let prompt_path =
+            crate::prompt_files::prompt_file_path(&AppType::Codex).expect("codex prompt path");
+        let prompt_content = std::fs::read_to_string(&prompt_path).expect("read prompt file");
+        assert_eq!(prompt_content, "provider prompt");
+        assert_ne!(prompt_content, "global prompt");
+
+        assert!(
+            !codex_skill_dir.exists(),
+            "provider skill override should remove disabled skill from Codex app dir"
         );
     }
 
