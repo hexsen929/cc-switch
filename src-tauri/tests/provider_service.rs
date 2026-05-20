@@ -335,9 +335,9 @@ base_url = "https://third.example/v1"
             .and_then(|v| v.as_bool()),
         Some(true)
     );
-    assert_eq!(
-        parsed.get("preferred_auth_method").and_then(|v| v.as_str()),
-        Some("chatgpt")
+    assert!(
+        parsed.get("preferred_auth_method").is_none(),
+        "keyless provider should not write a temporary ChatGPT auth method into config.toml"
     );
 }
 

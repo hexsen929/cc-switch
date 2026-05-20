@@ -2,7 +2,7 @@
 //!
 //! 提供代理服务器的启动、停止和配置管理
 
-use crate::app_config::{AppType, McpApps};
+use crate::app_config::AppType;
 use crate::config::{
     get_app_config_dir, get_claude_settings_path, read_json_file, write_json_file,
 };
@@ -148,6 +148,12 @@ impl ProxyService {
             *config = json!({});
         }
 
+        let bearer_token = if preserve_chatgpt_auth {
+            Self::codex_provider_bearer_token_for_toml(config)
+        } else {
+            None
+        };
+
         let root = config
             .as_object_mut()
             .expect("Codex config should be normalized to an object");
@@ -170,7 +176,14 @@ impl ProxyService {
         let mut updated_config = Self::update_toml_base_url(config_str, proxy_codex_base_url);
         if preserve_chatgpt_auth {
             updated_config = Self::update_toml_requires_openai_auth(&updated_config, true);
-            updated_config = Self::update_toml_preferred_auth_method(&updated_config, "chatgpt");
+            if let Some(token) = bearer_token {
+                updated_config =
+                    Self::update_toml_experimental_bearer_token(&updated_config, &token);
+                updated_config = Self::update_toml_preferred_auth_method_from_provider_token(
+                    &updated_config,
+                    &token,
+                );
+            }
         }
         root.insert("config".to_string(), json!(updated_config));
         Ok(())
@@ -493,8 +506,7 @@ impl ProxyService {
             &provider,
         )
         .map_err(|e| format!("构建 Codex 有效配置失败: {e}"))?;
-        let bearer_token = Self::codex_openai_api_key_from_settings(&effective_settings)
-            .or_else(|| Self::codex_experimental_bearer_token_from_settings(&effective_settings));
+        let bearer_token = Self::codex_provider_bearer_token_for_toml(&effective_settings);
 
         self.apply_codex_chatgpt_direct_fields(&mut effective_settings, bearer_token)?;
         self.write_codex_live(&effective_settings)?;
@@ -515,6 +527,11 @@ impl ProxyService {
     fn codex_experimental_bearer_token_from_settings(settings: &Value) -> Option<String> {
         let config_text = settings.get("config").and_then(Value::as_str)?;
         Self::codex_experimental_bearer_token_from_toml(config_text)
+    }
+
+    fn codex_provider_bearer_token_for_toml(settings: &Value) -> Option<String> {
+        Self::codex_experimental_bearer_token_from_settings(settings)
+            .or_else(|| Self::codex_openai_api_key_from_settings(settings))
     }
 
     fn codex_experimental_bearer_token_from_toml(toml_str: &str) -> Option<String> {
@@ -574,9 +591,12 @@ impl ProxyService {
 
         let config_str = root.get("config").and_then(Value::as_str).unwrap_or("");
         let mut updated_config = Self::update_toml_requires_openai_auth(config_str, true);
-        updated_config = Self::update_toml_preferred_auth_method(&updated_config, "chatgpt");
         if let Some(token) = bearer_token {
             updated_config = Self::update_toml_experimental_bearer_token(&updated_config, &token);
+            updated_config = Self::update_toml_preferred_auth_method_from_provider_token(
+                &updated_config,
+                &token,
+            );
         }
         root.insert("config".to_string(), json!(updated_config));
         Ok(())
@@ -2456,6 +2476,32 @@ impl ProxyService {
         doc.to_string()
     }
 
+    fn update_toml_preferred_auth_method_from_provider_token(
+        toml_str: &str,
+        token: &str,
+    ) -> String {
+        let Ok(doc) = toml_str.parse::<toml_edit::DocumentMut>() else {
+            return toml_str.to_string();
+        };
+        let token = token.trim();
+        if token.is_empty() {
+            return doc.to_string();
+        }
+
+        let should_update = doc
+            .get("preferred_auth_method")
+            .and_then(|item| item.as_str())
+            .map(str::trim)
+            .map(|value| value.is_empty() || value == "chatgpt")
+            .unwrap_or(true);
+
+        if should_update {
+            Self::update_toml_preferred_auth_method(toml_str, token)
+        } else {
+            doc.to_string()
+        }
+    }
+
     fn update_toml_experimental_bearer_token(toml_str: &str, token: &str) -> String {
         let Ok(mut doc) = toml_str.parse::<toml_edit::DocumentMut>() else {
             return toml_str.to_string();
@@ -2799,7 +2845,7 @@ impl ProxyService {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::app_config::{InstalledSkill, McpServer, SkillApps};
+    use crate::app_config::{InstalledSkill, McpApps, McpServer, SkillApps};
     use crate::prompt::Prompt;
     use crate::provider::{
         ProviderMeta, ProviderPromptOverrideMode, ProviderPromptOverrides,
@@ -2948,6 +2994,7 @@ approval_policy = "on-request"
 model_reasoning_effort = "high"
 model_instructions_file = "/tmp/provider-instructions.md"
 disable_response_storage = true
+preferred_auth_method = "provider-key"
 
 [model_providers.apiname]
 name = "apiname"
@@ -3064,7 +3111,8 @@ command = "echo"
         );
         assert_eq!(
             parsed.get("preferred_auth_method").and_then(|v| v.as_str()),
-            Some("chatgpt")
+            Some("provider-key"),
+            "ChatGPT preservation should keep the provider config auth method"
         );
     }
 
@@ -3521,6 +3569,10 @@ base_url = "https://third.example/v1"
                 .and_then(|v| v.as_bool()),
             Some(true)
         );
+        assert_eq!(
+            parsed.get("preferred_auth_method").and_then(|v| v.as_str()),
+            Some("provider-key")
+        );
     }
 
     #[tokio::test]
@@ -3641,6 +3693,16 @@ base_url = "https://third.example/v1"
                 .get("requires_openai_auth")
                 .and_then(|v| v.as_bool()),
             Some(true)
+        );
+        assert_eq!(
+            provider
+                .get("experimental_bearer_token")
+                .and_then(|v| v.as_str()),
+            Some("provider-key")
+        );
+        assert_eq!(
+            parsed.get("preferred_auth_method").and_then(|v| v.as_str()),
+            Some("provider-key")
         );
 
         let updated = db
