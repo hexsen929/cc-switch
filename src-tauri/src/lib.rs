@@ -890,38 +890,15 @@ pub fn run() {
                 }
             }
 
-            // 异常退出恢复 + 代理状态自动恢复
+            {
+                let state = app.state::<AppState>();
+                tauri::async_runtime::block_on(recover_and_sync_live_configs_on_startup(&state));
+            }
+
+            // 异步启动后台维护任务
             let app_handle = app.handle().clone();
             tauri::async_runtime::spawn(async move {
                 let state = app_handle.state::<AppState>();
-
-                // 检查是否有 Live 备份（表示上次异常退出时可能处于接管状态）
-                let has_backups = match state.db.has_any_live_backup().await {
-                    Ok(v) => v,
-                    Err(e) => {
-                        log::error!("检查 Live 备份失败: {e}");
-                        false
-                    }
-                };
-                // 检查 Live 配置是否仍处于被接管状态（包含占位符）
-                let live_taken_over = state.proxy_service.detect_takeover_in_live_configs();
-
-                if has_backups || live_taken_over {
-                    log::warn!("检测到上次异常退出（存在接管残留），正在恢复 Live 配置...");
-                    if let Err(e) = state.proxy_service.recover_from_crash().await {
-                        log::error!("恢复 Live 配置失败: {e}");
-                    } else {
-                        log::info!("Live 配置已恢复");
-                    }
-                }
-
-                initialize_common_config_snippets(&state);
-
-                sync_codex_chatgpt_auth_takeover_on_startup(&state).await;
-
-                // 检查 settings 表中的代理状态，自动恢复代理服务
-                restore_proxy_state_on_startup(&state).await;
-
                 // Periodic backup check (on startup)
                 if let Err(e) = state.db.periodic_backup_if_needed() {
                     log::warn!("Periodic backup failed on startup: {e}");
@@ -1538,6 +1515,37 @@ pub async fn cleanup_before_exit(app_handle: &tauri::AppHandle) {
 // 启动时恢复代理状态
 // ============================================================
 
+async fn recover_and_sync_live_configs_on_startup(state: &store::AppState) {
+    // 检查是否有 Live 备份（表示上次异常退出时可能处于接管状态）
+    let has_backups = match state.db.has_any_live_backup().await {
+        Ok(v) => v,
+        Err(e) => {
+            log::error!("检查 Live 备份失败: {e}");
+            false
+        }
+    };
+    // 检查 Live 配置是否仍处于被接管状态（包含占位符）
+    let live_taken_over = state.proxy_service.detect_takeover_in_live_configs();
+
+    if has_backups || live_taken_over {
+        log::warn!("检测到上次异常退出（存在接管残留），正在恢复 Live 配置...");
+        if let Err(e) = state.proxy_service.recover_from_crash().await {
+            log::error!("恢复 Live 配置失败: {e}");
+        } else {
+            log::info!("Live 配置已恢复");
+        }
+    }
+
+    initialize_common_config_snippets(state);
+
+    sync_codex_chatgpt_auth_takeover_on_startup(state).await;
+
+    // 检查 settings 表中的代理状态，自动恢复代理服务
+    restore_proxy_state_on_startup(state).await;
+
+    sync_codex_current_provider_on_startup(state);
+}
+
 /// 启动时根据 proxy_config 表中的代理状态自动恢复代理服务
 ///
 /// 检查 `proxy_config.enabled` 字段，如果有任一应用的状态为 `true`，
@@ -1605,6 +1613,16 @@ async fn sync_codex_chatgpt_auth_takeover_on_startup(state: &store::AppState) {
     {
         Ok(()) => log::info!("✓ 已同步 Codex ChatGPT 登录态保留配置"),
         Err(e) => log::warn!("同步 Codex ChatGPT 登录态保留配置失败: {e}"),
+    }
+}
+
+fn sync_codex_current_provider_on_startup(state: &store::AppState) {
+    match crate::services::provider::ProviderService::sync_current_provider_for_app(
+        state,
+        crate::app_config::AppType::Codex,
+    ) {
+        Ok(()) => log::info!("✓ 已同步 Codex 当前供应商到 Live 配置"),
+        Err(e) => log::warn!("同步 Codex 当前供应商到 Live 配置失败: {e}"),
     }
 }
 

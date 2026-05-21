@@ -43,7 +43,7 @@ pub struct RequestContext {
     providers: Vec<Provider>,
     /// 请求开始时的"当前供应商"（用于判断是否需要同步 UI/托盘）
     ///
-    /// 这里使用本地 settings 的设备级 current provider。
+    /// 这里使用验证后的有效 current provider，优先本地 settings，缺失时 fallback 到数据库。
     /// 代理模式下如果实际使用的 provider 与此不一致，会触发切换以确保 UI 始终准确。
     pub current_provider_id: String,
     /// 请求中的模型名称
@@ -103,7 +103,9 @@ impl RequestContext {
         let copilot_optimizer_config = state.db.get_copilot_optimizer_config().unwrap_or_default();
 
         let current_provider_id =
-            crate::settings::get_current_provider(&app_type).unwrap_or_default();
+            crate::settings::get_effective_current_provider(&state.db, &app_type)
+                .map_err(|e| ProxyError::DatabaseError(e.to_string()))?
+                .unwrap_or_default();
 
         // 从请求体提取模型名称
         let request_model = body
@@ -293,7 +295,23 @@ pub(crate) fn extract_gemini_model_from_path(endpoint: &str) -> Option<String> {
 
 #[cfg(test)]
 mod tests {
-    use super::extract_gemini_model_from_path;
+    use super::{extract_gemini_model_from_path, RequestContext};
+    use crate::app_config::AppType;
+    use crate::database::Database;
+    use crate::provider::Provider;
+    use crate::proxy::{
+        failover_switch::FailoverSwitchManager,
+        provider_router::ProviderRouter,
+        providers::gemini_shadow::GeminiShadowStore,
+        server::ProxyState,
+        types::{ProxyConfig, ProxyStatus},
+    };
+    use axum::http::HeaderMap;
+    use serde_json::json;
+    use serial_test::serial;
+    use std::{collections::HashMap, env, sync::Arc};
+    use tempfile::TempDir;
+    use tokio::sync::RwLock;
 
     #[test]
     fn extract_model_with_action() {
@@ -366,5 +384,71 @@ mod tests {
                 .as_deref(),
             Some("gemini-2.0-flash"),
         );
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn request_context_uses_db_current_provider_when_local_setting_missing() {
+        let temp_home = TempDir::new().expect("temp home");
+        let original_test_home = env::var("CC_SWITCH_TEST_HOME").ok();
+        env::set_var("CC_SWITCH_TEST_HOME", temp_home.path());
+        crate::settings::reload_settings().expect("reload settings");
+
+        let db = Arc::new(Database::memory().expect("init db"));
+        let provider = Provider::with_id(
+            "db-current".to_string(),
+            "DB Current".to_string(),
+            json!({
+                "auth": {
+                    "OPENAI_API_KEY": "provider-key"
+                },
+                "config": r#"
+model_provider = "db-current"
+model = "gpt-5.1-codex"
+
+[model_providers.db-current]
+name = "db-current"
+base_url = "https://third.example/v1"
+"#
+            }),
+            None,
+        );
+        db.save_provider("codex", &provider).expect("save provider");
+        db.set_current_provider("codex", "db-current")
+            .expect("set db current provider");
+        crate::settings::set_current_provider(&AppType::Codex, None)
+            .expect("clear local current provider");
+
+        let state = ProxyState {
+            db: db.clone(),
+            config: Arc::new(RwLock::new(ProxyConfig::default())),
+            status: Arc::new(RwLock::new(ProxyStatus::default())),
+            start_time: Arc::new(RwLock::new(None)),
+            current_providers: Arc::new(RwLock::new(HashMap::new())),
+            provider_router: Arc::new(ProviderRouter::new(db.clone())),
+            gemini_shadow: Arc::new(GeminiShadowStore::default()),
+            app_handle: None,
+            failover_manager: Arc::new(FailoverSwitchManager::new(db)),
+        };
+
+        let ctx = RequestContext::new(
+            &state,
+            &json!({ "model": "gpt-5.1-codex" }),
+            &HeaderMap::new(),
+            AppType::Codex,
+            "Codex",
+            "codex",
+        )
+        .await
+        .expect("build request context");
+
+        assert_eq!(ctx.current_provider_id, "db-current");
+        assert_eq!(ctx.provider.id, "db-current");
+
+        match original_test_home {
+            Some(value) => env::set_var("CC_SWITCH_TEST_HOME", value),
+            None => env::remove_var("CC_SWITCH_TEST_HOME"),
+        }
+        crate::settings::reload_settings().expect("restore settings");
     }
 }
