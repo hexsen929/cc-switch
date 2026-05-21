@@ -219,16 +219,14 @@ impl ProxyService {
         }
 
         let config_str = root.get("config").and_then(|v| v.as_str()).unwrap_or("");
-        let mut updated_config = Self::apply_codex_proxy_toml_config(config_str, proxy_codex_base_url);
+        let mut updated_config =
+            Self::apply_codex_proxy_toml_config(config_str, proxy_codex_base_url);
         if preserve_chatgpt_auth {
             updated_config = Self::update_toml_requires_openai_auth(&updated_config, true);
+            updated_config = Self::update_toml_preferred_auth_method(&updated_config, "chatgpt");
             if let Some(token) = bearer_token {
                 updated_config =
                     Self::update_toml_experimental_bearer_token(&updated_config, &token);
-                updated_config = Self::update_toml_preferred_auth_method_from_provider_token(
-                    &updated_config,
-                    &token,
-                );
             }
         }
         root.insert("config".to_string(), json!(updated_config));
@@ -637,12 +635,9 @@ impl ProxyService {
 
         let config_str = root.get("config").and_then(Value::as_str).unwrap_or("");
         let mut updated_config = Self::update_toml_requires_openai_auth(config_str, true);
+        updated_config = Self::update_toml_preferred_auth_method(&updated_config, "chatgpt");
         if let Some(token) = bearer_token {
             updated_config = Self::update_toml_experimental_bearer_token(&updated_config, &token);
-            updated_config = Self::update_toml_preferred_auth_method_from_provider_token(
-                &updated_config,
-                &token,
-            );
         }
         root.insert("config".to_string(), json!(updated_config));
         Ok(())
@@ -959,6 +954,20 @@ impl ProxyService {
             .ok_or_else(|| format!("{app_type:?} 当前供应商不存在，无法接管 Live 配置"))
     }
 
+    async fn sync_active_target_for_app(&self, app_type: &AppType) -> Result<(), String> {
+        let Some(provider) = self.get_current_provider_for_app(app_type)? else {
+            return Ok(());
+        };
+
+        if let Some(server) = self.server.read().await.as_ref() {
+            server
+                .set_active_target(app_type.as_str(), &provider.id, &provider.name)
+                .await;
+        }
+
+        Ok(())
+    }
+
     /// 设置 AppHandle（在应用初始化时调用）
     pub fn set_app_handle(&self, handle: tauri::AppHandle) {
         futures::executor::block_on(async {
@@ -1145,6 +1154,7 @@ impl ProxyService {
                 // 两种脏角落，下面的重建分支会把这些情况修复成一致状态。
                 if has_backup && live_taken_over {
                     self.takeover_live_config_strict(&app).await?;
+                    self.sync_active_target_for_app(&app).await?;
                     return Ok(());
                 }
 
@@ -1194,7 +1204,10 @@ impl ProxyService {
             // 7) 兼容旧逻辑：写入 any-of 标志（失败不影响功能）
             let _ = self.db.set_live_takeover_active(true).await;
 
-            // 8) Warn if the current provider is official (risk of account ban via proxy)
+            // 8) 同步代理运行态目标，避免启动恢复后必须手动切换一次供应商
+            self.sync_active_target_for_app(&app).await?;
+
+            // 9) Warn if the current provider is official (risk of account ban via proxy)
             if let Ok(Some(current_id)) =
                 crate::settings::get_effective_current_provider(&self.db, &app)
             {
@@ -2578,32 +2591,6 @@ impl ProxyService {
         doc.to_string()
     }
 
-    fn update_toml_preferred_auth_method_from_provider_token(
-        toml_str: &str,
-        token: &str,
-    ) -> String {
-        let Ok(doc) = toml_str.parse::<toml_edit::DocumentMut>() else {
-            return toml_str.to_string();
-        };
-        let token = token.trim();
-        if token.is_empty() {
-            return doc.to_string();
-        }
-
-        let should_update = doc
-            .get("preferred_auth_method")
-            .and_then(|item| item.as_str())
-            .map(str::trim)
-            .map(|value| value.is_empty() || value == "chatgpt")
-            .unwrap_or(true);
-
-        if should_update {
-            Self::update_toml_preferred_auth_method(toml_str, token)
-        } else {
-            doc.to_string()
-        }
-    }
-
     fn update_toml_experimental_bearer_token(toml_str: &str, token: &str) -> String {
         let Ok(mut doc) = toml_str.parse::<toml_edit::DocumentMut>() else {
             return toml_str.to_string();
@@ -3312,8 +3299,8 @@ command = "echo"
         );
         assert_eq!(
             parsed.get("preferred_auth_method").and_then(|v| v.as_str()),
-            Some("provider-key"),
-            "ChatGPT preservation should keep the provider config auth method"
+            Some("chatgpt"),
+            "local route with ChatGPT preservation should keep Codex client auth on chatgpt"
         );
     }
 
@@ -3772,7 +3759,7 @@ base_url = "https://third.example/v1"
         );
         assert_eq!(
             parsed.get("preferred_auth_method").and_then(|v| v.as_str()),
-            Some("provider-key")
+            Some("chatgpt")
         );
     }
 
@@ -3885,7 +3872,7 @@ wire_api = "responses"
         );
         assert_eq!(
             parsed.get("preferred_auth_method").and_then(|v| v.as_str()),
-            Some("provider-key")
+            Some("chatgpt")
         );
     }
 
@@ -4016,7 +4003,7 @@ base_url = "https://third.example/v1"
         );
         assert_eq!(
             parsed.get("preferred_auth_method").and_then(|v| v.as_str()),
-            Some("provider-key")
+            Some("chatgpt")
         );
 
         let updated = db
