@@ -3577,6 +3577,119 @@ base_url = "https://third.example/v1"
 
     #[tokio::test]
     #[serial]
+    async fn codex_chatgpt_direct_mode_startup_sync_repairs_stale_live_config() {
+        let _home = TempHome::new();
+        crate::settings::reload_settings().expect("reload settings");
+
+        let db = Arc::new(Database::memory().expect("init db"));
+        let service = ProxyService::new(db.clone());
+
+        service
+            .write_codex_live(&json!({
+                "auth": {
+                    "auth_mode": "chatgpt",
+                    "preferred_auth_method": "chatgpt",
+                    "tokens": {
+                        "access_token": "access-token",
+                        "refresh_token": "refresh-token",
+                        "id_token": "x.eyJlbWFpbCI6InVzZXJAZXhhbXBsZS5jb20iLCJodHRwczovL2FwaS5vcGVuYWkuY29tL2F1dGgiOnsiY2hhdGdwdF9wbGFuX3R5cGUiOiJwbHVzIiwiY2hhdGdwdF9hY2NvdW50X2lkIjoiYWNjLTEyMyIsImNoYXRncHRfdXNlcl9pZCI6InVzZXItMTIzIn0sInN1YiI6InN1Yi0xMjMifQ.y"
+                    },
+                    "OPENAI_API_KEY": null
+                },
+                "config": r#"
+model_provider = "old"
+model = "old-model"
+preferred_auth_method = "chatgpt"
+
+[model_providers.old]
+name = "old"
+base_url = "https://old.example/v1"
+"#
+            }))
+            .expect("seed stale live chatgpt config");
+
+        let provider = Provider::with_id(
+            "p1".to_string(),
+            "P1".to_string(),
+            json!({
+                "auth": {
+                    "OPENAI_API_KEY": "provider-key"
+                },
+                "config": r#"
+model_provider = "p1"
+model = "gpt-5.1-codex"
+
+[model_providers.p1]
+name = "p1"
+base_url = "https://third.example/v1"
+wire_api = "responses"
+"#
+            }),
+            None,
+        );
+        db.save_provider("codex", &provider).expect("save provider");
+        db.set_current_provider("codex", "p1")
+            .expect("set db current provider");
+        crate::settings::set_current_provider(&AppType::Codex, Some("p1"))
+            .expect("set local current provider");
+
+        let mut config = db
+            .get_proxy_config_for_app("codex")
+            .await
+            .expect("get proxy config");
+        config.enabled = false;
+        config.codex_chatgpt_auth_takeover = true;
+        db.update_proxy_config_for_app(config)
+            .await
+            .expect("update proxy config");
+
+        service
+            .sync_codex_auth_takeover_mode_to_live()
+            .await
+            .expect("startup sync should repair direct live config");
+
+        let live = service.read_codex_live().expect("read live");
+        let auth = live.get("auth").expect("auth");
+        assert_eq!(
+            auth.get("auth_mode").and_then(Value::as_str),
+            Some("chatgpt")
+        );
+        assert!(auth.get("OPENAI_API_KEY").is_some_and(Value::is_null));
+
+        let parsed: toml::Value = toml::from_str(
+            live.get("config")
+                .and_then(Value::as_str)
+                .expect("config text"),
+        )
+        .expect("parse live config");
+        let provider = parsed
+            .get("model_providers")
+            .and_then(|v| v.get("p1"))
+            .expect("provider table");
+        assert_eq!(
+            provider.get("base_url").and_then(|v| v.as_str()),
+            Some("https://third.example/v1")
+        );
+        assert_eq!(
+            provider
+                .get("requires_openai_auth")
+                .and_then(|v| v.as_bool()),
+            Some(true)
+        );
+        assert_eq!(
+            provider
+                .get("experimental_bearer_token")
+                .and_then(|v| v.as_str()),
+            Some("provider-key")
+        );
+        assert_eq!(
+            parsed.get("preferred_auth_method").and_then(|v| v.as_str()),
+            Some("provider-key")
+        );
+    }
+
+    #[tokio::test]
+    #[serial]
     async fn codex_local_route_restores_snapshot_when_live_lacks_tokens() {
         let _home = TempHome::new();
         crate::settings::reload_settings().expect("reload settings");

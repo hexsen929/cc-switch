@@ -917,6 +917,8 @@ pub fn run() {
 
                 initialize_common_config_snippets(&state);
 
+                sync_codex_chatgpt_auth_takeover_on_startup(&state).await;
+
                 // 检查 settings 表中的代理状态，自动恢复代理服务
                 restore_proxy_state_on_startup(&state).await;
 
@@ -1580,6 +1582,29 @@ async fn restore_proxy_state_on_startup(state: &store::AppState) {
                 }
             }
         }
+    }
+}
+
+async fn sync_codex_chatgpt_auth_takeover_on_startup(state: &store::AppState) {
+    let config = match state.db.get_proxy_config_for_app("codex").await {
+        Ok(config) => config,
+        Err(e) => {
+            log::warn!("读取 Codex ChatGPT 登录态保留配置失败: {e}");
+            return;
+        }
+    };
+
+    if !config.codex_chatgpt_auth_takeover || config.enabled {
+        return;
+    }
+
+    match state
+        .proxy_service
+        .sync_codex_auth_takeover_mode_to_live()
+        .await
+    {
+        Ok(()) => log::info!("✓ 已同步 Codex ChatGPT 登录态保留配置"),
+        Err(e) => log::warn!("同步 Codex ChatGPT 登录态保留配置失败: {e}"),
     }
 }
 
