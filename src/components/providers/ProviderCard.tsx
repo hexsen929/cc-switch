@@ -21,6 +21,8 @@ import { FailoverPriorityBadge } from "@/components/providers/FailoverPriorityBa
 import {
   extractCodexBaseUrl,
   extractCodexBearerToken,
+  extractCodexWireApi,
+  isCodexChatWireApi,
 } from "@/utils/providerConfigUtils";
 import { useProviderHealth } from "@/lib/query/failover";
 import { useUsageQuery } from "@/lib/query/queries";
@@ -230,6 +232,20 @@ export function ProviderCard({
     appId === "hermes" && isHermesReadOnlyProvider(provider.settingsConfig);
   const isCodexOauth =
     provider.meta?.providerType === PROVIDER_TYPES.CODEX_OAUTH;
+  const codexNeedsRouting = useMemo(() => {
+    if (appId !== "codex" || provider.category === "official") return false;
+    if (provider.meta?.apiFormat === "openai_chat") return true;
+    const config = (provider.settingsConfig as Record<string, any>)?.config;
+    return (
+      typeof config === "string" &&
+      isCodexChatWireApi(extractCodexWireApi(config))
+    );
+  }, [
+    appId,
+    provider.category,
+    provider.meta?.apiFormat,
+    (provider.settingsConfig as Record<string, any>)?.config,
+  ]);
   const isClaudeThirdParty =
     appId === "claude" && provider.category === "third_party";
 
@@ -392,6 +408,14 @@ export function ProviderCard({
                     })}
                   </span>
                 )}
+
+              {codexNeedsRouting && (
+                <span className="inline-flex items-center rounded-md bg-sky-100 px-1.5 py-0.5 text-[10px] font-semibold text-sky-700 dark:bg-sky-900/40 dark:text-sky-300">
+                  {t("codex.needsRouting", {
+                    defaultValue: "需要路由",
+                  })}
+                </span>
+              )}
 
               {appId === "claude" && provider.category === "official" && (
                 <span className="inline-flex items-center rounded-md bg-slate-200 px-1.5 py-0.5 text-[10px] font-semibold text-slate-700 dark:bg-slate-700/60 dark:text-slate-200">
