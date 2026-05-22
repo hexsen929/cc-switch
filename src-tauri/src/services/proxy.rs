@@ -1188,6 +1188,8 @@ impl ProxyService {
                 self.start().await?;
             }
 
+            let mut backup_from_current_provider = false;
+
             // 2) 已接管则直接返回（幂等）；但如果缺少备份或占位符残留，需要重建接管
             let current_config = self
                 .db
@@ -1209,9 +1211,19 @@ impl ProxyService {
                 // 只看其一会出现「UI 显示已接管但 Live 已被恢复」或「Live 仍是占位符但备份丢失」
                 // 两种脏角落，下面的重建分支会把这些情况修复成一致状态。
                 if has_backup && live_taken_over {
+                    if matches!(app, AppType::Codex) {
+                        if let Some(provider) = self.get_current_provider_for_app(&app)? {
+                            self.update_live_backup_from_provider_inner(app_type_str, &provider)
+                                .await?;
+                        }
+                    }
                     self.takeover_live_config_strict(&app).await?;
                     self.sync_active_target_for_app(&app).await?;
                     return Ok(());
+                }
+
+                if live_taken_over && !has_backup {
+                    backup_from_current_provider = true;
                 }
 
                 log::warn!(
@@ -1219,13 +1231,19 @@ impl ProxyService {
                 );
             }
 
-            // 3) 备份 Live 配置（严格：目标 app 不存在则报错）
-            self.backup_live_config_strict(&app).await?;
+            if backup_from_current_provider {
+                let provider = self.require_current_provider_for_app(&app)?;
+                self.update_live_backup_from_provider_inner(app_type_str, &provider)
+                    .await?;
+            } else {
+                // 3) 备份 Live 配置（严格：目标 app 不存在则报错）
+                self.backup_live_config_strict(&app).await?;
 
-            // 4) 同步 Live Token 到数据库（仅当前 app）
-            if let Err(e) = self.sync_live_to_provider(&app).await {
-                let _ = self.db.delete_live_backup(app_type_str).await;
-                return Err(e);
+                // 4) 同步 Live Token 到数据库（仅当前 app）
+                if let Err(e) = self.sync_live_to_provider(&app).await {
+                    let _ = self.db.delete_live_backup(app_type_str).await;
+                    return Err(e);
+                }
             }
 
             // 5) 写入接管配置（仅当前 app）
@@ -5241,6 +5259,158 @@ wire_api = "responses"
             Some("https://current.example/v1"),
             "restore backup should carry the current third-party endpoint"
         );
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn set_takeover_rebuilds_missing_codex_backup_from_current_provider_when_live_is_taken_over(
+    ) {
+        let _home = TempHome::new();
+        crate::settings::reload_settings().expect("reload settings");
+
+        let db = Arc::new(Database::memory().expect("init db"));
+        let service = ProxyService::new(db.clone());
+
+        let mut global_config = db.get_proxy_config().await.expect("get proxy config");
+        global_config.listen_port = 0;
+        db.update_proxy_config(global_config)
+            .await
+            .expect("use ephemeral proxy port");
+
+        let provider = Provider::with_id(
+            "current".to_string(),
+            "Current Provider".to_string(),
+            json!({
+                "auth": {
+                    "OPENAI_API_KEY": "current-key"
+                },
+                "config": r#"model_provider = "current"
+model = "gpt-5.4"
+
+[model_providers.current]
+name = "Current Provider"
+base_url = "https://current.example/v1"
+wire_api = "responses"
+"#
+            }),
+            None,
+        );
+        db.save_provider("codex", &provider).expect("save provider");
+        db.set_current_provider("codex", "current")
+            .expect("set db current provider");
+        crate::settings::set_current_provider(&AppType::Codex, Some("current"))
+            .expect("set local current provider");
+
+        service
+            .write_codex_live(&json!({
+                "auth": {
+                    "auth_mode": "chatgpt",
+                    "preferred_auth_method": "chatgpt",
+                    "tokens": {
+                        "id_token": "stale-chatgpt-token"
+                    }
+                },
+                "config": r#"model_provider = "stable"
+model = "gpt-5.4"
+preferred_auth_method = "chatgpt"
+
+[model_providers.stable]
+name = "Stale Proxy"
+base_url = "http://127.0.0.1:15721/v1"
+wire_api = "responses"
+"#
+            }))
+            .expect("seed already taken-over live config");
+
+        let mut proxy_config = db
+            .get_proxy_config_for_app("codex")
+            .await
+            .expect("get proxy config");
+        proxy_config.enabled = true;
+        proxy_config.codex_chatgpt_auth_takeover = false;
+        db.update_proxy_config_for_app(proxy_config)
+            .await
+            .expect("mark codex takeover enabled");
+
+        service
+            .set_takeover_for_app("codex", true)
+            .await
+            .expect("rebuild dirty takeover state");
+
+        let backup = db
+            .get_live_backup("codex")
+            .await
+            .expect("get backup")
+            .expect("backup exists");
+        let stored: Value =
+            serde_json::from_str(&backup.original_config).expect("parse backup json");
+        assert_eq!(
+            stored
+                .get("auth")
+                .and_then(|auth| auth.get("OPENAI_API_KEY"))
+                .and_then(Value::as_str),
+            Some("current-key"),
+            "missing backup should be rebuilt from current provider auth"
+        );
+        assert!(
+            stored
+                .get("auth")
+                .and_then(|auth| auth.get("tokens"))
+                .is_none(),
+            "stale ChatGPT auth fields from the taken-over live config must not enter backup"
+        );
+
+        let backup_config = stored
+            .get("config")
+            .and_then(Value::as_str)
+            .expect("backup config string");
+        let parsed_backup: toml::Value =
+            toml::from_str(backup_config).expect("parse backup config");
+        assert_eq!(
+            parsed_backup.get("model_provider").and_then(|v| v.as_str()),
+            Some("stable"),
+            "backup rebuild should keep Codex's existing history bucket"
+        );
+        assert_eq!(
+            parsed_backup
+                .get("model_providers")
+                .and_then(|v| v.get("stable"))
+                .and_then(|v| v.get("base_url"))
+                .and_then(|v| v.as_str()),
+            Some("https://current.example/v1"),
+            "backup should restore the current third-party endpoint, not the local proxy"
+        );
+        assert!(
+            !backup_config.contains("127.0.0.1"),
+            "backup config must not persist a local proxy URL"
+        );
+
+        let live = service.read_codex_live().expect("read live");
+        assert_eq!(
+            live.get("auth")
+                .and_then(|auth| auth.get("OPENAI_API_KEY"))
+                .and_then(Value::as_str),
+            Some(PROXY_TOKEN_PLACEHOLDER),
+            "live config should remain proxy-managed after repair"
+        );
+
+        let live_config = live
+            .get("config")
+            .and_then(Value::as_str)
+            .expect("live config string");
+        let parsed_live: toml::Value = toml::from_str(live_config).expect("parse live config");
+        assert!(
+            parsed_live
+                .get("model_providers")
+                .and_then(|v| v.get("stable"))
+                .and_then(|v| v.get("base_url"))
+                .and_then(|v| v.as_str())
+                .map(ProxyService::is_local_proxy_url)
+                .unwrap_or(false),
+            "live config should still point Codex at the local proxy"
+        );
+
+        let _ = service.stop().await;
     }
 
     #[tokio::test]
