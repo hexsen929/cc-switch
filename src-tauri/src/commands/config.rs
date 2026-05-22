@@ -62,6 +62,15 @@ fn validate_common_config_snippet(app_type: &str, snippet: &str) -> Result<(), S
     Ok(())
 }
 
+fn normalize_common_config_snippet(app_type: &str, snippet: String) -> Result<String, String> {
+    if app_type == "codex" {
+        crate::codex_config::normalize_codex_feature_flags_in_config_toml(&snippet)
+            .map_err(|e| e.to_string())
+    } else {
+        Ok(snippet)
+    }
+}
+
 #[tauri::command]
 pub async fn get_config_status(
     state: State<'_, AppState>,
@@ -287,6 +296,7 @@ pub async fn set_common_config_snippet(
         .map_err(|e| e.to_string())?;
 
     validate_common_config_snippet(&app_type, &snippet)?;
+    let snippet = normalize_common_config_snippet(&app_type, snippet)?;
 
     let value = if is_cleared { None } else { Some(snippet) };
 

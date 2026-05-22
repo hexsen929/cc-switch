@@ -2765,7 +2765,7 @@ impl ProxyService {
 
     fn write_codex_live(&self, config: &Value) -> Result<(), String> {
         use crate::codex_config::{
-            get_codex_auth_path, get_codex_config_path, write_codex_live_atomic,
+            get_codex_auth_path, write_codex_config_text, write_codex_live_atomic,
         };
 
         let auth = config.get("auth");
@@ -2782,9 +2782,7 @@ impl ProxyService {
                     .map_err(|e| format!("写入 Codex auth 失败: {e}"))?;
             }
             (None, Some(cfg)) => {
-                let config_path = get_codex_config_path();
-                crate::config::write_text_file(&config_path, cfg)
-                    .map_err(|e| format!("写入 Codex config 失败: {e}"))?;
+                write_codex_config_text(cfg).map_err(|e| format!("写入 Codex config 失败: {e}"))?;
             }
             (None, None) => {}
         }

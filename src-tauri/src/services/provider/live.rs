@@ -9,7 +9,8 @@ use toml_edit::{DocumentMut, Item, TableLike};
 
 use crate::app_config::AppType;
 use crate::codex_config::{
-    get_codex_auth_path, get_codex_config_path, write_codex_live_atomic_with_stable_provider,
+    get_codex_auth_path, get_codex_config_path, normalize_codex_feature_flags_in_config_toml,
+    write_codex_live_atomic_with_stable_provider,
 };
 use crate::config::{delete_file, get_claude_settings_path, read_json_file, write_json_file};
 use crate::database::Database;
@@ -327,11 +328,20 @@ fn settings_contain_common_config(app_type: &AppType, settings: &Value, snippet:
                 return false;
             }
 
+            let config_toml = match normalize_codex_feature_flags_in_config_toml(config_toml) {
+                Ok(value) => value,
+                Err(_) => return false,
+            };
+            let snippet = match normalize_codex_feature_flags_in_config_toml(trimmed) {
+                Ok(value) => value,
+                Err(_) => return false,
+            };
+
             let target_doc = match config_toml.parse::<DocumentMut>() {
                 Ok(doc) => doc,
                 Err(_) => return false,
             };
-            let source_doc = match trimmed.parse::<DocumentMut>() {
+            let source_doc = match snippet.parse::<DocumentMut>() {
                 Ok(doc) => doc,
                 Err(_) => return false,
             };
@@ -393,6 +403,8 @@ pub(crate) fn remove_common_config_from_settings(
         AppType::Codex => {
             let mut result = settings.clone();
             let config_toml = settings.get("config").and_then(Value::as_str).unwrap_or("");
+            let config_toml = normalize_codex_feature_flags_in_config_toml(config_toml)?;
+            let snippet = normalize_codex_feature_flags_in_config_toml(trimmed)?;
             let mut target_doc = if config_toml.trim().is_empty() {
                 DocumentMut::new()
             } else {
@@ -402,13 +414,15 @@ pub(crate) fn remove_common_config_from_settings(
                     ))
                 })?
             };
-            let source_doc = trimmed.parse::<DocumentMut>().map_err(|e| {
+            let source_doc = snippet.parse::<DocumentMut>().map_err(|e| {
                 AppError::Message(format!("Invalid Codex common config snippet: {e}"))
             })?;
 
             remove_toml_table_like(target_doc.as_table_mut(), source_doc.as_table());
+            let config_toml =
+                normalize_codex_feature_flags_in_config_toml(&target_doc.to_string())?;
             if let Some(obj) = result.as_object_mut() {
-                obj.insert("config".to_string(), Value::String(target_doc.to_string()));
+                obj.insert("config".to_string(), Value::String(config_toml));
             }
             Ok(result)
         }
@@ -448,6 +462,8 @@ fn apply_common_config_to_settings(
         AppType::Codex => {
             let mut result = settings.clone();
             let config_toml = settings.get("config").and_then(Value::as_str).unwrap_or("");
+            let config_toml = normalize_codex_feature_flags_in_config_toml(config_toml)?;
+            let snippet = normalize_codex_feature_flags_in_config_toml(trimmed)?;
             let mut target_doc = if config_toml.trim().is_empty() {
                 DocumentMut::new()
             } else {
@@ -457,13 +473,15 @@ fn apply_common_config_to_settings(
                     ))
                 })?
             };
-            let source_doc = trimmed.parse::<DocumentMut>().map_err(|e| {
+            let source_doc = snippet.parse::<DocumentMut>().map_err(|e| {
                 AppError::Message(format!("Invalid Codex common config snippet: {e}"))
             })?;
 
             merge_toml_table_like(target_doc.as_table_mut(), source_doc.as_table());
+            let config_toml =
+                normalize_codex_feature_flags_in_config_toml(&target_doc.to_string())?;
             if let Some(obj) = result.as_object_mut() {
-                obj.insert("config".to_string(), Value::String(target_doc.to_string()));
+                obj.insert("config".to_string(), Value::String(config_toml));
             }
             Ok(result)
         }
@@ -841,7 +859,7 @@ impl LiveSnapshot {
                 }
 
                 if let Some(text) = config {
-                    crate::config::write_text_file(&config_path, text)?;
+                    crate::codex_config::write_codex_config_text(text)?;
                 } else if config_path.exists() {
                     delete_file(&config_path)?;
                 }
@@ -1723,6 +1741,38 @@ mod tests {
         let stripped =
             remove_common_config_from_settings(&AppType::Codex, &applied, snippet).unwrap();
         assert_eq!(stripped, settings);
+    }
+
+    #[test]
+    fn codex_common_config_migrates_deprecated_hooks_feature_flag() {
+        let settings = json!({
+            "auth": {},
+            "config": "model_provider = \"openai\"\n"
+        });
+        let snippet = "[features]\ncodex_hooks = true\n";
+
+        let applied = apply_common_config_to_settings(&AppType::Codex, &settings, snippet).unwrap();
+        let applied_config = applied["config"].as_str().unwrap_or_default();
+        assert!(!applied_config.contains("codex_hooks"));
+        let parsed: toml::Value = toml::from_str(applied_config).unwrap();
+        assert_eq!(
+            parsed
+                .get("features")
+                .and_then(|v| v.get("hooks"))
+                .and_then(|v| v.as_bool()),
+            Some(true)
+        );
+        assert!(
+            settings_contain_common_config(&AppType::Codex, &applied, snippet),
+            "legacy codex_hooks snippets should match normalized hooks config"
+        );
+
+        let stripped =
+            remove_common_config_from_settings(&AppType::Codex, &applied, snippet).unwrap();
+        let stripped_config = stripped["config"].as_str().unwrap_or_default();
+        assert!(!stripped_config.contains("codex_hooks"));
+        assert!(!stripped_config.contains("hooks"));
+        assert_eq!(stripped["auth"], settings["auth"]);
     }
 
     #[test]

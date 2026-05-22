@@ -9,7 +9,7 @@ use crate::error::AppError;
 use serde_json::Value;
 use std::fs;
 use std::path::Path;
-use toml_edit::DocumentMut;
+use toml_edit::{DocumentMut, Item};
 
 pub const CC_SWITCH_CODEX_MODEL_PROVIDER_ID: &str = "ccswitch";
 
@@ -24,6 +24,39 @@ const CODEX_RESERVED_MODEL_PROVIDER_IDS: &[&str] = &[
     "oss",
     "ollama-chat",
 ];
+
+/// Normalize Codex feature flags across Codex CLI config schema changes.
+///
+/// `features.codex_hooks` was renamed to `features.hooks`. Keep accepting old
+/// provider/common-config snapshots but never write the deprecated key back to
+/// `config.toml`.
+pub fn normalize_codex_feature_flags_in_config_toml(config_text: &str) -> Result<String, AppError> {
+    if config_text.trim().is_empty() {
+        return Ok(config_text.to_string());
+    }
+
+    let mut doc = config_text
+        .parse::<DocumentMut>()
+        .map_err(|e| AppError::Message(format!("Invalid Codex config.toml: {e}")))?;
+
+    let Some(features) = doc
+        .get_mut("features")
+        .and_then(|item| item.as_table_like_mut())
+    else {
+        return Ok(config_text.to_string());
+    };
+
+    let Some(codex_hooks) = features.remove("codex_hooks") else {
+        return Ok(config_text.to_string());
+    };
+
+    let has_hooks = features.get("hooks").is_some_and(|item| !item.is_none());
+    if !has_hooks && !matches!(codex_hooks, Item::None) {
+        features.insert("hooks", codex_hooks);
+    }
+
+    Ok(doc.to_string())
+}
 
 /// 获取 Codex 配置目录路径
 pub fn get_codex_config_dir() -> PathBuf {
@@ -42,6 +75,17 @@ pub fn get_codex_auth_path() -> PathBuf {
 /// 获取 Codex config.toml 路径
 pub fn get_codex_config_path() -> PathBuf {
     get_codex_config_dir().join("config.toml")
+}
+
+/// Write `~/.codex/config.toml` after normalizing schema-compatible fields.
+pub fn write_codex_config_text(config_text: &str) -> Result<(), AppError> {
+    let config_path = get_codex_config_path();
+    if !config_text.trim().is_empty() {
+        toml::from_str::<toml::Table>(config_text).map_err(|e| AppError::toml(&config_path, e))?;
+    }
+
+    let cfg_text = normalize_codex_feature_flags_in_config_toml(config_text)?;
+    write_text_file(&config_path, &cfg_text)
 }
 
 /// 获取 Codex 供应商配置文件路径
@@ -106,6 +150,7 @@ pub fn write_codex_live_atomic(
     if !cfg_text.trim().is_empty() {
         toml::from_str::<toml::Table>(&cfg_text).map_err(|e| AppError::toml(&config_path, e))?;
     }
+    let cfg_text = normalize_codex_feature_flags_in_config_toml(&cfg_text)?;
 
     // 第一步：写 auth.json
     write_json_file(&auth_path, auth)?;
@@ -141,7 +186,8 @@ pub fn validate_config_toml(text: &str) -> Result<(), AppError> {
     }
     toml::from_str::<toml::Table>(text)
         .map(|_| ())
-        .map_err(|e| AppError::toml(Path::new("config.toml"), e))
+        .map_err(|e| AppError::toml(Path::new("config.toml"), e))?;
+    normalize_codex_feature_flags_in_config_toml(text).map(|_| ())
 }
 
 /// 读取并校验 `~/.codex/config.toml`，返回文本（可能为空）
@@ -310,6 +356,7 @@ pub fn normalize_codex_settings_config_model_provider(
         .chain(current_config_text.as_deref());
     let normalized =
         normalize_codex_live_config_model_provider_with_anchors(&config_text, anchors)?;
+    let normalized = normalize_codex_feature_flags_in_config_toml(&normalized)?;
 
     if let Some(obj) = settings.as_object_mut() {
         obj.insert("config".to_string(), Value::String(normalized));
@@ -531,6 +578,57 @@ pub fn remove_codex_toml_base_url_if(toml_str: &str, predicate: impl Fn(&str) ->
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn normalize_codex_feature_flags_migrates_codex_hooks_to_hooks() {
+        let input = r#"model_provider = "openai"
+
+[features]
+codex_hooks = true
+goals = true
+"#;
+
+        let result = normalize_codex_feature_flags_in_config_toml(input).unwrap();
+        let parsed: toml::Value = toml::from_str(&result).unwrap();
+
+        assert!(!result.contains("codex_hooks"));
+        assert_eq!(
+            parsed
+                .get("features")
+                .and_then(|v| v.get("hooks"))
+                .and_then(|v| v.as_bool()),
+            Some(true)
+        );
+        assert_eq!(
+            parsed
+                .get("features")
+                .and_then(|v| v.get("goals"))
+                .and_then(|v| v.as_bool()),
+            Some(true)
+        );
+    }
+
+    #[test]
+    fn normalize_codex_feature_flags_keeps_existing_hooks_value() {
+        let input = r#"model_provider = "openai"
+
+[features]
+codex_hooks = true
+hooks = false
+"#;
+
+        let result = normalize_codex_feature_flags_in_config_toml(input).unwrap();
+        let parsed: toml::Value = toml::from_str(&result).unwrap();
+
+        assert!(!result.contains("codex_hooks"));
+        assert_eq!(
+            parsed
+                .get("features")
+                .and_then(|v| v.get("hooks"))
+                .and_then(|v| v.as_bool()),
+            Some(false)
+        );
+    }
 
     #[test]
     fn normalize_live_config_preserves_current_custom_model_provider_id() {
