@@ -223,10 +223,13 @@ impl ProxyService {
             Self::apply_codex_proxy_toml_config(config_str, proxy_codex_base_url);
         if preserve_chatgpt_auth {
             updated_config = Self::update_toml_requires_openai_auth(&updated_config, true);
-            updated_config = Self::update_toml_preferred_auth_method(&updated_config, "chatgpt");
             if let Some(token) = bearer_token {
                 updated_config =
+                    Self::update_toml_preferred_auth_method(&updated_config, "chatgpt");
+                updated_config =
                     Self::update_toml_experimental_bearer_token(&updated_config, &token);
+            } else {
+                updated_config = Self::remove_toml_preferred_auth_method(&updated_config);
             }
         }
         root.insert("config".to_string(), json!(updated_config));
@@ -259,6 +262,11 @@ impl ProxyService {
             proxy_codex_base_url,
             preserve_chatgpt_auth,
         )?;
+        crate::codex_config::normalize_codex_settings_config_model_provider(
+            &mut effective_settings,
+            None,
+        )
+        .map_err(|e| format!("归一化 Codex 接管配置失败: {e}"))?;
         Ok(effective_settings)
     }
 
@@ -553,6 +561,11 @@ impl ProxyService {
         let bearer_token = Self::codex_provider_bearer_token_for_toml(&effective_settings);
 
         self.apply_codex_chatgpt_direct_fields(&mut effective_settings, bearer_token)?;
+        crate::codex_config::normalize_codex_settings_config_model_provider(
+            &mut effective_settings,
+            None,
+        )
+        .map_err(|e| format!("归一化 Codex Live 配置失败: {e}"))?;
         self.write_codex_live(&effective_settings)?;
         self.sync_codex_provider_bound_resources()?;
         Ok(())
@@ -635,9 +648,11 @@ impl ProxyService {
 
         let config_str = root.get("config").and_then(Value::as_str).unwrap_or("");
         let mut updated_config = Self::update_toml_requires_openai_auth(config_str, true);
-        updated_config = Self::update_toml_preferred_auth_method(&updated_config, "chatgpt");
         if let Some(token) = bearer_token {
+            updated_config = Self::update_toml_preferred_auth_method(&updated_config, "chatgpt");
             updated_config = Self::update_toml_experimental_bearer_token(&updated_config, &token);
+        } else {
+            updated_config = Self::remove_toml_preferred_auth_method(&updated_config);
         }
         root.insert("config".to_string(), json!(updated_config));
         Ok(())
@@ -2591,6 +2606,14 @@ impl ProxyService {
         doc.to_string()
     }
 
+    fn remove_toml_preferred_auth_method(toml_str: &str) -> String {
+        let Ok(mut doc) = toml_str.parse::<toml_edit::DocumentMut>() else {
+            return toml_str.to_string();
+        };
+        doc.as_table_mut().remove("preferred_auth_method");
+        doc.to_string()
+    }
+
     fn update_toml_experimental_bearer_token(toml_str: &str, token: &str) -> String {
         let Ok(mut doc) = toml_str.parse::<toml_edit::DocumentMut>() else {
             return toml_str.to_string();
@@ -3850,9 +3873,14 @@ wire_api = "responses"
                 .expect("config text"),
         )
         .expect("parse live config");
+        assert_eq!(
+            parsed.get("model_provider").and_then(|v| v.as_str()),
+            Some("old"),
+            "startup direct sync should keep the live Codex history bucket stable"
+        );
         let provider = parsed
             .get("model_providers")
-            .and_then(|v| v.get("p1"))
+            .and_then(|v| v.get("old"))
             .expect("provider table");
         assert_eq!(
             provider.get("base_url").and_then(|v| v.as_str()),
@@ -3981,6 +4009,11 @@ base_url = "https://third.example/v1"
                 .expect("config text"),
         )
         .expect("parse live config");
+        assert_eq!(
+            parsed.get("model_provider").and_then(|v| v.as_str()),
+            Some("p1"),
+            "route takeover without an existing stable live bucket should use the current provider id"
+        );
         let provider = parsed
             .get("model_providers")
             .and_then(|v| v.get("p1"))
@@ -4105,9 +4138,14 @@ base_url = "https://old.example/v1"
                 .expect("config text"),
         )
         .expect("parse live config");
+        assert_eq!(
+            parsed.get("model_provider").and_then(|v| v.as_str()),
+            Some("old"),
+            "fallback route takeover should keep the live Codex history bucket stable"
+        );
         let provider = parsed
             .get("model_providers")
-            .and_then(|v| v.get("p1"))
+            .and_then(|v| v.get("old"))
             .expect("provider table");
         assert_eq!(
             provider.get("base_url").and_then(|v| v.as_str()),
@@ -4130,9 +4168,9 @@ base_url = "https://old.example/v1"
         assert!(
             parsed
                 .get("model_providers")
-                .and_then(|v| v.get("old"))
+                .and_then(|v| v.get("p1"))
                 .is_none(),
-            "stale live provider table must not be reused during fallback"
+            "provider-specific id should be normalized to the stable live provider id"
         );
 
         let updated = db
