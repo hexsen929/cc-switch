@@ -1543,7 +1543,7 @@ async fn recover_and_sync_live_configs_on_startup(state: &store::AppState) {
     // 检查 settings 表中的代理状态，自动恢复代理服务
     restore_proxy_state_on_startup(state).await;
 
-    sync_codex_current_provider_on_startup(state).await;
+    sync_codex_current_provider_on_startup(state);
 }
 
 /// 启动时根据 proxy_config 表中的代理状态自动恢复代理服务
@@ -1616,28 +1616,11 @@ async fn sync_codex_chatgpt_auth_takeover_on_startup(state: &store::AppState) {
     }
 }
 
-async fn sync_codex_current_provider_on_startup(state: &store::AppState) {
-    let takeover_enabled = state
-        .db
-        .get_proxy_config_for_app("codex")
-        .await
-        .map(|config| config.enabled)
-        .unwrap_or(false);
-
-    let result = if takeover_enabled {
-        state
-            .proxy_service
-            .sync_codex_takeover_to_current_provider()
-            .await
-    } else {
-        crate::services::provider::ProviderService::sync_current_provider_for_app(
-            state,
-            crate::app_config::AppType::Codex,
-        )
-        .map_err(|e| e.to_string())
-    };
-
-    match result {
+fn sync_codex_current_provider_on_startup(state: &store::AppState) {
+    match crate::services::provider::ProviderService::sync_current_provider_for_app(
+        state,
+        crate::app_config::AppType::Codex,
+    ) {
         Ok(()) => log::info!("✓ 已同步 Codex 当前供应商到 Live 配置"),
         Err(e) => log::warn!("同步 Codex 当前供应商到 Live 配置失败: {e}"),
     }
