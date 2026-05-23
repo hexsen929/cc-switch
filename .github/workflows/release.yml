@@ -586,7 +586,7 @@ jobs:
             macOS 版本已通过 Apple 代码签名和公证，可直接安装使用。
           files: release-assets/*
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_TOKEN: ${{ github.token }}
 
   assemble-latest-json:
     name: Assemble latest.json
@@ -599,10 +599,10 @@ jobs:
         run: |
           gh --version || (type -p curl >/dev/null && sudo apt-get update && sudo apt-get install -y gh || true)
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ github.token }}
       - name: Download all release assets
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ github.token }}
         run: |
           set -euxo pipefail
           TAG="${GITHUB_REF_NAME}"
@@ -680,7 +680,7 @@ jobs:
           mv "$tmp_json" latest.json
       - name: Upload latest.json to release
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ github.token }}
         run: |
           set -euxo pipefail
           gh release upload "$GITHUB_REF_NAME" latest.json --clobber --repo "$GITHUB_REPOSITORY"
@@ -694,7 +694,7 @@ jobs:
     steps:
       - name: Delete caches from previous tags
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
           CURRENT_REF="refs/tags/${{ github.ref_name }}"
