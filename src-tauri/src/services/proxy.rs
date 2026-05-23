@@ -270,6 +270,35 @@ impl ProxyService {
         Ok(effective_settings)
     }
 
+    pub async fn sync_codex_live_from_provider_while_proxy_active(
+        &self,
+        provider: &Provider,
+    ) -> Result<(), String> {
+        let mut effective_settings = build_effective_settings_with_common_config(
+            self.db.as_ref(),
+            &AppType::Codex,
+            provider,
+        )
+        .map_err(|e| format!("构建 Codex 有效配置失败: {e}"))?;
+        let (_, proxy_codex_base_url) = self.build_proxy_urls().await?;
+        let preserve_codex_chatgpt_auth =
+            self.codex_chatgpt_auth_takeover_enabled_for_route().await;
+
+        self.apply_codex_takeover_fields(
+            &mut effective_settings,
+            &proxy_codex_base_url,
+            preserve_codex_chatgpt_auth,
+        )?;
+        crate::codex_config::normalize_codex_settings_config_model_provider(
+            &mut effective_settings,
+            None,
+        )
+        .map_err(|e| format!("归一化 Codex Live 配置失败: {e}"))?;
+        self.write_codex_live(&effective_settings)?;
+        self.sync_codex_provider_bound_resources()?;
+        Ok(())
+    }
+
     fn codex_chatgpt_auth_snapshot_path() -> PathBuf {
         get_app_config_dir().join(CODEX_CHATGPT_AUTH_SNAPSHOT_FILE)
     }
