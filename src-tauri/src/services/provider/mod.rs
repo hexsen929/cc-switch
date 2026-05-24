@@ -370,7 +370,7 @@ base_url = "http://localhost:8080"
 
     #[test]
     #[serial]
-    fn switching_codex_provider_preserves_live_plugins_memories_and_features() {
+    fn switching_codex_provider_preserves_live_plugins_marketplaces_memories_and_features() {
         with_test_home(|state, _| {
             let provider_a = Provider::with_id(
                 "a".to_string(),
@@ -446,6 +446,11 @@ enabled = true
 [plugins."chrome@openai-bundled"]
 enabled = true
 
+[marketplaces.openai-bundled]
+last_updated = "2026-05-16T08:03:54Z"
+source_type = "local"
+source = "/tmp/codex-marketplace/openai-bundled"
+
 [memories]
 generate_memories = true
 use_memories = true
@@ -507,6 +512,24 @@ args = ["-y", "@upstash/context7-mcp"]
             }
             assert_eq!(
                 parsed
+                    .get("marketplaces")
+                    .and_then(|v| v.get("openai-bundled"))
+                    .and_then(|v| v.get("source_type"))
+                    .and_then(|v| v.as_str()),
+                Some("local"),
+                "plugin marketplace source should survive provider switch"
+            );
+            assert_eq!(
+                parsed
+                    .get("marketplaces")
+                    .and_then(|v| v.get("openai-bundled"))
+                    .and_then(|v| v.get("source"))
+                    .and_then(|v| v.as_str()),
+                Some("/tmp/codex-marketplace/openai-bundled"),
+                "existing marketplace path should not be overwritten"
+            );
+            assert_eq!(
+                parsed
                     .get("memories")
                     .and_then(|v| v.get("use_memories"))
                     .and_then(|v| v.as_bool()),
@@ -522,6 +545,136 @@ args = ["-y", "@upstash/context7-mcp"]
             assert!(
                 parsed.get("mcp_servers").is_none(),
                 "MCP should not be blindly carried from previous live config; McpService recalculates it from global settings plus provider overrides"
+            );
+        });
+    }
+
+    #[test]
+    #[serial]
+    fn switching_codex_provider_repairs_missing_bundled_marketplace_for_enabled_plugins() {
+        with_test_home(|state, home| {
+            let bundled_marketplace = home
+                .join(".codex")
+                .join(".tmp")
+                .join("bundled-marketplaces")
+                .join("openai-bundled");
+            fs::create_dir_all(bundled_marketplace.join(".agents").join("plugins"))
+                .expect("create fake bundled marketplace");
+            fs::write(
+                bundled_marketplace
+                    .join(".agents")
+                    .join("plugins")
+                    .join("marketplace.json"),
+                r#"{"name":"openai-bundled","plugins":[]}"#,
+            )
+            .expect("write fake marketplace manifest");
+
+            let provider_a = Provider::with_id(
+                "a".to_string(),
+                "Codex A".to_string(),
+                json!({
+                    "auth": {
+                        "OPENAI_API_KEY": "key-a"
+                    },
+                    "config": r#"model_provider = "a"
+model = "gpt-5.4"
+
+[model_providers.a]
+name = "Codex A"
+base_url = "https://a.example/v1"
+wire_api = "responses"
+"#
+                }),
+                None,
+            );
+            let provider_b = Provider::with_id(
+                "b".to_string(),
+                "Codex B".to_string(),
+                json!({
+                    "auth": {
+                        "OPENAI_API_KEY": "key-b"
+                    },
+                    "config": r#"model_provider = "b"
+model = "gpt-5.5"
+
+[model_providers.b]
+name = "Codex B"
+base_url = "https://b.example/v1"
+wire_api = "responses"
+"#
+                }),
+                None,
+            );
+
+            state
+                .db
+                .save_provider("codex", &provider_a)
+                .expect("save provider a");
+            state
+                .db
+                .save_provider("codex", &provider_b)
+                .expect("save provider b");
+            state
+                .db
+                .set_current_provider("codex", "a")
+                .expect("set current provider");
+            crate::settings::set_current_provider(&AppType::Codex, Some("a"))
+                .expect("set local current provider");
+
+            crate::codex_config::write_codex_live_atomic(
+                &json!({
+                    "OPENAI_API_KEY": "key-a"
+                }),
+                Some(
+                    r#"model_provider = "a"
+model = "gpt-5.4"
+
+[model_providers.a]
+name = "Codex A"
+base_url = "https://a.example/v1"
+wire_api = "responses"
+
+[plugins."computer-use@openai-bundled"]
+enabled = true
+
+[plugins."browser@openai-bundled"]
+enabled = true
+"#,
+                ),
+            )
+            .expect("seed codex live config without marketplaces");
+
+            ProviderService::switch(state, AppType::Codex, "b").expect("switch provider");
+
+            let live_config =
+                crate::codex_config::read_codex_config_text().expect("read live codex config");
+            let parsed: toml::Value = toml::from_str(&live_config).expect("parse live config");
+
+            assert_eq!(
+                parsed
+                    .get("plugins")
+                    .and_then(|v| v.get("computer-use@openai-bundled"))
+                    .and_then(|v| v.get("enabled"))
+                    .and_then(|v| v.as_bool()),
+                Some(true),
+                "plugin enablement should survive provider switch"
+            );
+            assert_eq!(
+                parsed
+                    .get("marketplaces")
+                    .and_then(|v| v.get("openai-bundled"))
+                    .and_then(|v| v.get("source_type"))
+                    .and_then(|v| v.as_str()),
+                Some("local"),
+                "enabled bundled plugins should repair the missing local marketplace"
+            );
+            assert_eq!(
+                parsed
+                    .get("marketplaces")
+                    .and_then(|v| v.get("openai-bundled"))
+                    .and_then(|v| v.get("source"))
+                    .and_then(|v| v.as_str()),
+                Some(bundled_marketplace.to_string_lossy().as_ref())
             );
         });
     }

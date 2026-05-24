@@ -1,4 +1,5 @@
 // unused imports removed
+use std::collections::BTreeSet;
 use std::path::PathBuf;
 
 use crate::config::{
@@ -8,7 +9,7 @@ use crate::config::{
 use crate::error::AppError;
 use serde_json::Value;
 use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf as StdPathBuf};
 use toml_edit::{DocumentMut, Item, TableLike};
 
 pub const CC_SWITCH_CODEX_MODEL_PROVIDER_ID: &str = "ccswitch";
@@ -301,7 +302,137 @@ fn normalize_codex_live_config_model_provider_with_anchors<'a>(
     Ok(doc.to_string())
 }
 
-const CODEX_USER_CONFIG_SECTIONS_TO_PRESERVE: &[&str] = &["plugins", "memories", "features"];
+const CODEX_USER_CONFIG_SECTIONS_TO_PRESERVE: &[&str] =
+    &["plugins", "marketplaces", "memories", "features"];
+
+fn codex_known_local_marketplace_source(marketplace_id: &str) -> Option<StdPathBuf> {
+    match marketplace_id {
+        // Codex Desktop exposes these bundled plugins through a local marketplace.
+        // If CC Switch rewrites config.toml and keeps only [plugins.*] without this
+        // source, the plugins remain enabled in TOML but disappear from Codex's UI.
+        "openai-bundled" => Some(
+            get_codex_config_dir()
+                .join(".tmp")
+                .join("bundled-marketplaces")
+                .join("openai-bundled"),
+        ),
+        "openai-primary-runtime" => Some(
+            get_home_dir()
+                .join(".cache")
+                .join("codex-runtimes")
+                .join("codex-primary-runtime")
+                .join("plugins")
+                .join("openai-primary-runtime"),
+        ),
+        _ => None,
+    }
+}
+
+fn codex_marketplace_source_is_usable(path: &Path) -> bool {
+    path.join(".agents")
+        .join("plugins")
+        .join("marketplace.json")
+        .exists()
+}
+
+fn enabled_codex_plugin_marketplace_ids(doc: &DocumentMut) -> BTreeSet<String> {
+    let Some(plugins) = doc.get("plugins").and_then(|item| item.as_table_like()) else {
+        return BTreeSet::new();
+    };
+
+    plugins
+        .iter()
+        .filter_map(|(plugin_id, plugin_item)| {
+            let enabled = plugin_item
+                .as_table_like()
+                .and_then(|plugin| plugin.get("enabled"))
+                .and_then(|enabled| enabled.as_bool())
+                .unwrap_or(false);
+            if !enabled {
+                return None;
+            }
+
+            let (_, marketplace_id) = plugin_id.rsplit_once('@')?;
+            let marketplace_id = marketplace_id.trim();
+            (!marketplace_id.is_empty()).then(|| marketplace_id.to_string())
+        })
+        .collect()
+}
+
+fn insert_codex_local_marketplace(
+    marketplaces: &mut dyn TableLike,
+    marketplace_id: &str,
+    source: &Path,
+) {
+    let mut marketplace = toml_edit::Table::new();
+    marketplace["last_updated"] =
+        toml_edit::value(chrono::Utc::now().format("%Y-%m-%dT%H:%M:%SZ").to_string());
+    marketplace["source_type"] = toml_edit::value("local");
+    marketplace["source"] = toml_edit::value(source.to_string_lossy().to_string());
+    marketplaces.insert(marketplace_id, Item::Table(marketplace));
+}
+
+fn ensure_codex_marketplaces_for_enabled_plugins(config_text: &str) -> Result<String, AppError> {
+    if config_text.trim().is_empty() {
+        return Ok(config_text.to_string());
+    }
+
+    let mut doc = config_text
+        .parse::<DocumentMut>()
+        .map_err(|e| AppError::Message(format!("Invalid Codex config.toml: {e}")))?;
+
+    let marketplace_ids = enabled_codex_plugin_marketplace_ids(&doc);
+    if marketplace_ids.is_empty() {
+        return Ok(config_text.to_string());
+    }
+
+    let mut missing_sources = Vec::new();
+    for marketplace_id in marketplace_ids {
+        let already_configured = doc
+            .get("marketplaces")
+            .and_then(|item| item.as_table_like())
+            .and_then(|marketplaces| marketplaces.get(marketplace_id.as_str()))
+            .is_some();
+        if already_configured {
+            continue;
+        }
+
+        let Some(source) = codex_known_local_marketplace_source(&marketplace_id) else {
+            continue;
+        };
+        if !codex_marketplace_source_is_usable(&source) {
+            log::warn!(
+                "Codex plugin marketplace '{marketplace_id}' is enabled but local marketplace source is missing at {}",
+                source.display()
+            );
+            continue;
+        }
+
+        missing_sources.push((marketplace_id, source));
+    }
+
+    if missing_sources.is_empty() {
+        return Ok(config_text.to_string());
+    }
+
+    if doc.get("marketplaces").is_none() {
+        doc["marketplaces"] = toml_edit::table();
+    }
+
+    let Some(marketplaces) = doc
+        .get_mut("marketplaces")
+        .and_then(|item| item.as_table_like_mut())
+    else {
+        log::warn!("Codex config has non-table [marketplaces]; cannot auto-repair plugin sources");
+        return Ok(config_text.to_string());
+    };
+
+    for (marketplace_id, source) in missing_sources {
+        insert_codex_local_marketplace(marketplaces, &marketplace_id, &source);
+    }
+
+    Ok(doc.to_string())
+}
 
 fn merge_missing_toml_item(target: &mut Item, source: &Item) {
     if let Some(source_table) = source.as_table_like() {
@@ -424,6 +555,7 @@ pub fn normalize_codex_settings_config_model_provider(
     let normalized =
         merge_codex_user_config_sections_from_anchors(&normalized, anchors.into_iter())?;
     let normalized = normalize_codex_feature_flags_in_config_toml(&normalized)?;
+    let normalized = ensure_codex_marketplaces_for_enabled_plugins(&normalized)?;
 
     if let Some(obj) = settings.as_object_mut() {
         obj.insert("config".to_string(), Value::String(normalized));
@@ -751,7 +883,7 @@ command = "npx"
     }
 
     #[test]
-    fn merge_codex_user_config_sections_preserves_plugins_memories_and_features() {
+    fn merge_codex_user_config_sections_preserves_plugins_marketplaces_memories_and_features() {
         let current = r#"model_provider = "custom"
 model = "gpt-5.4"
 
@@ -765,6 +897,11 @@ enabled = true
 
 [plugins."browser@openai-bundled"]
 enabled = true
+
+[marketplaces.openai-bundled]
+last_updated = "2026-05-16T08:03:54Z"
+source_type = "local"
+source = "/tmp/codex-marketplace/openai-bundled"
 
 [memories]
 generate_memories = true
@@ -808,6 +945,22 @@ wire_api = "responses"
                 .and_then(|v| v.get("enabled"))
                 .and_then(|v| v.as_bool()),
             Some(true)
+        );
+        assert_eq!(
+            parsed
+                .get("marketplaces")
+                .and_then(|v| v.get("openai-bundled"))
+                .and_then(|v| v.get("source_type"))
+                .and_then(|v| v.as_str()),
+            Some("local")
+        );
+        assert_eq!(
+            parsed
+                .get("marketplaces")
+                .and_then(|v| v.get("openai-bundled"))
+                .and_then(|v| v.get("source"))
+                .and_then(|v| v.as_str()),
+            Some("/tmp/codex-marketplace/openai-bundled")
         );
         assert_eq!(
             parsed
