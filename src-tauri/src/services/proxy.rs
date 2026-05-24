@@ -267,6 +267,7 @@ impl ProxyService {
             None,
         )
         .map_err(|e| format!("归一化 Codex 接管配置失败: {e}"))?;
+        self.apply_codex_provider_bound_mcp_to_settings(&mut effective_settings)?;
         Ok(effective_settings)
     }
 
@@ -294,6 +295,7 @@ impl ProxyService {
             None,
         )
         .map_err(|e| format!("归一化 Codex Live 配置失败: {e}"))?;
+        self.apply_codex_provider_bound_mcp_to_settings(&mut effective_settings)?;
         self.write_codex_live(&effective_settings)?;
         self.sync_codex_provider_bound_resources()?;
         Ok(())
@@ -542,7 +544,8 @@ impl ProxyService {
 
     fn sync_codex_provider_bound_resources(&self) -> Result<(), String> {
         let state = AppState::new(self.db.clone());
-        McpService::sync_all_enabled(&state).map_err(|e| format!("同步 MCP 失败: {e}"))?;
+        McpService::sync_all_enabled_for_app(&state, &AppType::Codex)
+            .map_err(|e| format!("同步 MCP 失败: {e}"))?;
         SkillService::sync_to_app(&self.db, &AppType::Codex)
             .map_err(|e| format!("同步 Skill 失败: {e}"))?;
         PromptService::sync_effective_prompt_to_file(&state, AppType::Codex)
@@ -595,8 +598,34 @@ impl ProxyService {
             None,
         )
         .map_err(|e| format!("归一化 Codex Live 配置失败: {e}"))?;
+        self.apply_codex_provider_bound_mcp_to_settings(&mut effective_settings)?;
         self.write_codex_live(&effective_settings)?;
         self.sync_codex_provider_bound_resources()?;
+        Ok(())
+    }
+
+    fn apply_codex_provider_bound_mcp_to_settings(
+        &self,
+        settings: &mut Value,
+    ) -> Result<(), String> {
+        let Some(obj) = settings.as_object_mut() else {
+            return Ok(());
+        };
+        let Some(config_text) = obj
+            .get("config")
+            .and_then(Value::as_str)
+            .map(str::to_string)
+        else {
+            return Ok(());
+        };
+
+        let config_text = McpService::apply_enabled_for_app_to_config_text_for_db(
+            self.db.as_ref(),
+            &AppType::Codex,
+            &config_text,
+        )
+        .map_err(|e| format!("同步 Codex MCP 覆盖失败: {e}"))?;
+        obj.insert("config".to_string(), json!(config_text));
         Ok(())
     }
 
@@ -2406,13 +2435,6 @@ impl ProxyService {
                 })
                 .transpose()?;
 
-            if let Some(existing_value) = existing_backup_value.as_ref() {
-                Self::preserve_codex_mcp_servers_in_backup(
-                    &mut effective_settings,
-                    existing_value,
-                )?;
-            }
-
             let anchor_config_text = existing_backup_value
                 .as_ref()
                 .and_then(|value| value.get("config"))
@@ -2422,6 +2444,7 @@ impl ProxyService {
                 anchor_config_text,
             )
             .map_err(|e| format!("归一化 Codex restore backup 失败: {e}"))?;
+            self.apply_codex_provider_bound_mcp_to_settings(&mut effective_settings)?;
         }
 
         let backup_json = match app_type_enum {
@@ -2521,67 +2544,6 @@ impl ProxyService {
     #[cfg(test)]
     async fn lock_switch_for_test(&self, app_type: &str) -> tokio::sync::OwnedMutexGuard<()> {
         self.switch_locks.lock_for_app(app_type).await
-    }
-
-    fn preserve_codex_mcp_servers_in_backup(
-        target_settings: &mut Value,
-        existing_backup: &Value,
-    ) -> Result<(), String> {
-        let target_obj = target_settings
-            .as_object_mut()
-            .ok_or_else(|| "Codex 备份必须是 JSON 对象".to_string())?;
-
-        let target_config = target_obj
-            .get("config")
-            .and_then(|v| v.as_str())
-            .unwrap_or("");
-        let mut target_doc = if target_config.trim().is_empty() {
-            toml_edit::DocumentMut::new()
-        } else {
-            target_config
-                .parse::<toml_edit::DocumentMut>()
-                .map_err(|e| format!("解析新的 Codex config.toml 失败: {e}"))?
-        };
-
-        let existing_config = existing_backup
-            .get("config")
-            .and_then(|v| v.as_str())
-            .unwrap_or("");
-        if existing_config.trim().is_empty() {
-            target_obj.insert("config".to_string(), json!(target_doc.to_string()));
-            return Ok(());
-        }
-
-        let existing_doc = existing_config
-            .parse::<toml_edit::DocumentMut>()
-            .map_err(|e| format!("解析现有 Codex 备份失败: {e}"))?;
-
-        if let Some(existing_mcp_servers) = existing_doc.get("mcp_servers") {
-            match target_doc.get_mut("mcp_servers") {
-                Some(target_mcp_servers) => {
-                    if let (Some(target_table), Some(existing_table)) = (
-                        target_mcp_servers.as_table_like_mut(),
-                        existing_mcp_servers.as_table_like(),
-                    ) {
-                        for (server_id, server_item) in existing_table.iter() {
-                            if target_table.get(server_id).is_none() {
-                                target_table.insert(server_id, server_item.clone());
-                            }
-                        }
-                    } else {
-                        log::warn!(
-                            "Codex config contains a non-table mcp_servers section; skipping backup MCP merge"
-                        );
-                    }
-                }
-                None => {
-                    target_doc["mcp_servers"] = existing_mcp_servers.clone();
-                }
-            }
-        }
-
-        target_obj.insert("config".to_string(), json!(target_doc.to_string()));
-        Ok(())
     }
 
     /// 代理模式下切换供应商（热切换，不写 Live）
@@ -4879,12 +4841,30 @@ base_url = "https://codex.example/v1"
 
     #[tokio::test]
     #[serial]
-    async fn update_live_backup_from_provider_preserves_codex_mcp_servers() {
+    async fn update_live_backup_from_provider_rebuilds_codex_mcp_from_global_settings() {
         let _home = TempHome::new();
         crate::settings::reload_settings().expect("reload settings");
 
         let db = Arc::new(Database::memory().expect("init db"));
         let service = ProxyService::new(db.clone());
+        db.save_mcp_server(&McpServer {
+            id: "echo".to_string(),
+            name: "Echo".to_string(),
+            server: json!({
+                "type": "stdio",
+                "command": "npx",
+                "args": ["echo-server"]
+            }),
+            apps: McpApps {
+                codex: true,
+                ..McpApps::default()
+            },
+            description: None,
+            homepage: None,
+            docs: None,
+            tags: vec![],
+        })
+        .expect("save mcp server");
 
         db.save_live_backup(
             "codex",
@@ -4898,9 +4878,8 @@ model = "gpt-4"
 [model_providers.any]
 base_url = "https://old.example/v1"
 
-[mcp_servers.echo]
-command = "npx"
-args = ["echo-server"]
+[mcp_servers.stale_backup]
+command = "stale-command"
 "#
             }))
             .expect("serialize seed backup"),
@@ -4944,7 +4923,11 @@ base_url = "https://new.example/v1"
 
         assert!(
             config.contains("[mcp_servers.echo]"),
-            "existing Codex MCP section should survive proxy hot-switch backup update"
+            "Codex MCP section should be rebuilt from global settings"
+        );
+        assert!(
+            !config.contains("stale_backup"),
+            "stale backup-only MCP should not survive provider backup update"
         );
         assert!(
             config.contains("https://new.example/v1"),
@@ -5247,12 +5230,46 @@ wire_api = "responses"
 
     #[tokio::test]
     #[serial]
-    async fn update_live_backup_from_provider_keeps_new_codex_mcp_entries_on_conflict() {
+    async fn update_live_backup_from_provider_applies_codex_mcp_provider_overrides() {
         let _home = TempHome::new();
         crate::settings::reload_settings().expect("reload settings");
 
         let db = Arc::new(Database::memory().expect("init db"));
         let service = ProxyService::new(db.clone());
+        db.save_mcp_server(&McpServer {
+            id: "shared".to_string(),
+            name: "Shared".to_string(),
+            server: json!({
+                "type": "stdio",
+                "command": "shared-command"
+            }),
+            apps: McpApps {
+                codex: true,
+                ..McpApps::default()
+            },
+            description: None,
+            homepage: None,
+            docs: None,
+            tags: vec![],
+        })
+        .expect("save shared mcp server");
+        db.save_mcp_server(&McpServer {
+            id: "disabled".to_string(),
+            name: "Disabled".to_string(),
+            server: json!({
+                "type": "stdio",
+                "command": "disabled-command"
+            }),
+            apps: McpApps {
+                codex: true,
+                ..McpApps::default()
+            },
+            description: None,
+            homepage: None,
+            docs: None,
+            tags: vec![],
+        })
+        .expect("save disabled mcp server");
 
         db.save_live_backup(
             "codex",
@@ -5260,10 +5277,7 @@ wire_api = "responses"
                 "auth": {
                     "OPENAI_API_KEY": "old-token"
                 },
-                "config": r#"[mcp_servers.shared]
-command = "old-command"
-
-[mcp_servers.legacy]
+                "config": r#"[mcp_servers.legacy]
 command = "legacy-command"
 "#
             }))
@@ -5272,22 +5286,37 @@ command = "legacy-command"
         .await
         .expect("seed live backup");
 
-        let provider = Provider::with_id(
+        let mut provider = Provider::with_id(
             "p2".to_string(),
             "P2".to_string(),
             json!({
                 "auth": {
                     "OPENAI_API_KEY": "new-token"
                 },
-                "config": r#"[mcp_servers.shared]
-command = "new-command"
+                "config": r#"model_provider = "p2"
 
-[mcp_servers.latest]
-command = "latest-command"
+[model_providers.p2]
+base_url = "https://new.example/v1"
 "#
             }),
             None,
         );
+        provider.meta = Some(ProviderMeta {
+            resource_overrides: Some(ProviderResourceOverrides {
+                mcp: Some(crate::provider::ProviderMcpOverrides {
+                    enabled: true,
+                    disabled_server_ids: vec!["disabled".to_string()],
+                }),
+                skills: None,
+                prompt: None,
+            }),
+            ..ProviderMeta::default()
+        });
+        db.save_provider("codex", &provider).expect("save provider");
+        db.set_current_provider("codex", "p2")
+            .expect("set current provider");
+        crate::settings::set_current_provider(&AppType::Codex, Some("p2"))
+            .expect("set local current provider");
 
         service
             .update_live_backup_from_provider("codex", &provider)
@@ -5315,24 +5344,16 @@ command = "latest-command"
                 .get("shared")
                 .and_then(|v| v.get("command"))
                 .and_then(|v| v.as_str()),
-            Some("new-command"),
-            "new provider/common-config MCP definition should win on conflict"
+            Some("shared-command"),
+            "global MCP should be included in restore backup"
         );
-        assert_eq!(
-            mcp_servers
-                .get("legacy")
-                .and_then(|v| v.get("command"))
-                .and_then(|v| v.as_str()),
-            Some("legacy-command"),
-            "backup-only MCP entries should still be preserved"
+        assert!(
+            mcp_servers.get("disabled").is_none(),
+            "provider MCP override should disable this server"
         );
-        assert_eq!(
-            mcp_servers
-                .get("latest")
-                .and_then(|v| v.get("command"))
-                .and_then(|v| v.as_str()),
-            Some("latest-command"),
-            "new MCP entries should remain in the restore backup"
+        assert!(
+            mcp_servers.get("legacy").is_none(),
+            "backup-only MCP entries should not be preserved"
         );
     }
 }

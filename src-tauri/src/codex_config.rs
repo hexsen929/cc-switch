@@ -9,7 +9,7 @@ use crate::error::AppError;
 use serde_json::Value;
 use std::fs;
 use std::path::Path;
-use toml_edit::{DocumentMut, Item};
+use toml_edit::{DocumentMut, Item, TableLike};
 
 pub const CC_SWITCH_CODEX_MODEL_PROVIDER_ID: &str = "ccswitch";
 
@@ -301,6 +301,66 @@ fn normalize_codex_live_config_model_provider_with_anchors<'a>(
     Ok(doc.to_string())
 }
 
+const CODEX_USER_CONFIG_SECTIONS_TO_PRESERVE: &[&str] = &["plugins", "memories", "features"];
+
+fn merge_missing_toml_item(target: &mut Item, source: &Item) {
+    if let Some(source_table) = source.as_table_like() {
+        if let Some(target_table) = target.as_table_like_mut() {
+            merge_missing_toml_table_like(target_table, source_table);
+        }
+    }
+}
+
+fn merge_missing_toml_table_like(target: &mut dyn TableLike, source: &dyn TableLike) {
+    for (key, source_item) in source.iter() {
+        match target.get_mut(key) {
+            Some(target_item) => merge_missing_toml_item(target_item, source_item),
+            None => {
+                target.insert(key, source_item.clone());
+            }
+        }
+    }
+}
+
+fn merge_codex_user_config_sections_from_anchors<'a>(
+    config_text: &str,
+    anchor_config_texts: impl IntoIterator<Item = &'a str>,
+) -> Result<String, AppError> {
+    if config_text.trim().is_empty() {
+        return Ok(config_text.to_string());
+    }
+
+    let mut target_doc = config_text
+        .parse::<DocumentMut>()
+        .map_err(|e| AppError::Message(format!("Invalid Codex config.toml: {e}")))?;
+
+    for anchor_config_text in anchor_config_texts {
+        if anchor_config_text.trim().is_empty() {
+            continue;
+        }
+
+        let Ok(source_doc) = anchor_config_text.parse::<DocumentMut>() else {
+            log::warn!("Skipping invalid Codex live config while preserving user sections");
+            continue;
+        };
+
+        for section in CODEX_USER_CONFIG_SECTIONS_TO_PRESERVE {
+            let Some(source_item) = source_doc.get(section) else {
+                continue;
+            };
+
+            match target_doc.get_mut(section) {
+                Some(target_item) => merge_missing_toml_item(target_item, source_item),
+                None => {
+                    target_doc[section] = source_item.clone();
+                }
+            }
+        }
+    }
+
+    Ok(target_doc.to_string())
+}
+
 fn rewrite_codex_profile_model_provider_refs(
     doc: &mut DocumentMut,
     source_provider_id: &str,
@@ -351,11 +411,18 @@ pub fn normalize_codex_settings_config_model_provider(
     };
 
     let current_config_text = read_codex_config_text().ok();
-    let anchors = anchor_config_text
-        .into_iter()
-        .chain(current_config_text.as_deref());
+    let mut anchors = Vec::new();
+    if let Some(anchor) = anchor_config_text {
+        anchors.push(anchor);
+    }
+    if let Some(current) = current_config_text.as_deref() {
+        anchors.push(current);
+    }
+
     let normalized =
-        normalize_codex_live_config_model_provider_with_anchors(&config_text, anchors)?;
+        normalize_codex_live_config_model_provider_with_anchors(&config_text, anchors.clone())?;
+    let normalized =
+        merge_codex_user_config_sections_from_anchors(&normalized, anchors.into_iter())?;
     let normalized = normalize_codex_feature_flags_in_config_toml(&normalized)?;
 
     if let Some(obj) = settings.as_object_mut() {
@@ -680,6 +747,150 @@ command = "npx"
         assert!(
             parsed.get("mcp_servers").is_some(),
             "unrelated config should be preserved"
+        );
+    }
+
+    #[test]
+    fn merge_codex_user_config_sections_preserves_plugins_memories_and_features() {
+        let current = r#"model_provider = "custom"
+model = "gpt-5.4"
+
+[model_providers.custom]
+name = "Current"
+base_url = "https://current.example/v1"
+wire_api = "responses"
+
+[plugins."computer-use@openai-bundled"]
+enabled = true
+
+[plugins."browser@openai-bundled"]
+enabled = true
+
+[memories]
+generate_memories = true
+use_memories = true
+
+[features]
+remote_control = true
+hooks = true
+
+[mcp_servers.context7]
+command = "npx"
+args = ["-y", "@upstash/context7-mcp"]
+"#;
+        let target = r#"model_provider = "next"
+model = "gpt-5.5"
+
+[model_providers.next]
+name = "Next"
+base_url = "https://next.example/v1"
+wire_api = "responses"
+"#;
+
+        let normalized =
+            normalize_codex_live_config_model_provider_with_anchors(target, Some(current)).unwrap();
+        let result =
+            merge_codex_user_config_sections_from_anchors(&normalized, Some(current)).unwrap();
+        let parsed: toml::Value = toml::from_str(&result).unwrap();
+
+        assert_eq!(
+            parsed
+                .get("plugins")
+                .and_then(|v| v.get("computer-use@openai-bundled"))
+                .and_then(|v| v.get("enabled"))
+                .and_then(|v| v.as_bool()),
+            Some(true)
+        );
+        assert_eq!(
+            parsed
+                .get("plugins")
+                .and_then(|v| v.get("browser@openai-bundled"))
+                .and_then(|v| v.get("enabled"))
+                .and_then(|v| v.as_bool()),
+            Some(true)
+        );
+        assert_eq!(
+            parsed
+                .get("memories")
+                .and_then(|v| v.get("generate_memories"))
+                .and_then(|v| v.as_bool()),
+            Some(true)
+        );
+        assert_eq!(
+            parsed
+                .get("features")
+                .and_then(|v| v.get("hooks"))
+                .and_then(|v| v.as_bool()),
+            Some(true)
+        );
+        assert!(
+            parsed.get("mcp_servers").is_none(),
+            "MCP is provider-bound and must be recalculated by McpService, not blindly preserved from the previous live config"
+        );
+        assert_eq!(
+            parsed.get("model_provider").and_then(|v| v.as_str()),
+            Some("custom"),
+            "stable provider id should still come from the live anchor"
+        );
+        assert_eq!(
+            parsed
+                .get("model_providers")
+                .and_then(|v| v.get("custom"))
+                .and_then(|v| v.get("base_url"))
+                .and_then(|v| v.as_str()),
+            Some("https://next.example/v1"),
+            "provider-specific endpoint must still switch to the target provider"
+        );
+    }
+
+    #[test]
+    fn merge_codex_user_config_sections_keeps_target_overrides() {
+        let current = r#"[plugins."computer-use@openai-bundled"]
+enabled = true
+
+[features]
+hooks = true
+remote_control = true
+"#;
+        let target = r#"model_provider = "next"
+
+[model_providers.next]
+base_url = "https://next.example/v1"
+
+[plugins."computer-use@openai-bundled"]
+enabled = false
+
+[features]
+hooks = false
+"#;
+
+        let result = merge_codex_user_config_sections_from_anchors(target, Some(current)).unwrap();
+        let parsed: toml::Value = toml::from_str(&result).unwrap();
+
+        assert_eq!(
+            parsed
+                .get("plugins")
+                .and_then(|v| v.get("computer-use@openai-bundled"))
+                .and_then(|v| v.get("enabled"))
+                .and_then(|v| v.as_bool()),
+            Some(false),
+            "target config should win when it already has a plugin setting"
+        );
+        assert_eq!(
+            parsed
+                .get("features")
+                .and_then(|v| v.get("hooks"))
+                .and_then(|v| v.as_bool()),
+            Some(false),
+            "target config should win when it already has a feature setting"
+        );
+        assert_eq!(
+            parsed
+                .get("features")
+                .and_then(|v| v.get("remote_control"))
+                .and_then(|v| v.as_bool()),
+            Some(true),
+            "missing feature keys should still be filled from current live config"
         );
     }
 

@@ -284,13 +284,29 @@ pub fn sync_enabled_to_codex(config: &MultiAppConfig) -> Result<(), AppError> {
     if !should_sync_codex_mcp() {
         return Ok(());
     }
-    use toml_edit::{Item, Table};
 
     // 1) 收集启用项（Codex 维度）
     let enabled = collect_enabled_servers(&config.mcp.codex);
 
     // 2) 读取现有 config.toml 文本；保持无效 TOML 的错误返回（不覆盖文件）
     let base_text = crate::codex_config::read_and_validate_codex_config_text()?;
+    let new_text = sync_enabled_servers_to_codex_config_text(&base_text, &enabled)?;
+
+    // 6) 写回（仅改 TOML，不触碰 auth.json）；toml_edit 会尽量保留未改区域的注释/空白/顺序
+    crate::codex_config::write_codex_config_text(&new_text)?;
+    Ok(())
+}
+
+/// 将已计算好的 Codex MCP 服务器集合写入 config.toml 文本。
+///
+/// `enabled` 的 value 是 MCP server spec（不是带 enabled/server 包装的 UI entry）。
+/// 此函数只替换 `[mcp_servers]` 段并清理旧的 `[mcp.servers]` 错误格式，
+/// 其它 Codex 配置保持不变。
+pub fn sync_enabled_servers_to_codex_config_text(
+    base_text: &str,
+    enabled: &HashMap<String, Value>,
+) -> Result<String, AppError> {
+    use toml_edit::{Item, Table};
 
     // 3) 使用 toml_edit 解析（允许空文件）
     let mut doc = if base_text.trim().is_empty() {
@@ -336,10 +352,7 @@ pub fn sync_enabled_to_codex(config: &MultiAppConfig) -> Result<(), AppError> {
         doc["mcp_servers"] = Item::Table(servers_tbl);
     }
 
-    // 6) 写回（仅改 TOML，不触碰 auth.json）；toml_edit 会尽量保留未改区域的注释/空白/顺序
-    let new_text = doc.to_string();
-    crate::codex_config::write_codex_config_text(&new_text)?;
-    Ok(())
+    Ok(doc.to_string())
 }
 
 /// 将单个 MCP 服务器同步到 Codex live 配置

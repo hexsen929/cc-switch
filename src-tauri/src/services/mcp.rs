@@ -1,7 +1,8 @@
 use indexmap::IndexMap;
 use std::collections::{HashMap, HashSet};
 
-use crate::app_config::{AppType, McpServer};
+use crate::app_config::{AppType, McpConfig, McpServer, MultiAppConfig};
+use crate::database::Database;
 use crate::error::AppError;
 use crate::mcp;
 use crate::store::AppState;
@@ -124,34 +125,7 @@ impl McpService {
     /// - 当前 provider 没有 meta / resource_overrides / mcp 覆盖
     /// - mcp 覆盖未启用（`enabled = false`）
     fn disabled_server_ids_for_app(state: &AppState, app: &AppType) -> HashSet<String> {
-        if app.is_additive_mode() {
-            return HashSet::new();
-        }
-
-        let provider_id = match crate::settings::get_effective_current_provider(&state.db, app) {
-            Ok(Some(id)) => id,
-            _ => return HashSet::new(),
-        };
-
-        let provider = match state.db.get_provider_by_id(&provider_id, app.as_str()) {
-            Ok(Some(p)) => p,
-            _ => return HashSet::new(),
-        };
-
-        provider
-            .meta
-            .as_ref()
-            .and_then(|meta| meta.resource_overrides.as_ref())
-            .and_then(|overrides| overrides.mcp.as_ref())
-            .filter(|override_config| override_config.enabled)
-            .map(|override_config| {
-                override_config
-                    .disabled_server_ids
-                    .iter()
-                    .cloned()
-                    .collect()
-            })
-            .unwrap_or_default()
+        Self::disabled_server_ids_for_db(state.db.as_ref(), app)
     }
 
     fn sync_server_to_app_no_config(server: &McpServer, app: &AppType) -> Result<(), AppError> {
@@ -235,19 +209,133 @@ impl McpService {
                 continue;
             }
 
-            // 每个 app 独立计算一次覆盖集合，避免逐 server 重复查询数据库
-            let disabled = Self::disabled_server_ids_for_app(state, &app);
+            Self::sync_all_enabled_for_app_from_servers(state, &app, &servers)?;
+        }
 
-            for server in servers.values() {
-                if server.apps.is_enabled_for(&app) && !disabled.contains(&server.id) {
-                    Self::sync_server_to_app_no_config(server, &app)?;
-                } else {
-                    Self::remove_server_from_app(state, &server.id, &app)?;
-                }
+        Ok(())
+    }
+
+    /// 同步指定 app 的 MCP，按“全局 app 启用状态 + 当前 provider 覆盖”重建目标段。
+    pub fn sync_all_enabled_for_app(state: &AppState, app: &AppType) -> Result<(), AppError> {
+        let servers = Self::get_all_servers(state)?;
+        Self::sync_all_enabled_for_app_from_servers(state, app, &servers)
+    }
+
+    /// 将指定 app 的 MCP 写入已经生成好的 live 配置文本。
+    ///
+    /// 当前只有 Codex 需要这个两阶段流程：先生成 provider live config，再把
+    /// provider-bound MCP 覆盖写进同一份 TOML 文本，最后一次性落盘，避免先写入
+    /// target provider 时旧 MCP 被短暂保留/丢失。
+    pub fn apply_enabled_for_app_to_config_text_for_db(
+        db: &Database,
+        app: &AppType,
+        config_text: &str,
+    ) -> Result<String, AppError> {
+        if !matches!(app, AppType::Codex) {
+            return Ok(config_text.to_string());
+        }
+
+        let servers = db.get_all_mcp_servers()?;
+        let enabled = Self::collect_codex_enabled_server_specs(db, &servers);
+        mcp::sync_enabled_servers_to_codex_config_text(config_text, &enabled)
+    }
+
+    fn sync_all_enabled_for_app_from_servers(
+        state: &AppState,
+        app: &AppType,
+        servers: &IndexMap<String, McpServer>,
+    ) -> Result<(), AppError> {
+        if matches!(app, AppType::OpenClaw | AppType::ClaudeDesktop) {
+            return Ok(());
+        }
+
+        if matches!(app, AppType::Codex) {
+            return Self::sync_codex_enabled_from_servers(state.db.as_ref(), servers);
+        }
+
+        // 每个 app 独立计算一次覆盖集合，避免逐 server 重复查询数据库
+        let disabled = Self::disabled_server_ids_for_app(state, app);
+
+        for server in servers.values() {
+            if server.apps.is_enabled_for(app) && !disabled.contains(&server.id) {
+                Self::sync_server_to_app_no_config(server, app)?;
+            } else {
+                Self::remove_server_from_app(state, &server.id, app)?;
             }
         }
 
         Ok(())
+    }
+
+    fn sync_codex_enabled_from_servers(
+        db: &Database,
+        servers: &IndexMap<String, McpServer>,
+    ) -> Result<(), AppError> {
+        let mut config = MultiAppConfig::default();
+        let codex_servers = Self::collect_codex_enabled_server_specs(db, servers)
+            .into_iter()
+            .map(|(id, server)| {
+                (
+                    id,
+                    serde_json::json!({
+                        "enabled": true,
+                        "server": server,
+                    }),
+                )
+            })
+            .collect();
+        config.mcp.codex = McpConfig {
+            servers: codex_servers,
+        };
+        mcp::sync_enabled_to_codex(&config)
+    }
+
+    fn collect_codex_enabled_server_specs(
+        db: &Database,
+        servers: &IndexMap<String, McpServer>,
+    ) -> HashMap<String, serde_json::Value> {
+        let disabled = Self::disabled_server_ids_for_db(db, &AppType::Codex);
+        let mut enabled = HashMap::new();
+
+        for server in servers.values() {
+            if !server.apps.codex || disabled.contains(&server.id) {
+                continue;
+            }
+            enabled.insert(server.id.clone(), server.server.clone());
+        }
+
+        enabled
+    }
+
+    fn disabled_server_ids_for_db(db: &Database, app: &AppType) -> HashSet<String> {
+        if app.is_additive_mode() {
+            return HashSet::new();
+        }
+
+        let provider_id = match crate::settings::get_effective_current_provider(db, app) {
+            Ok(Some(id)) => id,
+            _ => return HashSet::new(),
+        };
+
+        let provider = match db.get_provider_by_id(&provider_id, app.as_str()) {
+            Ok(Some(p)) => p,
+            _ => return HashSet::new(),
+        };
+
+        provider
+            .meta
+            .as_ref()
+            .and_then(|meta| meta.resource_overrides.as_ref())
+            .and_then(|overrides| overrides.mcp.as_ref())
+            .filter(|override_config| override_config.enabled)
+            .map(|override_config| {
+                override_config
+                    .disabled_server_ids
+                    .iter()
+                    .cloned()
+                    .collect()
+            })
+            .unwrap_or_default()
     }
 
     // ========================================================================

@@ -24,7 +24,8 @@ pub use claude::{
     sync_single_server_to_claude,
 };
 pub use codex::{
-    import_from_codex, remove_server_from_codex, sync_enabled_to_codex, sync_single_server_to_codex,
+    import_from_codex, remove_server_from_codex, sync_enabled_servers_to_codex_config_text,
+    sync_enabled_to_codex, sync_single_server_to_codex,
 };
 pub use gemini::{
     import_from_gemini, remove_server_from_gemini, sync_enabled_to_gemini,

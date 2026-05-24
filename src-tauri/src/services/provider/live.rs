@@ -547,7 +547,37 @@ pub(crate) fn write_live_with_common_config(
         return Ok(());
     }
 
+    if matches!(app_type, AppType::Codex) {
+        apply_provider_bound_resources_to_codex_settings(
+            &mut effective_provider.settings_config,
+            db,
+            app_type,
+        )?;
+    }
+
     write_live_snapshot(app_type, &effective_provider)
+}
+
+fn apply_provider_bound_resources_to_codex_settings(
+    settings: &mut Value,
+    db: &Database,
+    app_type: &AppType,
+) -> Result<(), AppError> {
+    let Some(obj) = settings.as_object_mut() else {
+        return Ok(());
+    };
+    let Some(config_text) = obj
+        .get("config")
+        .and_then(Value::as_str)
+        .map(str::to_string)
+    else {
+        return Ok(());
+    };
+
+    let config_text =
+        McpService::apply_enabled_for_app_to_config_text_for_db(db, app_type, &config_text)?;
+    obj.insert("config".to_string(), Value::String(config_text));
+    Ok(())
 }
 
 pub(crate) fn strip_common_config_from_live_settings(

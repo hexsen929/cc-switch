@@ -58,10 +58,9 @@ fn sync_provider_bound_resources(
     include_mcp: bool,
 ) -> Result<(), AppError> {
     if include_mcp {
-        // 与 sync_current_provider_for_app_to_live 一致：MCP 改为全量同步，避免
-        // 单 app 切换路径与全量同步路径行为分裂。sync_all_enabled 内部按 app 维度
-        // 计算覆盖集合，对其他 app 是幂等的。
-        McpService::sync_all_enabled(state)?;
+        // 按当前 app 的“全局 MCP + 当前 provider 覆盖”重建目标段。
+        // 不从旧 live config 继承 MCP，避免切供应商时把上一个 provider 的 MCP 泄漏过来。
+        McpService::sync_all_enabled_for_app(state, app_type)?;
     }
     crate::services::skill::SkillService::sync_to_app(&state.db, app_type)
         .map_err(|e| AppError::Message(format!("同步 Skill 失败: {e}")))?;
@@ -72,9 +71,10 @@ fn sync_provider_bound_resources(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::app_config::{McpApps, McpServer};
     use crate::config::{get_claude_settings_path, read_json_file, write_json_file};
     use crate::database::Database;
-    use crate::provider::ProviderMeta;
+    use crate::provider::{ProviderMcpOverrides, ProviderMeta, ProviderResourceOverrides};
     use crate::proxy::types::ProxyConfig;
     use crate::store::AppState;
     use serde_json::json;
@@ -366,6 +366,319 @@ base_url = "http://localhost:8080"
             extracted.contains("http://localhost:8080"),
             "should keep mcp_servers.* base_url"
         );
+    }
+
+    #[test]
+    #[serial]
+    fn switching_codex_provider_preserves_live_plugins_memories_and_features() {
+        with_test_home(|state, _| {
+            let provider_a = Provider::with_id(
+                "a".to_string(),
+                "Codex A".to_string(),
+                json!({
+                    "auth": {
+                        "OPENAI_API_KEY": "key-a"
+                    },
+                    "config": r#"model_provider = "a"
+model = "gpt-5.4"
+
+[model_providers.a]
+name = "Codex A"
+base_url = "https://a.example/v1"
+wire_api = "responses"
+"#
+                }),
+                None,
+            );
+            let provider_b = Provider::with_id(
+                "b".to_string(),
+                "Codex B".to_string(),
+                json!({
+                    "auth": {
+                        "OPENAI_API_KEY": "key-b"
+                    },
+                    "config": r#"model_provider = "b"
+model = "gpt-5.5"
+
+[model_providers.b]
+name = "Codex B"
+base_url = "https://b.example/v1"
+wire_api = "responses"
+"#
+                }),
+                None,
+            );
+
+            state
+                .db
+                .save_provider("codex", &provider_a)
+                .expect("save provider a");
+            state
+                .db
+                .save_provider("codex", &provider_b)
+                .expect("save provider b");
+            state
+                .db
+                .set_current_provider("codex", "a")
+                .expect("set current provider");
+            crate::settings::set_current_provider(&AppType::Codex, Some("a"))
+                .expect("set local current provider");
+
+            crate::codex_config::write_codex_live_atomic(
+                &json!({
+                    "OPENAI_API_KEY": "key-a"
+                }),
+                Some(
+                    r#"model_provider = "a"
+model = "gpt-5.4"
+
+[model_providers.a]
+name = "Codex A"
+base_url = "https://a.example/v1"
+wire_api = "responses"
+
+[plugins."computer-use@openai-bundled"]
+enabled = true
+
+[plugins."browser@openai-bundled"]
+enabled = true
+
+[plugins."chrome@openai-bundled"]
+enabled = true
+
+[memories]
+generate_memories = true
+use_memories = true
+disable_on_external_context = false
+
+[features]
+collaboration_modes = true
+remote_control = true
+goals = true
+hooks = true
+
+[mcp_servers.context7]
+command = "npx"
+args = ["-y", "@upstash/context7-mcp"]
+"#,
+                ),
+            )
+            .expect("seed codex live config");
+
+            ProviderService::switch(state, AppType::Codex, "b").expect("switch provider");
+
+            let live_config =
+                crate::codex_config::read_codex_config_text().expect("read live codex config");
+            let parsed: toml::Value = toml::from_str(&live_config).expect("parse live config");
+
+            assert_eq!(
+                parsed.get("model_provider").and_then(|v| v.as_str()),
+                Some("a"),
+                "stable live model_provider id should be reused for history continuity"
+            );
+            assert_eq!(
+                parsed.get("model").and_then(|v| v.as_str()),
+                Some("gpt-5.5"),
+                "provider-specific model should switch"
+            );
+            assert_eq!(
+                parsed
+                    .get("model_providers")
+                    .and_then(|v| v.get("a"))
+                    .and_then(|v| v.get("base_url"))
+                    .and_then(|v| v.as_str()),
+                Some("https://b.example/v1"),
+                "provider-specific endpoint should switch to provider b"
+            );
+            for plugin_id in [
+                "computer-use@openai-bundled",
+                "browser@openai-bundled",
+                "chrome@openai-bundled",
+            ] {
+                assert_eq!(
+                    parsed
+                        .get("plugins")
+                        .and_then(|v| v.get(plugin_id))
+                        .and_then(|v| v.get("enabled"))
+                        .and_then(|v| v.as_bool()),
+                    Some(true),
+                    "{plugin_id} should survive provider switch"
+                );
+            }
+            assert_eq!(
+                parsed
+                    .get("memories")
+                    .and_then(|v| v.get("use_memories"))
+                    .and_then(|v| v.as_bool()),
+                Some(true)
+            );
+            assert_eq!(
+                parsed
+                    .get("features")
+                    .and_then(|v| v.get("hooks"))
+                    .and_then(|v| v.as_bool()),
+                Some(true)
+            );
+            assert!(
+                parsed.get("mcp_servers").is_none(),
+                "MCP should not be blindly carried from previous live config; McpService recalculates it from global settings plus provider overrides"
+            );
+        });
+    }
+
+    #[test]
+    #[serial]
+    fn switching_codex_provider_rebuilds_mcp_from_global_settings_and_provider_overrides() {
+        with_test_home(|state, _| {
+            state
+                .db
+                .save_mcp_server(&McpServer {
+                    id: "global-keep".to_string(),
+                    name: "Global Keep".to_string(),
+                    server: json!({
+                        "type": "stdio",
+                        "command": "keep-command"
+                    }),
+                    apps: McpApps {
+                        codex: true,
+                        ..McpApps::default()
+                    },
+                    description: None,
+                    homepage: None,
+                    docs: None,
+                    tags: vec![],
+                })
+                .expect("save keep mcp");
+            state
+                .db
+                .save_mcp_server(&McpServer {
+                    id: "global-disabled".to_string(),
+                    name: "Global Disabled".to_string(),
+                    server: json!({
+                        "type": "stdio",
+                        "command": "disabled-command"
+                    }),
+                    apps: McpApps {
+                        codex: true,
+                        ..McpApps::default()
+                    },
+                    description: None,
+                    homepage: None,
+                    docs: None,
+                    tags: vec![],
+                })
+                .expect("save disabled mcp");
+
+            let provider_a = Provider::with_id(
+                "a".to_string(),
+                "Codex A".to_string(),
+                json!({
+                    "auth": {
+                        "OPENAI_API_KEY": "key-a"
+                    },
+                    "config": r#"model_provider = "a"
+model = "gpt-5.4"
+
+[model_providers.a]
+name = "Codex A"
+base_url = "https://a.example/v1"
+wire_api = "responses"
+"#
+                }),
+                None,
+            );
+            let mut provider_b = Provider::with_id(
+                "b".to_string(),
+                "Codex B".to_string(),
+                json!({
+                    "auth": {
+                        "OPENAI_API_KEY": "key-b"
+                    },
+                    "config": r#"model_provider = "b"
+model = "gpt-5.5"
+
+[model_providers.b]
+name = "Codex B"
+base_url = "https://b.example/v1"
+wire_api = "responses"
+"#
+                }),
+                None,
+            );
+            provider_b.meta = Some(ProviderMeta {
+                resource_overrides: Some(ProviderResourceOverrides {
+                    mcp: Some(ProviderMcpOverrides {
+                        enabled: true,
+                        disabled_server_ids: vec!["global-disabled".to_string()],
+                    }),
+                    skills: None,
+                    prompt: None,
+                }),
+                ..ProviderMeta::default()
+            });
+
+            state
+                .db
+                .save_provider("codex", &provider_a)
+                .expect("save provider a");
+            state
+                .db
+                .save_provider("codex", &provider_b)
+                .expect("save provider b");
+            state
+                .db
+                .set_current_provider("codex", "a")
+                .expect("set current provider");
+            crate::settings::set_current_provider(&AppType::Codex, Some("a"))
+                .expect("set local current provider");
+
+            crate::codex_config::write_codex_live_atomic(
+                &json!({
+                    "OPENAI_API_KEY": "key-a"
+                }),
+                Some(
+                    r#"model_provider = "a"
+model = "gpt-5.4"
+
+[model_providers.a]
+name = "Codex A"
+base_url = "https://a.example/v1"
+wire_api = "responses"
+
+[mcp_servers.stale_previous_provider]
+command = "stale-command"
+"#,
+                ),
+            )
+            .expect("seed codex live config");
+
+            ProviderService::switch(state, AppType::Codex, "b").expect("switch provider");
+
+            let live_config =
+                crate::codex_config::read_codex_config_text().expect("read live codex config");
+            let parsed: toml::Value = toml::from_str(&live_config).expect("parse live config");
+            let mcp_servers = parsed
+                .get("mcp_servers")
+                .and_then(|value| value.as_table())
+                .expect("mcp_servers should be rebuilt from CC Switch state");
+
+            assert_eq!(
+                mcp_servers
+                    .get("global-keep")
+                    .and_then(|v| v.get("command"))
+                    .and_then(|v| v.as_str()),
+                Some("keep-command"),
+                "global Codex MCP should remain enabled when provider override allows it"
+            );
+            assert!(
+                mcp_servers.get("global-disabled").is_none(),
+                "provider-level MCP override should remove disabled global MCP"
+            );
+            assert!(
+                mcp_servers.get("stale_previous_provider").is_none(),
+                "MCP from the previous live config should not leak into the new provider"
+            );
+        });
     }
 
     #[tokio::test]
@@ -2174,8 +2487,8 @@ impl ProviderService {
             }
         }
 
-        // Sync MCP
-        McpService::sync_all_enabled(state)?;
+        // Sync provider-bound resources after the target provider becomes current.
+        sync_provider_bound_resources(state, &app_type, true)?;
 
         Ok(result)
     }
@@ -2236,15 +2549,22 @@ impl ProviderService {
                 )
                 .map_err(|e| AppError::Message(format!("同步 Codex Live 配置失败: {e}")))?;
             }
+            sync_provider_bound_resources(state, &app_type, true)?;
             return Ok(());
         }
 
-        if Self::codex_chatgpt_auth_takeover_enabled(state, &app_type) {
+        let result = if Self::codex_chatgpt_auth_takeover_enabled(state, &app_type) {
             futures::executor::block_on(state.proxy_service.sync_codex_auth_takeover_mode_to_live())
                 .map_err(|e| AppError::Message(format!("同步 Codex ChatGPT 登录态失败: {e}")))
         } else {
             sync_current_provider_for_app_to_live(state, &app_type)
+        };
+
+        if result.is_ok() {
+            sync_provider_bound_resources(state, &app_type, true)?;
         }
+
+        result
     }
 
     fn codex_chatgpt_auth_takeover_enabled(state: &AppState, app_type: &AppType) -> bool {
