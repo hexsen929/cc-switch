@@ -20,7 +20,7 @@ import { ProviderHealthBadge } from "@/components/providers/ProviderHealthBadge"
 import { FailoverPriorityBadge } from "@/components/providers/FailoverPriorityBadge";
 import {
   extractCodexBaseUrl,
-  extractCodexBearerToken,
+  extractCodexExperimentalBearerToken,
   extractCodexWireApi,
   isCodexChatWireApi,
 } from "@/utils/providerConfigUtils";
@@ -79,13 +79,20 @@ function isOfficialProvider(provider: Provider, appId: AppId): boolean {
     const toml = config?.config;
     if (typeof toml === "string") {
       const baseUrl = extractCodexBaseUrl(toml);
-      const bearerToken = extractCodexBearerToken(toml);
+      const bearerToken = extractCodexExperimentalBearerToken(toml);
       if (baseUrl || bearerToken) {
         return false;
       }
     }
     const apiKey = config?.auth?.OPENAI_API_KEY;
-    return !apiKey || (typeof apiKey === "string" && apiKey.trim() === "");
+    const bearerToken =
+      typeof config?.config === "string"
+        ? extractCodexExperimentalBearerToken(config.config)
+        : undefined;
+    return (
+      !bearerToken &&
+      (!apiKey || (typeof apiKey === "string" && apiKey.trim() === ""))
+    );
   }
   if (appId === "gemini") {
     const apiKey = config?.env?.GEMINI_API_KEY;

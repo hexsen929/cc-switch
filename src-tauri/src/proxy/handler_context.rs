@@ -225,6 +225,7 @@ impl RequestContext {
             state.status.clone(),
             state.current_providers.clone(),
             state.gemini_shadow.clone(),
+            state.codex_chat_history.clone(),
             state.failover_manager.clone(),
             state.app_handle.clone(),
             self.current_provider_id.clone(),
@@ -302,7 +303,7 @@ mod tests {
     use crate::proxy::{
         failover_switch::FailoverSwitchManager,
         provider_router::ProviderRouter,
-        providers::gemini_shadow::GeminiShadowStore,
+        providers::{codex_chat_history::CodexChatHistoryStore, gemini_shadow::GeminiShadowStore},
         server::ProxyState,
         types::{ProxyConfig, ProxyStatus},
     };
@@ -427,6 +428,7 @@ base_url = "https://third.example/v1"
             current_providers: Arc::new(RwLock::new(HashMap::new())),
             provider_router: Arc::new(ProviderRouter::new(db.clone())),
             gemini_shadow: Arc::new(GeminiShadowStore::default()),
+            codex_chat_history: Arc::new(CodexChatHistoryStore::default()),
             app_handle: None,
             failover_manager: Arc::new(FailoverSwitchManager::new(db)),
         };

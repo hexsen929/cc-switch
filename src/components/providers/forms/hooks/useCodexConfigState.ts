@@ -1,13 +1,12 @@
 import { useState, useCallback, useEffect, useRef } from "react";
 import {
   extractCodexBaseUrl,
+  extractCodexExperimentalBearerToken,
   setCodexBaseUrl as setCodexBaseUrlInConfig,
-  extractCodexBearerToken,
-  setCodexBearerToken,
-  extractCodexModelName,
-  setCodexModelName as setCodexModelNameInConfig,
+  updateCodexExperimentalBearerToken,
 } from "@/utils/providerConfigUtils";
 import { normalizeTomlText } from "@/utils/textNormalization";
+import type { CodexCatalogModel } from "@/types";
 
 const PROXY_MANAGED_PLACEHOLDER = "PROXY_MANAGED";
 
@@ -25,6 +24,19 @@ interface UseCodexConfigStateProps {
   };
 }
 
+// auth.json 缺 OPENAI_API_KEY 时回退到 config.toml 的 experimental_bearer_token
+// (Mobile 兼容形态：保留 ChatGPT 登录态但用第三方 token)
+function pickCodexApiKey(
+  authObj: { OPENAI_API_KEY?: unknown } | null | undefined,
+  configText: string,
+): string {
+  if (authObj && typeof authObj.OPENAI_API_KEY === "string") {
+    const key = normalizeUserApiKey(authObj.OPENAI_API_KEY);
+    if (key) return key;
+  }
+  return extractCodexExperimentalBearerToken(configText) || "";
+}
+
 /**
  * 管理 Codex 配置状态
  * Codex 配置包含两部分：auth.json (JSON) 和 config.toml (TOML 字符串)
@@ -34,11 +46,12 @@ export function useCodexConfigState({ initialData }: UseCodexConfigStateProps) {
   const [codexConfig, setCodexConfigState] = useState("");
   const [codexApiKey, setCodexApiKey] = useState("");
   const [codexBaseUrl, setCodexBaseUrl] = useState("");
-  const [codexModelName, setCodexModelName] = useState("");
+  const [codexCatalogModels, setCodexCatalogModels] = useState<
+    CodexCatalogModel[]
+  >([]);
   const [codexAuthError, setCodexAuthError] = useState("");
 
   const isUpdatingCodexBaseUrlRef = useRef(false);
-  const isUpdatingCodexModelNameRef = useRef(false);
 
   // 初始化 Codex 配置（编辑模式）
   useEffect(() => {
@@ -57,27 +70,39 @@ export function useCodexConfigState({ initialData }: UseCodexConfigStateProps) {
           : "";
       setCodexConfigState(configStr);
 
+      const modelCatalog = (config as any).modelCatalog;
+      const rawCatalogModels = Array.isArray(modelCatalog?.models)
+        ? modelCatalog.models
+        : [];
+      setCodexCatalogModels(
+        rawCatalogModels
+          .map((item: any) => ({
+            model: typeof item?.model === "string" ? item.model : "",
+            displayName:
+              typeof item?.displayName === "string"
+                ? item.displayName
+                : typeof item?.display_name === "string"
+                  ? item.display_name
+                  : "",
+            contextWindow:
+              typeof item?.contextWindow === "string" ||
+              typeof item?.contextWindow === "number"
+                ? item.contextWindow
+                : typeof item?.context_window === "string" ||
+                    typeof item?.context_window === "number"
+                  ? item.context_window
+                  : "",
+          }))
+          .filter((item: CodexCatalogModel) => item.model.trim()),
+      );
+
       // 提取 Base URL
       const initialBaseUrl = extractCodexBaseUrl(configStr);
       if (initialBaseUrl) {
         setCodexBaseUrl(initialBaseUrl);
       }
 
-      // 提取 Model Name
-      const initialModelName = extractCodexModelName(configStr);
-      if (initialModelName) {
-        setCodexModelName(initialModelName);
-      }
-
-      // 提取 API Key
-      try {
-        setCodexApiKey(
-          normalizeUserApiKey(auth?.OPENAI_API_KEY) ||
-            normalizeUserApiKey(extractCodexBearerToken(configStr)),
-        );
-      } catch {
-        // ignore
-      }
+      setCodexApiKey(pickCodexApiKey(auth, configStr));
     }
   }, [initialData]);
 
@@ -88,15 +113,6 @@ export function useCodexConfigState({ initialData }: UseCodexConfigStateProps) {
     }
     const extracted = extractCodexBaseUrl(codexConfig) || "";
     setCodexBaseUrl((prev) => (prev === extracted ? prev : extracted));
-  }, [codexConfig]);
-
-  // 与 TOML 配置保持模型名称同步
-  useEffect(() => {
-    if (isUpdatingCodexModelNameRef.current) {
-      return;
-    }
-    const extracted = extractCodexModelName(codexConfig) || "";
-    setCodexModelName((prev) => (prev === extracted ? prev : extracted));
   }, [codexConfig]);
 
   // 获取 API Key（从 auth JSON）
@@ -114,13 +130,15 @@ export function useCodexConfigState({ initialData }: UseCodexConfigStateProps) {
 
   // 从 codexAuth 中提取并同步 API Key
   useEffect(() => {
-    const extractedKey =
-      getCodexAuthApiKey(codexAuth) ||
-      normalizeUserApiKey(extractCodexBearerToken(codexConfig));
-    if (extractedKey !== codexApiKey) {
-      setCodexApiKey(extractedKey);
+    let parsed: { OPENAI_API_KEY?: unknown } | null = null;
+    try {
+      parsed = JSON.parse(codexAuth || "{}");
+    } catch {
+      parsed = null;
     }
-  }, [codexAuth, codexConfig, codexApiKey, getCodexAuthApiKey]);
+    const extractedKey = pickCodexApiKey(parsed, codexConfig);
+    setCodexApiKey((prev) => (prev === extractedKey ? prev : extractedKey));
+  }, [codexAuth, codexConfig]);
 
   // 验证 Codex Auth JSON
   const validateCodexAuth = useCallback((value: string): string => {
@@ -158,6 +176,8 @@ export function useCodexConfigState({ initialData }: UseCodexConfigStateProps) {
   );
 
   // 处理 Codex API Key 输入并写回 auth.json
+  // 同步: 若 config.toml 当前含 experimental_bearer_token (Mobile 兼容形态),
+  // 也一并更新/清除——否则用户清空输入框会被 pickCodexApiKey 的 fallback 又填回去
   const handleCodexApiKeyChange = useCallback(
     (key: string) => {
       const trimmed = key.trim();
@@ -169,7 +189,9 @@ export function useCodexConfigState({ initialData }: UseCodexConfigStateProps) {
       } catch {
         // ignore
       }
-      setCodexConfig((prev) => setCodexBearerToken(prev, trimmed));
+      setCodexConfig((prev) =>
+        updateCodexExperimentalBearerToken(prev, trimmed),
+      );
     },
     [codexAuth, setCodexAuth, setCodexConfig],
   );
@@ -189,22 +211,7 @@ export function useCodexConfigState({ initialData }: UseCodexConfigStateProps) {
     [setCodexConfig],
   );
 
-  // 处理 Codex Model Name 变化
-  const handleCodexModelNameChange = useCallback(
-    (modelName: string) => {
-      const trimmed = modelName.trim();
-      setCodexModelName(trimmed);
-
-      isUpdatingCodexModelNameRef.current = true;
-      setCodexConfig((prev) => setCodexModelNameInConfig(prev, trimmed));
-      setTimeout(() => {
-        isUpdatingCodexModelNameRef.current = false;
-      }, 0);
-    },
-    [setCodexConfig],
-  );
-
-  // 处理 config 变化（同步 Base URL 和 Model Name）
+  // 处理 config 变化（同步 Base URL）
   const handleCodexConfigChange = useCallback(
     (value: string) => {
       // 归一化中文/全角/弯引号，避免 TOML 解析报错
@@ -217,47 +224,28 @@ export function useCodexConfigState({ initialData }: UseCodexConfigStateProps) {
           setCodexBaseUrl(extracted);
         }
       }
-
-      if (!isUpdatingCodexModelNameRef.current) {
-        const extractedModel = extractCodexModelName(normalized) || "";
-        if (extractedModel !== codexModelName) {
-          setCodexModelName(extractedModel);
-        }
-      }
     },
-    [setCodexConfig, codexBaseUrl, codexModelName],
+    [setCodexConfig, codexBaseUrl],
   );
 
   // 重置配置（用于预设切换）
   const resetCodexConfig = useCallback(
-    (auth: Record<string, unknown>, config: string) => {
+    (
+      auth: Record<string, unknown>,
+      config: string,
+      modelCatalogModels: CodexCatalogModel[] = [],
+    ) => {
       const authString = JSON.stringify(auth, null, 2);
       setCodexAuth(authString);
       setCodexConfig(config);
+      setCodexCatalogModels(modelCatalogModels);
 
       const baseUrl = extractCodexBaseUrl(config);
-      if (baseUrl) {
-        setCodexBaseUrl(baseUrl);
-      }
+      setCodexBaseUrl(baseUrl || "");
 
-      const modelName = extractCodexModelName(config);
-      if (modelName) {
-        setCodexModelName(modelName);
-      } else {
-        setCodexModelName("");
-      }
-
-      // 提取 API Key
-      try {
-        setCodexApiKey(
-          normalizeUserApiKey(auth?.OPENAI_API_KEY) ||
-            normalizeUserApiKey(extractCodexBearerToken(config)),
-        );
-      } catch {
-        setCodexApiKey("");
-      }
+      setCodexApiKey(pickCodexApiKey(auth, config));
     },
-    [setCodexAuth, setCodexConfig],
+    [setCodexAuth, setCodexConfig, setCodexCatalogModels],
   );
 
   return {
@@ -265,13 +253,13 @@ export function useCodexConfigState({ initialData }: UseCodexConfigStateProps) {
     codexConfig,
     codexApiKey,
     codexBaseUrl,
-    codexModelName,
+    codexCatalogModels,
     codexAuthError,
     setCodexAuth,
     setCodexConfig,
+    setCodexCatalogModels,
     handleCodexApiKeyChange,
     handleCodexBaseUrlChange,
-    handleCodexModelNameChange,
     handleCodexConfigChange,
     resetCodexConfig,
     getCodexAuthApiKey,
