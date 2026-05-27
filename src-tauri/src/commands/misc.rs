@@ -214,12 +214,74 @@ fn run_tool_lifecycle_silently(command_line: &str, _label: &str) -> Result<(), S
     use std::process::Command;
     // command_line 是 bash 风格脚本（含 `set -e` 与多行命令）；强制用 bash 执行，
     // 避免用户默认 shell 为 fish/zsh 时 `set -e` 等语义不一致。
-    let output = Command::new("bash")
-        .arg("-c")
-        .arg(command_line)
+    //
+    // macOS/Linux GUI 进程拿到的 PATH 往往来自 launchd/systemd，而不是用户的登录
+    // shell；它通常缺少 /opt/homebrew/bin、~/.nvm/.../bin、~/.volta/bin 等目录。
+    // 即使升级命令已经锚定到 /opt/homebrew/bin/codex 这类绝对路径，npm 全局 CLI
+    // 文件的 shebang 仍常是 `#!/usr/bin/env node`，会继续依赖子进程 PATH 找 node。
+    // 因此这里只给"安装/升级子进程"临时补 PATH，不修改用户 shell 配置或系统环境。
+    let mut command = Command::new("bash");
+    command.arg("-c").arg(command_line);
+    if let Some(path) = build_lifecycle_execution_path() {
+        command.env("PATH", path);
+    }
+    let output = command
         .output()
         .map_err(|e| format!("启动安装进程失败: {e}"))?;
     finish_lifecycle_output(&output)
+}
+
+#[cfg(not(target_os = "windows"))]
+fn build_lifecycle_execution_path() -> Option<std::ffi::OsString> {
+    let home = dirs::home_dir().unwrap_or_default();
+    let paths = lifecycle_execution_path_dirs(&home, std::env::var_os("PATH"));
+    std::env::join_paths(paths).ok()
+}
+
+/// 为静默安装/升级子进程补齐常见 Node/Python CLI 运行目录。
+///
+/// 只用于 `Command::env("PATH", ...)`，不会写入系统环境或 shell rc 文件。现有 PATH
+/// 保持在最前，避免覆盖用户已选择的 nvm/fnm/mise/Volta 版本；常见 GUI 缺失目录只
+/// 作为追加项兜底，让 `#!/usr/bin/env node` 这类 shebang 能找到 runtime。
+#[cfg(not(target_os = "windows"))]
+fn lifecycle_execution_path_dirs(
+    home: &Path,
+    current_path: Option<std::ffi::OsString>,
+) -> Vec<std::path::PathBuf> {
+    let mut paths = Vec::new();
+    extend_from_cli_path_env(&mut paths, current_path);
+
+    if !home.as_os_str().is_empty() {
+        push_unique_path(&mut paths, home.join(".local/bin"));
+        push_unique_path(&mut paths, home.join(".npm-global/bin"));
+        push_unique_path(&mut paths, home.join("n/bin"));
+        push_unique_path(&mut paths, home.join(".volta/bin"));
+        push_unique_path(&mut paths, home.join(".bun/bin"));
+        extend_mise_node_search_paths(&mut paths, home);
+
+        let fnm_base = home.join(".local/state/fnm_multishells");
+        extend_existing_child_search_paths(&mut paths, &fnm_base, Some("bin"));
+
+        let nvm_base = home.join(".nvm/versions/node");
+        extend_existing_child_search_paths(&mut paths, &nvm_base, Some("bin"));
+    }
+
+    #[cfg(target_os = "macos")]
+    {
+        push_unique_path(&mut paths, std::path::PathBuf::from("/opt/homebrew/bin"));
+        push_unique_path(&mut paths, std::path::PathBuf::from("/opt/homebrew/sbin"));
+        push_unique_path(&mut paths, std::path::PathBuf::from("/usr/local/bin"));
+        push_unique_path(&mut paths, std::path::PathBuf::from("/usr/local/sbin"));
+    }
+
+    #[cfg(target_os = "linux")]
+    {
+        push_unique_path(&mut paths, std::path::PathBuf::from("/usr/local/bin"));
+        push_unique_path(&mut paths, std::path::PathBuf::from("/usr/bin"));
+        push_unique_path(&mut paths, std::path::PathBuf::from("/bin"));
+    }
+
+    paths
 }
 
 /// Windows 静默执行：command_line 是 .bat 内容（@echo off + call/wsl 行，CRLF 分隔），
@@ -3066,6 +3128,75 @@ mod tests {
         assert_eq!(extract_version("claude 1.0.20"), "1.0.20");
         assert_eq!(extract_version("v2.3.4-beta.1"), "2.3.4-beta.1");
         assert_eq!(extract_version("no version here"), "no version here");
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    mod lifecycle_path_cases {
+        use super::super::*;
+
+        #[test]
+        fn lifecycle_path_preserves_current_path_first() {
+            let home = PathBuf::from("/tmp/cc-switch-test-home");
+            let sep = std::path::MAIN_SEPARATOR.to_string();
+            let current = std::env::join_paths([
+                PathBuf::from(format!("{sep}custom{sep}node{sep}bin")),
+                PathBuf::from(format!("{sep}usr{sep}bin")),
+            ])
+            .expect("test PATH should join");
+
+            let dirs = lifecycle_execution_path_dirs(&home, Some(current));
+
+            assert_eq!(
+                dirs.first(),
+                Some(&PathBuf::from(format!("{sep}custom{sep}node{sep}bin")))
+            );
+            assert_eq!(
+                dirs.get(1),
+                Some(&PathBuf::from(format!("{sep}usr{sep}bin")))
+            );
+            assert!(
+                dirs.contains(&home.join(".volta/bin")),
+                "GUI lifecycle PATH should include common user Node manager dirs: {dirs:?}"
+            );
+            assert!(
+                dirs.contains(&home.join(".local/bin")),
+                "GUI lifecycle PATH should include native CLI install dirs: {dirs:?}"
+            );
+        }
+
+        #[test]
+        fn lifecycle_path_discovers_nvm_fnm_and_mise_node_bins() {
+            let temp = tempfile::tempdir().expect("temp home should be created");
+            let home = temp.path();
+            let nvm_bin = home.join(".nvm/versions/node/v24.10.0/bin");
+            let fnm_bin = home.join(".local/state/fnm_multishells/123/bin");
+            let mise_bin = home.join(".local/share/mise/installs/node/24.10.0/bin");
+            std::fs::create_dir_all(&nvm_bin).expect("nvm bin should be created");
+            std::fs::create_dir_all(&fnm_bin).expect("fnm bin should be created");
+            std::fs::create_dir_all(&mise_bin).expect("mise bin should be created");
+
+            let dirs = lifecycle_execution_path_dirs(home, None);
+
+            assert!(dirs.contains(&nvm_bin), "missing nvm bin in {dirs:?}");
+            assert!(dirs.contains(&fnm_bin), "missing fnm bin in {dirs:?}");
+            assert!(
+                dirs.contains(&mise_bin),
+                "missing mise node bin in {dirs:?}"
+            );
+        }
+
+        #[test]
+        fn lifecycle_path_deduplicates_existing_common_dirs() {
+            let temp = tempfile::tempdir().expect("temp home should be created");
+            let home = temp.path();
+            let local_bin = home.join(".local/bin");
+            let current = std::env::join_paths([local_bin.clone()]).expect("PATH should join");
+
+            let dirs = lifecycle_execution_path_dirs(home, Some(current));
+
+            let count = dirs.iter().filter(|path| *path == &local_bin).count();
+            assert_eq!(count, 1);
+        }
     }
 
     /// `parent_dir` 是锚定层"由 bin 路径推导同目录绝对路径"的基石,跨平台共用——
