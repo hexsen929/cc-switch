@@ -16,12 +16,15 @@ use super::{
     },
     handler_context::RequestContext,
     providers::{
-        codex_chat_history::record_responses_sse_stream, get_adapter, get_claude_api_format,
+        codex_chat_history::record_responses_sse_stream,
+        get_adapter, get_claude_api_format,
         streaming::create_anthropic_sse_stream,
-        streaming_codex_chat::create_responses_sse_stream_from_chat,
+        streaming_codex_chat::{
+            build_responses_sse_from_chat_completion, create_responses_sse_stream_from_chat,
+        },
         streaming_gemini::create_anthropic_sse_stream_from_gemini,
-        streaming_responses::create_anthropic_sse_stream_from_responses, transform,
-        transform_codex_chat, transform_gemini, transform_responses,
+        streaming_responses::create_anthropic_sse_stream_from_responses,
+        transform, transform_codex_chat, transform_gemini, transform_responses,
     },
     response_processor::{
         create_logged_passthrough_stream, process_response, read_decoded_body,
@@ -276,6 +279,17 @@ async fn handle_claude_transform(
     let tool_schema_hints = (!tool_schema_hints.is_empty()).then_some(tool_schema_hints);
 
     if use_streaming {
+        if api_format == "openai_chat_virtual_tools" {
+            return handle_claude_virtual_tool_stream(
+                response,
+                ctx,
+                state,
+                status,
+                connection_guard,
+            )
+            .await;
+        }
+
         // 根据 api_format 选择流式转换器
         let stream = response.bytes_stream();
         let sse_stream: Box<
@@ -386,6 +400,14 @@ async fn handle_claude_transform(
     };
 
     // 根据 api_format 选择非流式转换器
+    let upstream_response = if api_format == "openai_chat_virtual_tools" {
+        super::providers::tool_virtual::apply_virtual_tool_response_to_openai_chat_response(
+            upstream_response,
+        )
+    } else {
+        upstream_response
+    };
+
     let anthropic_response = if api_format == "openai_responses" {
         transform_responses::responses_to_anthropic(upstream_response)
     } else if api_format == "gemini_native" {
@@ -463,6 +485,237 @@ async fn handle_claude_transform(
         log::error!("[Claude] 构建响应失败: {e}");
         ProxyError::Internal(format!("Failed to build response: {e}"))
     })
+}
+
+async fn handle_claude_virtual_tool_stream(
+    response: super::hyper_client::ProxyResponse,
+    ctx: &RequestContext,
+    state: &ProxyState,
+    status: axum::http::StatusCode,
+    connection_guard: Option<ActiveConnectionGuard>,
+) -> Result<axum::response::Response, ProxyError> {
+    let body_timeout =
+        if ctx.app_config.auto_failover_enabled && ctx.app_config.non_streaming_timeout > 0 {
+            std::time::Duration::from_secs(ctx.app_config.non_streaming_timeout as u64)
+        } else {
+            std::time::Duration::ZERO
+        };
+    let (mut response_headers, _status, body_bytes) =
+        read_decoded_body(response, ctx.tag, body_timeout).await?;
+    let mut upstream_response: Value = serde_json::from_slice(&body_bytes).map_err(|e| {
+        let body_str = String::from_utf8_lossy(&body_bytes);
+        log::error!("[Claude] 解析虚拟工具桥接响应失败: {e}, body: {body_str}");
+        ProxyError::TransformError(format!("Failed to parse upstream response: {e}"))
+    })?;
+    upstream_response =
+        super::providers::tool_virtual::apply_virtual_tool_response_to_openai_chat_response(
+            upstream_response,
+        );
+    let anthropic_response = transform::openai_to_anthropic(upstream_response)?;
+
+    if let Some(usage) = TokenUsage::from_claude_response(&anthropic_response) {
+        let model = anthropic_response
+            .get("model")
+            .and_then(|m| m.as_str())
+            .unwrap_or("unknown")
+            .to_string();
+        let latency_ms = ctx.latency_ms();
+        let request_model = ctx.request_model.clone();
+        tokio::spawn({
+            let state = state.clone();
+            let provider_id = ctx.provider.id.clone();
+            let session_id = ctx.session_id.clone();
+            async move {
+                log_usage(
+                    &state,
+                    &provider_id,
+                    "claude",
+                    &model,
+                    &request_model,
+                    usage,
+                    latency_ms,
+                    None,
+                    true,
+                    status.as_u16(),
+                    Some(session_id),
+                )
+                .await;
+            }
+        });
+    }
+
+    strip_entity_headers_for_rebuilt_body(&mut response_headers);
+    strip_hop_by_hop_response_headers(&mut response_headers);
+    let sse_body = build_anthropic_message_sse(&anthropic_response)?;
+    drop(connection_guard);
+
+    let mut builder = axum::response::Response::builder().status(status);
+    for (key, value) in response_headers.iter() {
+        if key != axum::http::header::CONTENT_TYPE && key != axum::http::header::CONTENT_LENGTH {
+            builder = builder.header(key, value);
+        }
+    }
+    builder = builder
+        .header(
+            axum::http::header::CONTENT_TYPE,
+            axum::http::HeaderValue::from_static("text/event-stream"),
+        )
+        .header(
+            axum::http::header::CACHE_CONTROL,
+            axum::http::HeaderValue::from_static("no-cache"),
+        );
+
+    builder
+        .body(axum::body::Body::from(sse_body))
+        .map_err(|e| ProxyError::Internal(format!("Failed to build response: {e}")))
+}
+
+fn build_anthropic_message_sse(payload: &Value) -> Result<Vec<u8>, ProxyError> {
+    let content_blocks = payload
+        .get("content")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+    let message_start = json!({
+        "type": "message_start",
+        "message": {
+            "id": payload.get("id").and_then(Value::as_str).unwrap_or(""),
+            "type": "message",
+            "role": "assistant",
+            "content": [],
+            "model": payload.get("model").and_then(Value::as_str).unwrap_or(""),
+            "stop_reason": null,
+            "stop_sequence": null,
+            "usage": {
+                "input_tokens": payload.pointer("/usage/input_tokens").and_then(Value::as_u64).unwrap_or(0),
+                "output_tokens": 0,
+            }
+        }
+    });
+
+    let mut events = Vec::new();
+    push_named_sse_event(&mut events, "message_start", &message_start)?;
+    for (index, block) in content_blocks.iter().enumerate() {
+        let block_type = block.get("type").and_then(Value::as_str).unwrap_or("text");
+        match block_type {
+            "tool_use" => {
+                push_named_sse_event(
+                    &mut events,
+                    "content_block_start",
+                    &json!({
+                        "type":"content_block_start",
+                        "index": index,
+                        "content_block": {
+                            "type":"tool_use",
+                            "id": block.get("id").cloned().unwrap_or(Value::Null),
+                            "name": block.get("name").cloned().unwrap_or(Value::Null),
+                            "input": {}
+                        }
+                    }),
+                )?;
+                let partial_json = serde_json::to_string(block.get("input").unwrap_or(&json!({})))
+                    .unwrap_or_else(|_| "{}".to_string());
+                push_named_sse_event(
+                    &mut events,
+                    "content_block_delta",
+                    &json!({
+                        "type":"content_block_delta",
+                        "index": index,
+                        "delta": {"type":"input_json_delta", "partial_json": partial_json}
+                    }),
+                )?;
+                push_named_sse_event(
+                    &mut events,
+                    "content_block_stop",
+                    &json!({"type":"content_block_stop", "index": index}),
+                )?;
+            }
+            "thinking" => {
+                push_named_sse_event(
+                    &mut events,
+                    "content_block_start",
+                    &json!({
+                        "type":"content_block_start",
+                        "index": index,
+                        "content_block": {"type":"thinking", "thinking":"", "signature":""}
+                    }),
+                )?;
+                if let Some(text) = block
+                    .get("thinking")
+                    .and_then(Value::as_str)
+                    .filter(|text| !text.is_empty())
+                {
+                    push_named_sse_event(
+                        &mut events,
+                        "content_block_delta",
+                        &json!({
+                            "type":"content_block_delta",
+                            "index": index,
+                            "delta": {"type":"thinking_delta", "thinking": text}
+                        }),
+                    )?;
+                }
+                push_named_sse_event(
+                    &mut events,
+                    "content_block_stop",
+                    &json!({"type":"content_block_stop", "index": index}),
+                )?;
+            }
+            _ => {
+                push_named_sse_event(
+                    &mut events,
+                    "content_block_start",
+                    &json!({
+                        "type":"content_block_start",
+                        "index": index,
+                        "content_block": {"type":"text", "text":""}
+                    }),
+                )?;
+                if let Some(text) = block
+                    .get("text")
+                    .and_then(Value::as_str)
+                    .filter(|text| !text.is_empty())
+                {
+                    push_named_sse_event(
+                        &mut events,
+                        "content_block_delta",
+                        &json!({
+                            "type":"content_block_delta",
+                            "index": index,
+                            "delta": {"type":"text_delta", "text": text}
+                        }),
+                    )?;
+                }
+                push_named_sse_event(
+                    &mut events,
+                    "content_block_stop",
+                    &json!({"type":"content_block_stop", "index": index}),
+                )?;
+            }
+        }
+    }
+    push_named_sse_event(
+        &mut events,
+        "message_delta",
+        &json!({
+            "type":"message_delta",
+            "delta": {
+                "stop_reason": payload.get("stop_reason").cloned().unwrap_or(Value::Null),
+                "stop_sequence": payload.get("stop_sequence").cloned().unwrap_or(Value::Null),
+            },
+            "usage": {"output_tokens": payload.pointer("/usage/output_tokens").and_then(Value::as_u64).unwrap_or(0)}
+        }),
+    )?;
+    push_named_sse_event(&mut events, "message_stop", &json!({"type":"message_stop"}))?;
+    Ok(events)
+}
+
+fn push_named_sse_event(buf: &mut Vec<u8>, event: &str, payload: &Value) -> Result<(), ProxyError> {
+    let data = serde_json::to_string(payload)
+        .map_err(|e| ProxyError::TransformError(format!("Failed to serialize SSE event: {e}")))?;
+    buf.extend_from_slice(format!("event: {event}\n").as_bytes());
+    buf.extend_from_slice(format!("data: {data}\n\n").as_bytes());
+    Ok(())
 }
 
 fn endpoint_with_query(uri: &axum::http::Uri, endpoint: &str) -> String {
@@ -698,12 +951,18 @@ async fn handle_codex_chat_to_responses_transform(
     connection_guard: Option<ActiveConnectionGuard>,
 ) -> Result<axum::response::Response, ProxyError> {
     let status = response.status();
+    let use_virtual_tools = super::providers::tool_virtual::is_enabled(&ctx.provider);
 
     if !status.is_success() {
         // 上游 Chat 错误体形状与 Responses 不一致（如 MiniMax 的 base_resp、自定义 detail 字段）；
         // 直接透传会让 Codex 客户端无法识别错误码。这里统一转换为 Responses 风格
         // `{"error": {message, type, code, param}}`，保留原始 HTTP 状态码。
         return handle_codex_chat_error_response(response, ctx, status).await;
+    }
+
+    if use_virtual_tools && is_stream && !response.is_sse() {
+        return handle_codex_virtual_tool_stream(response, ctx, state, status, connection_guard)
+            .await;
     }
 
     if is_stream || response.is_sse() {
@@ -790,6 +1049,13 @@ async fn handle_codex_chat_to_responses_transform(
         log::error!("[Codex] 解析 Chat 上游响应失败: {e}, body: {body_str}");
         ProxyError::TransformError(format!("Failed to parse upstream chat response: {e}"))
     })?;
+    let chat_response = if use_virtual_tools {
+        super::providers::tool_virtual::apply_virtual_tool_response_to_openai_chat_response(
+            chat_response,
+        )
+    } else {
+        chat_response
+    };
     let responses_response = transform_codex_chat::chat_completion_to_response(chat_response)
         .map_err(|e| {
             log::error!("[Codex] Chat → Responses 响应转换失败: {e}");
@@ -856,6 +1122,97 @@ async fn handle_codex_chat_to_responses_transform(
             log::error!("[Codex] 构建 Responses 响应失败: {e}");
             ProxyError::Internal(format!("Failed to build response: {e}"))
         })
+}
+
+async fn handle_codex_virtual_tool_stream(
+    response: super::hyper_client::ProxyResponse,
+    ctx: &RequestContext,
+    state: &ProxyState,
+    status: axum::http::StatusCode,
+    connection_guard: Option<ActiveConnectionGuard>,
+) -> Result<axum::response::Response, ProxyError> {
+    let body_timeout =
+        if ctx.app_config.auto_failover_enabled && ctx.app_config.non_streaming_timeout > 0 {
+            std::time::Duration::from_secs(ctx.app_config.non_streaming_timeout as u64)
+        } else {
+            std::time::Duration::ZERO
+        };
+    let (mut response_headers, _status, body_bytes) =
+        read_decoded_body(response, ctx.tag, body_timeout).await?;
+    let body_str = String::from_utf8_lossy(&body_bytes);
+    let chat_response: Value = serde_json::from_slice(&body_bytes).map_err(|e| {
+        log::error!("[Codex] 解析虚拟工具桥接响应失败: {e}, body: {body_str}");
+        ProxyError::TransformError(format!("Failed to parse upstream chat response: {e}"))
+    })?;
+    let chat_response =
+        super::providers::tool_virtual::apply_virtual_tool_response_to_openai_chat_response(
+            chat_response,
+        );
+    let responses_response =
+        transform_codex_chat::chat_completion_to_response(chat_response.clone()).map_err(|e| {
+            log::error!("[Codex] 虚拟工具桥接 Chat → Responses 响应转换失败: {e}");
+            e
+        })?;
+    state
+        .codex_chat_history
+        .record_response(&responses_response)
+        .await;
+
+    if let Some(usage) = TokenUsage::from_codex_response_auto(&responses_response) {
+        let model = responses_response
+            .get("model")
+            .and_then(|m| m.as_str())
+            .unwrap_or(&ctx.request_model)
+            .to_string();
+        let request_model = ctx.request_model.clone();
+        tokio::spawn({
+            let state = state.clone();
+            let provider_id = ctx.provider.id.clone();
+            let session_id = ctx.session_id.clone();
+            let latency_ms = ctx.latency_ms();
+            async move {
+                log_usage(
+                    &state,
+                    &provider_id,
+                    "codex",
+                    &model,
+                    &request_model,
+                    usage,
+                    latency_ms,
+                    None,
+                    true,
+                    status.as_u16(),
+                    Some(session_id),
+                )
+                .await;
+            }
+        });
+    }
+
+    strip_entity_headers_for_rebuilt_body(&mut response_headers);
+    strip_hop_by_hop_response_headers(&mut response_headers);
+    let sse_body = build_responses_sse_from_chat_completion(&chat_response)?;
+    drop(connection_guard);
+
+    let mut builder = axum::response::Response::builder().status(status);
+    for (key, value) in response_headers.iter() {
+        if key != axum::http::header::CONTENT_TYPE && key != axum::http::header::CONTENT_LENGTH {
+            builder = builder.header(key, value);
+        }
+    }
+    builder = builder
+        .header(
+            axum::http::header::CONTENT_TYPE,
+            axum::http::HeaderValue::from_static("text/event-stream"),
+        )
+        .header(
+            axum::http::header::CACHE_CONTROL,
+            axum::http::HeaderValue::from_static("no-cache"),
+        );
+
+    builder
+        .body(axum::body::Body::from(sse_body))
+        .map_err(|e| ProxyError::Internal(format!("Failed to build response: {e}")))
 }
 
 /// 把上游 Chat Completions 的错误响应转换为 Responses API 错误形状。

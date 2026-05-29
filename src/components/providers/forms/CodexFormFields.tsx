@@ -63,6 +63,8 @@ interface CodexFormFieldsProps {
   // Note: wire_api is always "responses" for Codex; apiFormat controls proxy-layer conversion
   apiFormat: CodexApiFormat;
   onApiFormatChange: (format: CodexApiFormat) => void;
+  toolCallBridge: boolean;
+  onToolCallBridgeChange: (value: boolean) => void;
   codexChatReasoning?: CodexChatReasoning;
   onCodexChatReasoningChange?: (value: CodexChatReasoning) => void;
 
@@ -123,6 +125,8 @@ export function CodexFormFields({
   onAutoSelectChange,
   apiFormat,
   onApiFormatChange,
+  toolCallBridge,
+  onToolCallBridgeChange,
   codexChatReasoning = {},
   onCodexChatReasoningChange,
   catalogModels = [],
@@ -350,6 +354,29 @@ export function CodexFormFields({
               })}
             />
           </div>
+        </div>
+      )}
+
+      {needsLocalRouting && category !== "official" && (
+        <div className="flex items-start justify-between gap-4 rounded-lg border border-border-default p-4">
+          <div className="space-y-1">
+            <FormLabel htmlFor="codexToolCallBridge">
+              {t("providerForm.toolCallBridge", {
+                defaultValue: "工具调用桥接",
+              })}
+            </FormLabel>
+            <p className="text-xs leading-relaxed text-muted-foreground">
+              {t("providerForm.toolCallBridgeHint", {
+                defaultValue:
+                  "用于不支持原生 tools/tool_calls 的 OpenAI 兼容接口：把工具定义写入提示词，并把模型返回的 JSON 解析回工具调用。",
+              })}
+            </p>
+          </div>
+          <Switch
+            id="codexToolCallBridge"
+            checked={toolCallBridge}
+            onCheckedChange={onToolCallBridgeChange}
+          />
         </div>
       )}
 

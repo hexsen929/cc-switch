@@ -985,7 +985,9 @@
     "fetchModelsAuthFailed": "API Key が無効か、権限がありません",
     "fetchModelsNotSupported": "このプロバイダーはモデル一覧の取得に対応していません",
     "fetchModelsEndpointNotFound": "利用可能なモデル一覧エンドポイントが見つかりません。Base URL を確認するか、プロバイダーが該当 API を公開しているかご確認ください",
-    "fetchModelsTimeout": "リクエストがタイムアウトしました。ネットワーク接続を確認してください"
+    "fetchModelsTimeout": "リクエストがタイムアウトしました。ネットワーク接続を確認してください",
+    "toolCallBridge": "ツール呼び出しブリッジ",
+    "toolCallBridgeHint": "ネイティブの tools/tool_calls に対応していない OpenAI 互換エンドポイント向けに、ツール定義をプロンプトへ書き込み、モデルが返した JSON をツール呼び出しに解析します。"
   },
   "copilot": {
     "authSection": "GitHub Copilot 認証",

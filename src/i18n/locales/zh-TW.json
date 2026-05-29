@@ -957,7 +957,9 @@
     "fetchModelsAuthFailed": "API Key 無效或無權限",
     "fetchModelsNotSupported": "該供應商不支援取得模型清單",
     "fetchModelsEndpointNotFound": "未找到可用的模型清單端點，請檢查 Base URL 或確認供應商是否開放該 API",
-    "fetchModelsTimeout": "請求逾時，請檢查網路連線"
+    "fetchModelsTimeout": "請求逾時，請檢查網路連線",
+    "toolCallBridge": "工具呼叫橋接",
+    "toolCallBridgeHint": "用於不支援原生 tools/tool_calls 的 OpenAI 相容介面：把工具定義寫入提示詞，並把模型返回的 JSON 解析回工具呼叫。"
   },
   "copilot": {
     "authSection": "GitHub Copilot 驗證",

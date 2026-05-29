@@ -78,7 +78,7 @@ pub fn get_claude_api_format(provider: &Provider) -> &'static str {
 pub fn claude_api_format_needs_transform(api_format: &str) -> bool {
     matches!(
         api_format,
-        "openai_chat" | "openai_responses" | "gemini_native"
+        "openai_chat" | "openai_responses" | "gemini_native" | "openai_chat_virtual_tools"
     )
 }
 
@@ -209,6 +209,18 @@ pub fn transform_claude_request_for_api_format(
                 result["prompt_cache_key"] = serde_json::json!(key);
             }
             Ok(result)
+        }
+        "openai_chat_virtual_tools" => {
+            let preserve_reasoning_content =
+                should_preserve_reasoning_content_for_openai_chat(provider, &body);
+            let result = super::transform::anthropic_to_openai_with_reasoning_content(
+                body,
+                preserve_reasoning_content,
+            )?;
+            super::tool_virtual::openai_chat_request_to_virtual_tools(
+                result,
+                super::tool_virtual::preamble(provider),
+            )
         }
         "gemini_native" => super::transform_gemini::anthropic_to_gemini_with_shadow(
             body,
@@ -687,6 +699,12 @@ impl ProviderAdapter for ClaudeAdapter {
     }
 
     fn needs_transform(&self, provider: &Provider) -> bool {
+        if super::tool_virtual::is_enabled(provider)
+            && self.get_api_format(provider) == "openai_chat"
+        {
+            return true;
+        }
+
         // GitHub Copilot 总是需要格式转换 (Anthropic → OpenAI)
         if self.is_github_copilot(provider) {
             return true;

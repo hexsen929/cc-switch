@@ -91,6 +91,8 @@ const renderCopilotForm = (overrides: Partial<ClaudeFormFieldsProps> = {}) => {
     onApiKeyFieldChange: vi.fn(),
     isFullUrl: false,
     onFullUrlChange: vi.fn(),
+    toolCallBridge: false,
+    onToolCallBridgeChange: vi.fn(),
     ...overrides,
   };
 

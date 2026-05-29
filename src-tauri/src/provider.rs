@@ -430,6 +430,17 @@ pub struct ProviderMeta {
     /// Codex Responses -> Chat Completions reasoning capability metadata.
     #[serde(rename = "codexChatReasoning", skip_serializing_if = "Option::is_none")]
     pub codex_chat_reasoning: Option<CodexChatReasoningConfig>,
+    /// Tool-call bridge: for OpenAI-compatible Chat endpoints that do not
+    /// support native `tools`, convert tool definitions into prompt
+    /// instructions and parse the model's JSON answer back into tool calls.
+    #[serde(rename = "toolCallBridge", skip_serializing_if = "Option::is_none")]
+    pub tool_call_bridge: Option<bool>,
+    /// Optional custom preamble for the tool-call bridge instruction.
+    #[serde(
+        rename = "toolCallBridgePreamble",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub tool_call_bridge_preamble: Option<String>,
     /// 累加模式应用中，该 provider 是否已写入 live config。
     /// `None` 表示旧数据/未知状态，`Some(false)` 表示明确仅存在于数据库中。
     #[serde(rename = "liveConfigManaged", skip_serializing_if = "Option::is_none")]

@@ -29,6 +29,7 @@ pub mod streaming;
 pub mod streaming_codex_chat;
 pub mod streaming_gemini;
 pub mod streaming_responses;
+pub mod tool_virtual;
 pub mod transform;
 pub mod transform_codex_chat;
 pub mod transform_gemini;

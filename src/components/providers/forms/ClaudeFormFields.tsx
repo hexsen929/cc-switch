@@ -10,6 +10,7 @@ import { toast } from "sonner";
 import { Checkbox } from "@/components/ui/checkbox";
 import { FormLabel } from "@/components/ui/form";
 import { Input } from "@/components/ui/input";
+import { Switch } from "@/components/ui/switch";
 import {
   Select,
   SelectContent,
@@ -138,6 +139,10 @@ interface ClaudeFormFieldsProps {
   // Full URL mode
   isFullUrl: boolean;
   onFullUrlChange: (value: boolean) => void;
+
+  // Tool-call bridge for OpenAI-compatible providers without native tools.
+  toolCallBridge: boolean;
+  onToolCallBridgeChange: (value: boolean) => void;
 }
 
 export function ClaudeFormFields({
@@ -190,6 +195,8 @@ export function ClaudeFormFields({
   onApiKeyFieldChange,
   isFullUrl,
   onFullUrlChange,
+  toolCallBridge,
+  onToolCallBridgeChange,
 }: ClaudeFormFieldsProps) {
   const { t } = useTranslation();
   const hasAnyAdvancedValue = !!(
@@ -198,6 +205,7 @@ export function ClaudeFormFields({
     defaultSonnetModel ||
     defaultOpusModel ||
     apiFormat !== "anthropic" ||
+    toolCallBridge ||
     apiKeyField !== "ANTHROPIC_AUTH_TOKEN"
   );
   const [advancedExpanded, setAdvancedExpanded] = useState(hasAnyAdvancedValue);
@@ -727,6 +735,29 @@ export function ClaudeFormFields({
                     defaultValue: "选择供应商 API 的输入格式",
                   })}
                 </p>
+              </div>
+            )}
+
+            {apiFormat === "openai_chat" && category !== "cloud_provider" && (
+              <div className="flex items-start justify-between gap-4 rounded-lg border border-white/10 p-3">
+                <div className="space-y-1">
+                  <FormLabel htmlFor="toolCallBridge">
+                    {t("providerForm.toolCallBridge", {
+                      defaultValue: "工具调用桥接",
+                    })}
+                  </FormLabel>
+                  <p className="text-xs text-muted-foreground">
+                    {t("providerForm.toolCallBridgeHint", {
+                      defaultValue:
+                        "用于不支持原生 tools/tool_calls 的 OpenAI 兼容接口：把工具定义写入提示词，并把模型返回的 JSON 解析回工具调用。",
+                    })}
+                  </p>
+                </div>
+                <Switch
+                  id="toolCallBridge"
+                  checked={toolCallBridge}
+                  onCheckedChange={onToolCallBridgeChange}
+                />
               </div>
             )}
 

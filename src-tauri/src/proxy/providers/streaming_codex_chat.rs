@@ -9,6 +9,7 @@ use super::{
         chat_usage_to_responses_usage, response_id_from_chat_id, response_status_from_finish_reason,
     },
 };
+use crate::proxy::error::ProxyError;
 use crate::proxy::json_canonical::canonicalize_tool_arguments_str;
 use crate::proxy::sse::{strip_sse_field, take_sse_block};
 use bytes::Bytes;
@@ -98,6 +99,70 @@ impl Default for ChatToResponsesState {
 }
 
 impl ChatToResponsesState {
+    fn handle_chat_completion_value(&mut self, body: &Value) -> Vec<Bytes> {
+        let mut events = Vec::new();
+
+        if let Some(id) = body.get("id").and_then(|v| v.as_str()) {
+            self.response_id = response_id_from_chat_id(Some(id));
+        }
+        if let Some(model) = body.get("model").and_then(|v| v.as_str()) {
+            if !model.is_empty() {
+                self.model = model.to_string();
+            }
+        }
+        if let Some(created) = body.get("created").and_then(|v| v.as_u64()) {
+            self.created_at = created;
+        }
+        if let Some(usage) = body.get("usage").filter(|v| !v.is_null()) {
+            self.latest_usage = Some(chat_usage_to_responses_usage(Some(usage)));
+        }
+
+        events.extend(self.ensure_response_started());
+
+        let Some(choice) = body
+            .get("choices")
+            .and_then(|v| v.as_array())
+            .and_then(|choices| choices.first())
+        else {
+            return events;
+        };
+
+        if let Some(finish_reason) = choice.get("finish_reason").and_then(|v| v.as_str()) {
+            self.finish_reason = Some(finish_reason.to_string());
+        }
+
+        let Some(message) = choice.get("message") else {
+            return events;
+        };
+
+        if let Some(reasoning) = chat_delta_reasoning_text(message) {
+            events.extend(self.push_reasoning_delta(&reasoning));
+        }
+
+        if let Some(content) = chat_message_content_text(message) {
+            if !content.is_empty() {
+                events.extend(self.push_content_delta(&content));
+            }
+        }
+
+        if let Some(tool_calls) = message.get("tool_calls").and_then(|v| v.as_array()) {
+            events.extend(self.flush_inline_think_at_boundary());
+            let reasoning_for_tool_call = self.current_reasoning_text();
+            events.extend(self.finalize_reasoning());
+            for (index, tool_call) in tool_calls.iter().enumerate() {
+                let mut tool_call = tool_call.clone();
+                if let Some(obj) = tool_call.as_object_mut() {
+                    obj.entry("index".to_string()).or_insert(json!(index));
+                }
+                events.extend(
+                    self.push_tool_call_delta(&tool_call, reasoning_for_tool_call.as_deref()),
+                );
+            }
+        }
+
+        events
+    }
+
     fn handle_chat_chunk(&mut self, chunk: &Value) -> Vec<Bytes> {
         let mut events = Vec::new();
 
@@ -786,6 +851,26 @@ fn chat_delta_reasoning_text(delta: &Value) -> Option<String> {
     extract_reasoning_field_text(delta)
 }
 
+fn chat_message_content_text(message: &Value) -> Option<String> {
+    if let Some(text) = message.get("content").and_then(|v| v.as_str()) {
+        return Some(text.to_string());
+    }
+
+    let parts = message.get("content")?.as_array()?;
+    let text = parts
+        .iter()
+        .filter_map(|part| {
+            part.get("text")
+                .or_else(|| part.get("output_text"))
+                .and_then(|v| v.as_str())
+                .or_else(|| part.as_str())
+        })
+        .filter(|text| !text.is_empty())
+        .collect::<Vec<_>>()
+        .join("\n");
+    (!text.is_empty()).then_some(text)
+}
+
 enum ThinkPrefixDecision {
     NeedMore,
     Reasoning,
@@ -921,6 +1006,20 @@ fn sse_event(event: &str, data: Value) -> Bytes {
         "event: {event}\ndata: {}\n\n",
         serde_json::to_string(&data).unwrap_or_default()
     ))
+}
+
+/// Build a synthetic Responses SSE stream from a complete Chat Completions
+/// response. Used by virtual tool-call bridging: the upstream must be called
+/// non-streaming so the proxy can parse the model's JSON tool-call envelope,
+/// but Codex clients may still request `stream: true`.
+pub fn build_responses_sse_from_chat_completion(body: &Value) -> Result<Vec<u8>, ProxyError> {
+    let mut state = ChatToResponsesState::default();
+    let mut events = state.handle_chat_completion_value(body);
+    events.extend(state.finalize());
+    Ok(events
+        .into_iter()
+        .flat_map(|bytes| bytes.to_vec())
+        .collect())
 }
 
 #[cfg(test)]
@@ -1078,5 +1177,41 @@ mod tests {
         assert!(output.contains("quota exceeded"));
         assert!(output.contains("rate_limit_exceeded"));
         assert!(!output.contains("event: response.completed"));
+    }
+
+    #[test]
+    fn builds_synthetic_responses_sse_from_non_streaming_tool_call_chat_response() {
+        let chat = json!({
+            "id": "chatcmpl_virtual",
+            "created": 123,
+            "model": "gpt-5.4",
+            "choices": [{
+                "message": {
+                    "role": "assistant",
+                    "content": null,
+                    "tool_calls": [{
+                        "id": "call_1",
+                        "type": "function",
+                        "function": {
+                            "name": "read_file",
+                            "arguments": "{\"path\":\"README.md\"}"
+                        }
+                    }]
+                },
+                "finish_reason": "tool_calls"
+            }],
+            "usage": {"prompt_tokens": 10, "completion_tokens": 3, "total_tokens": 13}
+        });
+
+        let output =
+            String::from_utf8(build_responses_sse_from_chat_completion(&chat).unwrap()).unwrap();
+
+        assert!(output.contains("event: response.created"));
+        assert!(output.contains("event: response.function_call_arguments.done"));
+        assert!(output.contains("\"type\":\"function_call\""));
+        assert!(output.contains("\"call_id\":\"call_1\""));
+        assert!(output.contains(r#""arguments":"{\"path\":\"README.md\"}""#));
+        assert!(output.contains("event: response.completed"));
+        assert!(output.contains("\"input_tokens\":10"));
     }
 }

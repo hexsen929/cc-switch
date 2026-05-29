@@ -1100,10 +1100,16 @@ impl RequestForwarder {
             }
         }
         let resolved_claude_api_format = if adapter.name() == "Claude" {
-            Some(
-                self.resolve_claude_api_format(provider, &mapped_body, is_copilot)
-                    .await,
-            )
+            let resolved = self
+                .resolve_claude_api_format(provider, &mapped_body, is_copilot)
+                .await;
+            let use_virtual_tools =
+                resolved == "openai_chat" && super::providers::tool_virtual::is_enabled(provider);
+            Some(if use_virtual_tools {
+                "openai_chat_virtual_tools".to_string()
+            } else {
+                resolved
+            })
         } else {
             None
         };
@@ -1162,10 +1168,19 @@ impl RequestForwarder {
             super::providers::apply_codex_chat_upstream_model(provider, &mut mapped_body);
             let reasoning_config =
                 super::providers::resolve_codex_chat_reasoning_config(provider, &mapped_body);
-            super::providers::transform_codex_chat::responses_to_chat_completions_with_reasoning(
-                mapped_body,
-                reasoning_config.as_ref(),
-            )?
+            let chat_body =
+                super::providers::transform_codex_chat::responses_to_chat_completions_with_reasoning(
+                    mapped_body,
+                    reasoning_config.as_ref(),
+                )?;
+            if super::providers::tool_virtual::is_enabled(provider) {
+                super::providers::tool_virtual::openai_chat_request_to_virtual_tools(
+                    chat_body,
+                    super::providers::tool_virtual::preamble(provider),
+                )?
+            } else {
+                chat_body
+            }
         } else if needs_transform {
             if adapter.name() == "Claude" {
                 let api_format = resolved_claude_api_format

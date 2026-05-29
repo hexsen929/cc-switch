@@ -242,6 +242,9 @@ export interface ProviderMeta {
   codexFastMode?: boolean;
   // Codex Responses -> Chat Completions reasoning capability metadata
   codexChatReasoning?: CodexChatReasoning;
+  // Tool-call bridge: convert tools into prompt instructions and parse JSON tool calls back.
+  toolCallBridge?: boolean;
+  toolCallBridgePreamble?: string;
   // 供应商类型（用于识别 Copilot 等特殊供应商）
   providerType?: string;
   // GitHub Copilot 关联账号 ID（旧字段，保留兼容读取）

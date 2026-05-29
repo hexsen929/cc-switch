@@ -985,7 +985,9 @@
     "fetchModelsAuthFailed": "API Key is invalid or lacks permission",
     "fetchModelsNotSupported": "This provider does not support fetching model list",
     "fetchModelsEndpointNotFound": "No reachable models endpoint found. Please check the Base URL or confirm whether the provider exposes this API.",
-    "fetchModelsTimeout": "Request timed out, please check network connection"
+    "fetchModelsTimeout": "Request timed out, please check network connection",
+    "toolCallBridge": "Tool-call bridge",
+    "toolCallBridgeHint": "For OpenAI-compatible endpoints without native tools/tool_calls support: write tool definitions into the prompt and parse the model JSON back into tool calls."
   },
   "copilot": {
     "authSection": "GitHub Copilot Authentication",

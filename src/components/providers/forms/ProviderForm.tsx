@@ -343,6 +343,9 @@ function ProviderFormFull({
     useState<ProviderResourceOverrides>(
       () => initialData?.meta?.resourceOverrides ?? {},
     );
+  const [toolCallBridge, setToolCallBridge] = useState<boolean>(
+    () => initialData?.meta?.toolCallBridge ?? false,
+  );
 
   const [testConfig, setTestConfig] = useState<ProviderTestConfig>(
     () => initialData?.meta?.testConfig ?? { enabled: false },
@@ -383,6 +386,7 @@ function ProviderFormFull({
       supportsFullUrl ? (initialData?.meta?.isFullUrl ?? false) : false,
     );
     setResourceOverrides(initialData?.meta?.resourceOverrides ?? {});
+    setToolCallBridge(initialData?.meta?.toolCallBridge ?? false);
     setTestConfig(initialData?.meta?.testConfig ?? { enabled: false });
     setPricingConfig({
       enabled:
@@ -598,6 +602,9 @@ function ProviderFormFull({
   const handleCodexApiFormatChange = useCallback(
     (format: CodexApiFormat) => {
       setLocalCodexApiFormat(format);
+      if (format !== "openai_chat") {
+        setToolCallBridge(false);
+      }
       // wire_api is always "responses" for Codex; format controls proxy-layer conversion
       setCodexConfig((prev) => {
         const updated = setCodexWireApi(prev, "responses");
@@ -1436,6 +1443,13 @@ function ProviderFormFull({
           ? pricingConfig.pricingModelSource
           : undefined,
       resourceOverrides: normalizeResourceOverrides(resourceOverrides),
+      toolCallBridge:
+        category !== "official" &&
+        ((appId === "claude" && localApiFormat === "openai_chat") ||
+          (appId === "codex" && localCodexApiFormat === "openai_chat")) &&
+        toolCallBridge
+          ? true
+          : undefined,
       apiFormat:
         appId === "claude" && category !== "official"
           ? localApiFormat
@@ -1566,6 +1580,7 @@ function ProviderFormFull({
         const template = getCodexCustomTemplate();
         resetCodexConfig(template.auth, template.config);
         setCodexChatReasoning({});
+        setToolCallBridge(false);
         setLocalCodexApiFormat(
           codexApiFormatFromWireApi(extractCodexWireApi(template.config)) ??
             "openai_responses",
@@ -1607,6 +1622,7 @@ function ProviderFormFull({
 
       resetCodexConfig(auth, config, preset.modelCatalog ?? []);
       setCodexChatReasoning(preset.codexChatReasoning ?? {});
+      setToolCallBridge(false);
       setLocalCodexApiFormat(
         preset.apiFormat ??
           codexApiFormatFromWireApi(extractCodexWireApi(config)) ??
@@ -1723,6 +1739,8 @@ function ProviderFormFull({
     } else {
       setLocalApiFormat("anthropic");
     }
+
+    setToolCallBridge(false);
 
     setLocalApiKeyField(preset.apiKeyField ?? "ANTHROPIC_AUTH_TOKEN");
     setLocalIsFullUrl(false);
@@ -2051,6 +2069,8 @@ function ProviderFormFull({
               onApiKeyFieldChange={handleApiKeyFieldChange}
               isFullUrl={localIsFullUrl}
               onFullUrlChange={setLocalIsFullUrl}
+              toolCallBridge={toolCallBridge}
+              onToolCallBridgeChange={setToolCallBridge}
             />
           )}
 
@@ -2078,6 +2098,8 @@ function ProviderFormFull({
               onAutoSelectChange={setEndpointAutoSelect}
               apiFormat={localCodexApiFormat}
               onApiFormatChange={handleCodexApiFormatChange}
+              toolCallBridge={toolCallBridge}
+              onToolCallBridgeChange={setToolCallBridge}
               codexChatReasoning={codexChatReasoning}
               onCodexChatReasoningChange={setCodexChatReasoning}
               catalogModels={codexCatalogModels}
