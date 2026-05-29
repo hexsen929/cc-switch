@@ -29,6 +29,51 @@ experimental_bearer_token = "real-provider-key"
     );
   });
 
+  it("seeds model catalog from config.toml model when modelCatalog is absent", () => {
+    const { result } = renderHook(() =>
+      useCodexConfigState({
+        initialData: {
+          settingsConfig: {
+            auth: {},
+            config: `model_provider = "custom"
+model = "deepseek-v4-flash"
+
+[model_providers.custom]
+name = "custom"
+base_url = "https://api.example/v1"
+`,
+          },
+        },
+      }),
+    );
+
+    expect(result.current.codexCatalogModels).toEqual([
+      { model: "deepseek-v4-flash" },
+    ]);
+  });
+
+  it("keeps explicit modelCatalog over config.toml model", () => {
+    const { result } = renderHook(() =>
+      useCodexConfigState({
+        initialData: {
+          settingsConfig: {
+            auth: {},
+            config: `model_provider = "custom"
+model = "stale-model"
+`,
+            modelCatalog: {
+              models: [{ model: "kimi-k2.6", displayName: "Kimi K2.6" }],
+            },
+          },
+        },
+      }),
+    );
+
+    expect(result.current.codexCatalogModels).toEqual([
+      { model: "kimi-k2.6", displayName: "Kimi K2.6", contextWindow: "" },
+    ]);
+  });
+
   it("writes API key to auth and experimental_bearer_token", () => {
     const initialData = {
       settingsConfig: {
@@ -38,6 +83,7 @@ experimental_bearer_token = "real-provider-key"
 [model_providers.custom]
 name = "custom"
 base_url = "https://api.example/v1"
+experimental_bearer_token = "old-key"
 `,
       },
     };

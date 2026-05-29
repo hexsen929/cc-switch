@@ -2,6 +2,7 @@ import { useState, useCallback, useEffect, useRef } from "react";
 import {
   extractCodexBaseUrl,
   extractCodexExperimentalBearerToken,
+  extractCodexModelName,
   setCodexBaseUrl as setCodexBaseUrlInConfig,
   updateCodexExperimentalBearerToken,
 } from "@/utils/providerConfigUtils";
@@ -17,6 +18,54 @@ const normalizeUserApiKey = (value: unknown): string =>
   typeof value === "string" && !isProxyManagedPlaceholder(value)
     ? value.trim()
     : "";
+
+function normalizeCatalogModels(rawModels: unknown): CodexCatalogModel[] {
+  return Array.isArray(rawModels)
+    ? rawModels
+        .map((item: any) => ({
+          model: typeof item?.model === "string" ? item.model : "",
+          displayName:
+            typeof item?.displayName === "string"
+              ? item.displayName
+              : typeof item?.display_name === "string"
+                ? item.display_name
+                : "",
+          contextWindow:
+            typeof item?.contextWindow === "string" ||
+            typeof item?.contextWindow === "number"
+              ? item.contextWindow
+              : typeof item?.context_window === "string" ||
+                  typeof item?.context_window === "number"
+                ? item.context_window
+                : "",
+        }))
+        .filter((item: CodexCatalogModel) => item.model.trim())
+    : [];
+}
+
+function catalogModelsOrConfigModel(
+  configText: string,
+  catalogModels: CodexCatalogModel[],
+): CodexCatalogModel[] {
+  if (catalogModels.length > 0) return catalogModels;
+  const model = extractCodexModelName(configText)?.trim();
+  return model ? [{ model }] : [];
+}
+
+function catalogModelsEqual(
+  left: CodexCatalogModel[],
+  right: CodexCatalogModel[],
+): boolean {
+  if (left.length !== right.length) return false;
+  return left.every((item, index) => {
+    const other = right[index];
+    return (
+      item.model === other.model &&
+      (item.displayName ?? "") === (other.displayName ?? "") &&
+      String(item.contextWindow ?? "") === String(other.contextWindow ?? "")
+    );
+  });
+}
 
 interface UseCodexConfigStateProps {
   initialData?: {
@@ -71,29 +120,14 @@ export function useCodexConfigState({ initialData }: UseCodexConfigStateProps) {
       setCodexConfigState(configStr);
 
       const modelCatalog = (config as any).modelCatalog;
-      const rawCatalogModels = Array.isArray(modelCatalog?.models)
-        ? modelCatalog.models
-        : [];
-      setCodexCatalogModels(
-        rawCatalogModels
-          .map((item: any) => ({
-            model: typeof item?.model === "string" ? item.model : "",
-            displayName:
-              typeof item?.displayName === "string"
-                ? item.displayName
-                : typeof item?.display_name === "string"
-                  ? item.display_name
-                  : "",
-            contextWindow:
-              typeof item?.contextWindow === "string" ||
-              typeof item?.contextWindow === "number"
-                ? item.contextWindow
-                : typeof item?.context_window === "string" ||
-                    typeof item?.context_window === "number"
-                  ? item.context_window
-                  : "",
-          }))
-          .filter((item: CodexCatalogModel) => item.model.trim()),
+      const nextCatalogModels = catalogModelsOrConfigModel(
+        configStr,
+        normalizeCatalogModels(modelCatalog?.models),
+      );
+      setCodexCatalogModels((current) =>
+        catalogModelsEqual(current, nextCatalogModels)
+          ? current
+          : nextCatalogModels,
       );
 
       // 提取 Base URL
@@ -238,7 +272,12 @@ export function useCodexConfigState({ initialData }: UseCodexConfigStateProps) {
       const authString = JSON.stringify(auth, null, 2);
       setCodexAuth(authString);
       setCodexConfig(config);
-      setCodexCatalogModels(modelCatalogModels);
+      setCodexCatalogModels(
+        catalogModelsOrConfigModel(
+          config,
+          normalizeCatalogModels(modelCatalogModels),
+        ),
+      );
 
       const baseUrl = extractCodexBaseUrl(config);
       setCodexBaseUrl(baseUrl || "");
