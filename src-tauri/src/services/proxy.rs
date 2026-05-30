@@ -50,7 +50,7 @@ const CLAUDE_MODEL_OVERRIDE_ENV_KEYS: [&str; 9] = [
 
 const CLAUDE_TAKEOVER_HAIKU_MODEL: &str = "claude-haiku-4-5";
 const CLAUDE_TAKEOVER_SONNET_MODEL: &str = "claude-sonnet-4-6";
-const CLAUDE_TAKEOVER_OPUS_MODEL: &str = "claude-opus-4-7";
+const CLAUDE_TAKEOVER_OPUS_MODEL: &str = "claude-opus-4-8";
 // 写给 Claude Code 时沿用文档示例的大写形式；解析侧大小写不敏感。
 const CLAUDE_ONE_M_MARKER_FOR_CLIENT: &str = "[1M]";
 
@@ -2509,6 +2509,23 @@ impl ProxyService {
             )
             .map_err(|e| format!("归一化 Codex restore backup 失败: {e}"))?;
             self.apply_codex_provider_bound_mcp_to_settings(&mut effective_settings)?;
+            let existing_backup_value = self
+                .db
+                .get_live_backup(app_type)
+                .await
+                .map_err(|e| format!("读取 {app_type} 现有备份失败: {e}"))?
+                .map(|backup| {
+                    serde_json::from_str::<Value>(&backup.original_config)
+                        .map_err(|e| format!("解析 {app_type} 现有备份失败: {e}"))
+                })
+                .transpose()?;
+
+            if let Some(existing_value) = existing_backup_value.as_ref() {
+                Self::preserve_codex_mcp_servers_in_backup(
+                    &mut effective_settings,
+                    existing_value,
+                )?;
+            }
         }
 
         let backup_json = match app_type_enum {
@@ -2609,6 +2626,67 @@ impl ProxyService {
     #[cfg(test)]
     async fn lock_switch_for_test(&self, app_type: &str) -> tokio::sync::OwnedMutexGuard<()> {
         self.switch_locks.lock_for_app(app_type).await
+    }
+
+    fn preserve_codex_mcp_servers_in_backup(
+        target_settings: &mut Value,
+        existing_backup: &Value,
+    ) -> Result<(), String> {
+        let target_obj = target_settings
+            .as_object_mut()
+            .ok_or_else(|| "Codex 备份必须是 JSON 对象".to_string())?;
+
+        let target_config = target_obj
+            .get("config")
+            .and_then(|v| v.as_str())
+            .unwrap_or("");
+        let mut target_doc = if target_config.trim().is_empty() {
+            toml_edit::DocumentMut::new()
+        } else {
+            target_config
+                .parse::<toml_edit::DocumentMut>()
+                .map_err(|e| format!("解析新的 Codex config.toml 失败: {e}"))?
+        };
+
+        let existing_config = existing_backup
+            .get("config")
+            .and_then(|v| v.as_str())
+            .unwrap_or("");
+        if existing_config.trim().is_empty() {
+            target_obj.insert("config".to_string(), json!(target_doc.to_string()));
+            return Ok(());
+        }
+
+        let existing_doc = existing_config
+            .parse::<toml_edit::DocumentMut>()
+            .map_err(|e| format!("解析现有 Codex 备份失败: {e}"))?;
+
+        if let Some(existing_mcp_servers) = existing_doc.get("mcp_servers") {
+            match target_doc.get_mut("mcp_servers") {
+                Some(target_mcp_servers) => {
+                    if let (Some(target_table), Some(existing_table)) = (
+                        target_mcp_servers.as_table_like_mut(),
+                        existing_mcp_servers.as_table_like(),
+                    ) {
+                        for (server_id, server_item) in existing_table.iter() {
+                            if target_table.get(server_id).is_none() {
+                                target_table.insert(server_id, server_item.clone());
+                            }
+                        }
+                    } else {
+                        log::warn!(
+                            "Codex config contains a non-table mcp_servers section; skipping backup MCP merge"
+                        );
+                    }
+                }
+                None => {
+                    target_doc["mcp_servers"] = existing_mcp_servers.clone();
+                }
+            }
+        }
+
+        target_obj.insert("config".to_string(), json!(target_doc.to_string()));
+        Ok(())
     }
 
     /// 代理模式下切换供应商（热切换，不写 Live）
@@ -3242,7 +3320,7 @@ mod tests {
             "ANTHROPIC_DEFAULT_SONNET_MODEL_NAME",
             Some("claude-sonnet-4.6"),
         );
-        assert_env_str(env, "ANTHROPIC_DEFAULT_OPUS_MODEL", Some("claude-opus-4-7"));
+        assert_env_str(env, "ANTHROPIC_DEFAULT_OPUS_MODEL", Some("claude-opus-4-8"));
         assert_env_str(
             env,
             "ANTHROPIC_DEFAULT_OPUS_MODEL_NAME",
@@ -3313,7 +3391,7 @@ mod tests {
             Some("claude-sonnet-4-6"),
         );
         assert_env_str(env, "ANTHROPIC_DEFAULT_SONNET_MODEL_NAME", Some("gpt-5.4"));
-        assert_env_str(env, "ANTHROPIC_DEFAULT_OPUS_MODEL", Some("claude-opus-4-7"));
+        assert_env_str(env, "ANTHROPIC_DEFAULT_OPUS_MODEL", Some("claude-opus-4-8"));
         assert_env_str(env, "ANTHROPIC_DEFAULT_OPUS_MODEL_NAME", Some("gpt-5.4"));
         assert_env_str(env, "ANTHROPIC_API_KEY", Some(PROXY_TOKEN_PLACEHOLDER));
         assert_env_str(env, "ANTHROPIC_AUTH_TOKEN", None);
@@ -4243,7 +4321,7 @@ base_url = "https://third.example/v1"
         .expect("parse live config");
         let provider = parsed
             .get("model_providers")
-            .and_then(|v| v.get("custom"))
+            .and_then(|v| v.get("p1"))
             .expect("provider table");
         assert_eq!(
             provider
@@ -4352,12 +4430,12 @@ wire_api = "responses"
         .expect("parse live config");
         assert_eq!(
             parsed.get("model_provider").and_then(|v| v.as_str()),
-            Some("custom"),
-            "startup direct sync should use the stable Codex history bucket"
+            Some("p1"),
+            "startup direct sync should preserve the selected Codex provider id"
         );
         let provider = parsed
             .get("model_providers")
-            .and_then(|v| v.get("custom"))
+            .and_then(|v| v.get("p1"))
             .expect("provider table");
         assert_eq!(
             provider.get("base_url").and_then(|v| v.as_str()),
@@ -4488,12 +4566,12 @@ base_url = "https://third.example/v1"
         .expect("parse live config");
         assert_eq!(
             parsed.get("model_provider").and_then(|v| v.as_str()),
-            Some("custom"),
-            "route takeover should use the stable Codex history bucket"
+            Some("p1"),
+            "route takeover should preserve the selected Codex provider id"
         );
         let provider = parsed
             .get("model_providers")
-            .and_then(|v| v.get("custom"))
+            .and_then(|v| v.get("p1"))
             .expect("provider table");
         assert_eq!(
             provider.get("base_url").and_then(|v| v.as_str()),
@@ -4617,12 +4695,12 @@ base_url = "https://old.example/v1"
         .expect("parse live config");
         assert_eq!(
             parsed.get("model_provider").and_then(|v| v.as_str()),
-            Some("custom"),
-            "fallback route takeover should use the stable Codex history bucket"
+            Some("p1"),
+            "fallback route takeover should preserve the selected Codex provider id"
         );
         let provider = parsed
             .get("model_providers")
-            .and_then(|v| v.get("custom"))
+            .and_then(|v| v.get("p1"))
             .expect("provider table");
         assert_eq!(
             provider.get("base_url").and_then(|v| v.as_str()),
@@ -4646,8 +4724,8 @@ base_url = "https://old.example/v1"
             parsed
                 .get("model_providers")
                 .and_then(|v| v.get("p1"))
-                .is_none(),
-            "provider-specific id should be normalized to the stable live provider id"
+                .is_some(),
+            "provider-specific id should remain in live config"
         );
 
         let updated = db
@@ -4995,7 +5073,7 @@ base_url = "https://old.example/v1"
             live_env
                 .get("ANTHROPIC_DEFAULT_OPUS_MODEL")
                 .and_then(|v| v.as_str()),
-            Some("claude-opus-4-7[1M]"),
+            Some("claude-opus-4-8[1M]"),
             "Opus role should preserve the current provider 1M capability marker"
         );
         assert_eq!(
@@ -5396,8 +5474,8 @@ base_url = "https://new.example/v1"
             "Codex MCP section should be rebuilt from global settings"
         );
         assert!(
-            !config.contains("stale_backup"),
-            "stale backup-only MCP should not survive provider backup update"
+            config.contains("[mcp_servers.stale_backup]"),
+            "backup-only MCP should survive provider backup update"
         );
         assert!(
             config.contains("https://new.example/v1"),
@@ -5407,7 +5485,7 @@ base_url = "https://new.example/v1"
 
     #[tokio::test]
     #[serial]
-    async fn hot_switch_codex_provider_keeps_model_provider_stable_in_backup_and_restore() {
+    async fn hot_switch_codex_provider_preserves_provider_model_provider_in_backup_and_restore() {
         let _home = TempHome::new();
         crate::settings::reload_settings().expect("reload settings");
 
@@ -5504,21 +5582,21 @@ requires_openai_auth = true
             toml::from_str(backup_config).expect("parse backup config");
         assert_eq!(
             parsed_backup.get("model_provider").and_then(|v| v.as_str()),
-            Some("custom"),
-            "provider-derived restore backup should retain stable Codex model_provider"
+            Some("aihubmix"),
+            "provider-derived restore backup should preserve the provider's model_provider"
         );
         let backup_model_providers = parsed_backup
             .get("model_providers")
             .and_then(|v| v.as_table())
             .expect("backup model_providers");
-        assert!(backup_model_providers.get("aihubmix").is_none());
+        assert!(backup_model_providers.get("custom").is_none());
         assert_eq!(
             backup_model_providers
-                .get("custom")
+                .get("aihubmix")
                 .and_then(|v| v.get("base_url"))
                 .and_then(|v| v.as_str()),
             Some("https://aihubmix.example/v1"),
-            "stable provider id should point at the hot-switched provider endpoint"
+            "provider id should point at the hot-switched provider endpoint"
         );
 
         service
@@ -5534,8 +5612,8 @@ requires_openai_auth = true
         let parsed_live: toml::Value = toml::from_str(live_config).expect("parse live config");
         assert_eq!(
             parsed_live.get("model_provider").and_then(|v| v.as_str()),
-            Some("custom"),
-            "restored Codex live config should not switch history buckets"
+            Some("aihubmix"),
+            "restored Codex live config should preserve the provider's model_provider"
         );
         assert_eq!(
             live.get("auth")
@@ -5643,7 +5721,7 @@ requires_openai_auth = true
 
         assert_eq!(
             parsed_live.get("model_provider").and_then(|v| v.as_str()),
-            Some("custom")
+            Some("deepseek")
         );
         assert_eq!(
             parsed_live.get("model").and_then(|v| v.as_str()),
@@ -5764,13 +5842,13 @@ wire_api = "responses"
             toml::from_str(backup_config).expect("parse backup config");
         assert_eq!(
             parsed_backup.get("model_provider").and_then(|v| v.as_str()),
-            Some("custom"),
-            "backup rebuild should use Codex's stable third-party history bucket"
+            Some("current"),
+            "backup rebuild should preserve the current third-party provider id"
         );
         assert_eq!(
             parsed_backup
                 .get("model_providers")
-                .and_then(|v| v.get("custom"))
+                .and_then(|v| v.get("current"))
                 .and_then(|v| v.get("base_url"))
                 .and_then(|v| v.as_str()),
             Some("https://current.example/v1"),
@@ -5798,7 +5876,7 @@ wire_api = "responses"
         assert!(
             parsed_live
                 .get("model_providers")
-                .and_then(|v| v.get("custom"))
+                .and_then(|v| v.get("current"))
                 .and_then(|v| v.get("base_url"))
                 .and_then(|v| v.as_str())
                 .map(ProxyService::is_local_proxy_url)
@@ -5933,8 +6011,8 @@ base_url = "https://new.example/v1"
             "provider MCP override should disable this server"
         );
         assert!(
-            mcp_servers.get("legacy").is_none(),
-            "backup-only MCP entries should not be preserved"
+            mcp_servers.get("legacy").is_some(),
+            "backup-only MCP entries should be preserved"
         );
     }
 }

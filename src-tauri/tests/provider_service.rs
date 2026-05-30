@@ -409,11 +409,15 @@ base_url = "https://plain.example/v1"
     let auth_after_switch: serde_json::Value =
         read_json_file(&cc_switch_lib::get_codex_auth_path()).expect("read auth after switch");
     assert_eq!(
+        auth_after_switch.get("auth_mode").and_then(|v| v.as_str()),
+        Some("chatgpt"),
+        "third-party provider switch should keep the ChatGPT auth cache"
+    );
+    assert!(
         auth_after_switch
             .get("OPENAI_API_KEY")
-            .and_then(|v| v.as_str()),
-        Some("plain-key"),
-        "plain provider should still use the original non-preserve write path"
+            .is_some_and(|v| v.is_null()),
+        "third-party provider key is written into config.toml, not auth.json"
     );
 
     let mut proxy_config = futures::executor::block_on(state.db.get_proxy_config_for_app("codex"))
@@ -465,7 +469,7 @@ base_url = "https://plain.example/v1"
 }
 
 #[test]
-fn provider_service_switch_codex_preserves_live_model_provider_id_for_history() {
+fn provider_service_switch_codex_preserves_user_model_provider_id_after_migration() {
     let _guard = test_mutex().lock().expect("acquire test mutex");
     reset_test_fs();
     let _home = ensure_test_home();
@@ -534,8 +538,8 @@ requires_openai_auth = true
 
     assert_eq!(
         parsed.get("model_provider").and_then(|v| v.as_str()),
-        Some("custom"),
-        "live Codex third-party model_provider should use the CC Switch history bucket"
+        Some("aihubmix"),
+        "provider switching should preserve user-editable model_provider after the one-time migration"
     );
 
     let model_providers = parsed
@@ -543,16 +547,16 @@ requires_openai_auth = true
         .and_then(|v| v.as_table())
         .expect("model_providers table exists");
     assert!(
-        model_providers.get("aihubmix").is_none(),
-        "target provider-specific id should be rewritten in live config"
+        model_providers.get("custom").is_none(),
+        "provider switching should not force user-edited provider ids back to custom"
     );
     assert_eq!(
         model_providers
-            .get("custom")
+            .get("aihubmix")
             .and_then(|v| v.get("base_url"))
             .and_then(|v| v.as_str()),
         Some("https://aihubmix.example/v1"),
-        "stable provider id should point at the newly selected supplier endpoint"
+        "selected provider id should point at the newly selected supplier endpoint"
     );
 
     let providers = state
@@ -690,16 +694,16 @@ requires_openai_auth = true
     assert_eq!(
         parsed_live
             .get("model_providers")
-            .and_then(|v| v.get("custom"))
+            .and_then(|v| v.get("aihubmix"))
             .and_then(|v| v.get("experimental_bearer_token"))
             .and_then(|v| v.as_str()),
         Some("bridge-key"),
-        "third-party key should be injected into the stable live provider table"
+        "third-party key should be injected into the selected live provider table"
     );
     assert_eq!(
         parsed_live
             .get("model_providers")
-            .and_then(|v| v.get("custom"))
+            .and_then(|v| v.get("aihubmix"))
             .and_then(|v| v.get("requires_openai_auth"))
             .and_then(|v| v.as_bool()),
         Some(true)

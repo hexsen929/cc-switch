@@ -659,7 +659,9 @@ fn restore_live_settings_for_provider_backfill(
             );
         }
     }
-    restore_codex_provider_auth_for_backfill(&mut settings, &provider.settings_config);
+    if provider.category.as_deref() != Some("official") {
+        restore_codex_provider_auth_for_backfill(&mut settings, &provider.settings_config);
+    }
 
     settings
 }

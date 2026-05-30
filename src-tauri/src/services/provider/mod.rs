@@ -516,8 +516,8 @@ args = ["-y", "@upstash/context7-mcp"]
 
             assert_eq!(
                 parsed.get("model_provider").and_then(|v| v.as_str()),
-                Some("custom"),
-                "stable live model_provider id should be reused for history continuity"
+                Some("b"),
+                "provider-specific live model_provider id should be preserved after upstream migration"
             );
             assert_eq!(
                 parsed.get("model").and_then(|v| v.as_str()),
@@ -527,7 +527,7 @@ args = ["-y", "@upstash/context7-mcp"]
             assert_eq!(
                 parsed
                     .get("model_providers")
-                    .and_then(|v| v.get("custom"))
+                    .and_then(|v| v.get("b"))
                     .and_then(|v| v.get("base_url"))
                     .and_then(|v| v.as_str()),
                 Some("https://b.example/v1"),
@@ -1154,7 +1154,7 @@ request_max_retries = 2
 
         let provider = parsed
             .get("model_providers")
-            .and_then(|v| v.get("custom"))
+            .and_then(|v| v.get("p1"))
             .expect("provider table");
         assert_eq!(
             provider.get("base_url").and_then(|v| v.as_str()),
