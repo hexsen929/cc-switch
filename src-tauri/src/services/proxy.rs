@@ -551,6 +551,10 @@ impl ProxyService {
     }
 
     async fn codex_chatgpt_auth_takeover_enabled(&self) -> bool {
+        if !crate::settings::preserve_codex_official_auth_on_switch() {
+            return false;
+        }
+
         self.db
             .get_proxy_config_for_app("codex")
             .await
@@ -619,7 +623,10 @@ impl ProxyService {
             .map_err(|e| format!("读取 Codex 当前供应商失败: {e}"))?
             .ok_or_else(|| format!("Codex 当前供应商不存在: {current_id}"))?;
 
-        if !config.codex_chatgpt_auth_takeover {
+        let preserve_codex_chatgpt_auth = config.codex_chatgpt_auth_takeover
+            && crate::settings::preserve_codex_official_auth_on_switch();
+
+        if !preserve_codex_chatgpt_auth {
             let mut effective_settings = build_effective_settings_with_common_config(
                 self.db.as_ref(),
                 &AppType::Codex,
@@ -3212,6 +3219,18 @@ impl ProxyService {
         auth.get("OPENAI_API_KEY").and_then(|v| v.as_str()) == Some(PROXY_TOKEN_PLACEHOLDER)
     }
 
+    fn codex_auth_has_chatgpt_login(auth: &Value) -> bool {
+        auth.get("auth_mode").and_then(Value::as_str) == Some("chatgpt")
+            && crate::codex_config::codex_auth_has_oauth_login_material(auth)
+    }
+
+    fn codex_live_auth_has_chatgpt_login(&self) -> bool {
+        self.read_codex_live()
+            .ok()
+            .and_then(|live| live.get("auth").cloned())
+            .is_some_and(|auth| Self::codex_auth_has_chatgpt_login(&auth))
+    }
+
     fn codex_config_has_proxy_placeholder(config: &Value) -> bool {
         config
             .get("config")
@@ -3254,10 +3273,21 @@ impl ProxyService {
                     crate::codex_config::prepare_codex_provider_live_config(auth, &prepared_config)
                         .map_err(|e| format!("写入 Codex 配置失败: {e}"))?
                 };
-                crate::codex_config::write_codex_live_config_atomic_with_stable_provider(Some(
-                    &live_config,
-                ))
-                .map_err(|e| format!("写入 Codex 配置失败: {e}"))?;
+                let should_write_auth = Self::codex_auth_has_chatgpt_login(auth)
+                    || (Self::codex_auth_has_proxy_placeholder(auth)
+                        && !self.codex_live_auth_has_chatgpt_login());
+                if should_write_auth {
+                    crate::codex_config::write_codex_live_atomic_with_stable_provider(
+                        auth,
+                        Some(&live_config),
+                    )
+                    .map_err(|e| format!("写入 Codex 配置失败: {e}"))?;
+                } else {
+                    crate::codex_config::write_codex_live_config_atomic_with_stable_provider(Some(
+                        &live_config,
+                    ))
+                    .map_err(|e| format!("写入 Codex 配置失败: {e}"))?;
+                }
                 return Ok(());
             }
         }
@@ -5488,6 +5518,11 @@ command = "echo"
     async fn codex_chatgpt_direct_mode_restores_snapshot_when_live_lacks_tokens() {
         let _home = TempHome::new();
         crate::settings::reload_settings().expect("reload settings");
+        crate::settings::update_settings(crate::settings::AppSettings {
+            preserve_codex_official_auth_on_switch: true,
+            ..Default::default()
+        })
+        .expect("enable Codex official auth preservation");
 
         let db = Arc::new(Database::memory().expect("init db"));
         let service = ProxyService::new(db.clone());
@@ -5598,9 +5633,101 @@ base_url = "https://third.example/v1"
 
     #[tokio::test]
     #[serial]
+    async fn codex_chatgpt_direct_mode_ignores_takeover_flag_when_global_preservation_off() {
+        let _home = TempHome::new();
+        crate::settings::reload_settings().expect("reload settings");
+        crate::settings::update_settings(crate::settings::AppSettings {
+            preserve_codex_official_auth_on_switch: false,
+            ..Default::default()
+        })
+        .expect("disable Codex official auth preservation");
+
+        let db = Arc::new(Database::memory().expect("init db"));
+        let service = ProxyService::new(db.clone());
+
+        let provider = Provider::with_id(
+            "p1".to_string(),
+            "P1".to_string(),
+            json!({
+                "auth": {
+                    "OPENAI_API_KEY": "provider-key"
+                },
+                "config": r#"
+model_provider = "p1"
+model = "gpt-5.1-codex"
+
+[model_providers.p1]
+name = "p1"
+base_url = "https://third.example/v1"
+wire_api = "responses"
+"#
+            }),
+            None,
+        );
+        db.save_provider("codex", &provider).expect("save provider");
+        db.set_current_provider("codex", "p1")
+            .expect("set db current provider");
+        crate::settings::set_current_provider(&AppType::Codex, Some("p1"))
+            .expect("set local current provider");
+
+        let mut config = db
+            .get_proxy_config_for_app("codex")
+            .await
+            .expect("get proxy config");
+        config.enabled = false;
+        config.codex_chatgpt_auth_takeover = true;
+        db.update_proxy_config_for_app(config)
+            .await
+            .expect("seed stale chatgpt auth flag");
+
+        service
+            .sync_codex_auth_takeover_mode_to_live()
+            .await
+            .expect("global opt-out should use normal Codex provider sync");
+
+        let live = service.read_codex_live().expect("read live");
+        let auth = live.get("auth").expect("auth");
+        assert_eq!(
+            auth.get("OPENAI_API_KEY").and_then(Value::as_str),
+            Some("provider-key")
+        );
+        assert!(
+            auth.get("auth_mode").is_none(),
+            "global opt-out must not require or synthesize ChatGPT login state"
+        );
+
+        let parsed: toml::Value = toml::from_str(
+            live.get("config")
+                .and_then(Value::as_str)
+                .expect("config text"),
+        )
+        .expect("parse live config");
+        assert_eq!(
+            parsed.get("preferred_auth_method").and_then(|v| v.as_str()),
+            None
+        );
+        let provider = parsed
+            .get("model_providers")
+            .and_then(|v| v.get("p1"))
+            .expect("provider table");
+        assert_eq!(
+            provider
+                .get("requires_openai_auth")
+                .and_then(|v| v.as_bool()),
+            None
+        );
+    }
+
+    #[tokio::test]
+    #[serial]
     async fn codex_chatgpt_direct_mode_startup_sync_repairs_stale_live_config() {
         let _home = TempHome::new();
         crate::settings::reload_settings().expect("reload settings");
+        crate::settings::update_settings(crate::settings::AppSettings {
+            preserve_codex_official_auth_on_switch: true,
+            ..Default::default()
+        })
+        .expect("enable Codex official auth preservation");
 
         let db = Arc::new(Database::memory().expect("init db"));
         let service = ProxyService::new(db.clone());
@@ -5719,6 +5846,11 @@ wire_api = "responses"
     async fn codex_local_route_restores_snapshot_when_live_lacks_tokens() {
         let _home = TempHome::new();
         crate::settings::reload_settings().expect("reload settings");
+        crate::settings::update_settings(crate::settings::AppSettings {
+            preserve_codex_official_auth_on_switch: true,
+            ..Default::default()
+        })
+        .expect("enable Codex official auth preservation");
 
         let db = Arc::new(Database::memory().expect("init db"));
         let service = ProxyService::new(db.clone());
@@ -5790,6 +5922,9 @@ base_url = "https://third.example/v1"
         db.update_proxy_config_for_app(config)
             .await
             .expect("update proxy config");
+
+        assert!(crate::settings::preserve_codex_official_auth_on_switch());
+        assert!(service.codex_chatgpt_auth_takeover_enabled().await);
 
         service
             .takeover_live_config_strict(&AppType::Codex)
@@ -5864,6 +5999,11 @@ base_url = "https://third.example/v1"
     async fn codex_local_route_falls_back_when_chatgpt_metadata_missing() {
         let _home = TempHome::new();
         crate::settings::reload_settings().expect("reload settings");
+        crate::settings::update_settings(crate::settings::AppSettings {
+            preserve_codex_official_auth_on_switch: true,
+            ..Default::default()
+        })
+        .expect("enable Codex official auth preservation");
 
         let db = Arc::new(Database::memory().expect("init db"));
         let service = ProxyService::new(db.clone());
@@ -5921,6 +6061,9 @@ base_url = "https://old.example/v1"
         db.update_proxy_config_for_app(config)
             .await
             .expect("seed stale chatgpt auth flag");
+
+        assert!(crate::settings::preserve_codex_official_auth_on_switch());
+        assert!(service.codex_chatgpt_auth_takeover_enabled().await);
 
         service
             .takeover_live_config_strict(&AppType::Codex)

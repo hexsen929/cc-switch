@@ -1008,6 +1008,11 @@ command = "stale-command"
     async fn update_current_codex_provider_syncs_live_when_proxy_takeover_active() {
         let _home = TempHome::new();
         crate::settings::reload_settings().expect("reload settings");
+        crate::settings::update_settings(crate::settings::AppSettings {
+            preserve_codex_official_auth_on_switch: true,
+            ..Default::default()
+        })
+        .expect("enable Codex official auth preservation");
 
         let db = Arc::new(Database::memory().expect("init db"));
         let state = AppState::new(db.clone());
@@ -2893,6 +2898,10 @@ impl ProviderService {
 
     fn codex_chatgpt_auth_takeover_enabled(state: &AppState, app_type: &AppType) -> bool {
         if !matches!(app_type, AppType::Codex) {
+            return false;
+        }
+
+        if !crate::settings::preserve_codex_official_auth_on_switch() {
             return false;
         }
 

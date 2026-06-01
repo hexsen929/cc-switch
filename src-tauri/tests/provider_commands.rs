@@ -357,12 +357,7 @@ command = "say"
         .get("config")
         .and_then(|v| v.as_str())
         .unwrap_or_default();
-    // 供应商配置应该包含在 live 文件中
-    // 注意：live 文件还会包含 MCP 同步后的内容
-    assert!(
-        config_text.contains("mcp_servers.latest"),
-        "live file should contain provider's original config"
-    );
+    // Live 配置会按当前全局/供应商启用状态重建 MCP；供应商原始片段仍保留在快照中。
     assert!(
         new_config_text.contains("mcp_servers.latest"),
         "provider snapshot should contain provider's original config"

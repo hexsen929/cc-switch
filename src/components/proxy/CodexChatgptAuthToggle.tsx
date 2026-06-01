@@ -9,6 +9,7 @@
 import { KeyRound, Loader2 } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { Switch } from "@/components/ui/switch";
+import { useSettingsQuery } from "@/lib/query";
 import { useAppProxyConfig, useUpdateAppProxyConfig } from "@/lib/query/proxy";
 import { cn } from "@/lib/utils";
 
@@ -21,10 +22,16 @@ export function CodexChatgptAuthToggle({
 }: CodexChatgptAuthToggleProps) {
   const { t } = useTranslation();
   const { data: codexProxyConfig, isLoading } = useAppProxyConfig("codex");
+  const { data: settings, isLoading: isSettingsLoading } = useSettingsQuery();
   const updateAppProxyConfig = useUpdateAppProxyConfig();
 
-  const enabled = codexProxyConfig?.codexChatgptAuthTakeover ?? false;
-  const isBusy = isLoading || updateAppProxyConfig.isPending;
+  const officialAuthPreservationEnabled =
+    settings?.preserveCodexOfficialAuthOnSwitch ?? false;
+  const enabled =
+    officialAuthPreservationEnabled &&
+    (codexProxyConfig?.codexChatgptAuthTakeover ?? false);
+  const isBusy =
+    isLoading || isSettingsLoading || updateAppProxyConfig.isPending;
 
   const handleToggle = async (checked: boolean) => {
     if (!codexProxyConfig) return;
@@ -35,15 +42,20 @@ export function CodexChatgptAuthToggle({
     });
   };
 
-  const tooltipText = enabled
-    ? t("proxy.takeover.codexChatgptAuth.enabledTooltip", {
+  const tooltipText = !officialAuthPreservationEnabled
+    ? t("proxy.takeover.codexChatgptAuth.requiresGlobalSettingTooltip", {
         defaultValue:
-          "Codex 将保留 ChatGPT 登录态；路由开启或关闭都会写入 chatgpt 模式",
+          "先在设置中开启“切换第三方时保留官方登录”，再使用 ChatGPT 登录态保留模式",
       })
-    : t("proxy.takeover.codexChatgptAuth.disabledTooltip", {
-        defaultValue:
-          "Codex 使用默认认证写入逻辑；本地路由开启时写入代理占位 token",
-      });
+    : enabled
+      ? t("proxy.takeover.codexChatgptAuth.enabledTooltip", {
+          defaultValue:
+            "Codex 将保留 ChatGPT 登录态；路由开启或关闭都会写入 chatgpt 模式",
+        })
+      : t("proxy.takeover.codexChatgptAuth.disabledTooltip", {
+          defaultValue:
+            "Codex 使用默认认证写入逻辑；本地路由开启时写入代理占位 token",
+        });
 
   return (
     <div
@@ -69,7 +81,9 @@ export function CodexChatgptAuthToggle({
       <Switch
         checked={enabled}
         onCheckedChange={handleToggle}
-        disabled={isBusy || !codexProxyConfig}
+        disabled={
+          isBusy || !codexProxyConfig || !officialAuthPreservationEnabled
+        }
       />
     </div>
   );

@@ -249,6 +249,7 @@ command = "say"
 fn provider_service_switch_codex_preserves_chatgpt_auth_for_keyless_provider() {
     let _guard = test_mutex().lock().expect("acquire test mutex");
     reset_test_fs();
+    enable_codex_official_auth_preservation();
     let _home = ensure_test_home();
 
     let chatgpt_auth = json!({
@@ -427,6 +428,7 @@ base_url = "https://plain.example/v1"
     proxy_config.codex_chatgpt_auth_takeover = true;
     futures::executor::block_on(state.db.update_proxy_config_for_app(proxy_config))
         .expect("enable codex chatgpt auth takeover");
+    enable_codex_official_auth_preservation();
 
     futures::executor::block_on(state.proxy_service.sync_codex_auth_takeover_mode_to_live())
         .expect("preserve mode should restore cached ChatGPT auth");
@@ -1000,6 +1002,77 @@ requires_openai_auth = true
     assert!(
         auth_value.pointer("/tokens/access_token").is_none(),
         "default switch must clear the official ChatGPT OAuth token from live auth.json"
+    );
+}
+
+#[test]
+fn provider_service_switch_codex_ignores_stale_takeover_flag_when_preservation_off() {
+    let _guard = test_mutex().lock().expect("acquire test mutex");
+    reset_test_fs();
+    let _home = ensure_test_home();
+
+    write_codex_live_atomic(&json!({ "OPENAI_API_KEY": "old-key" }), Some(""))
+        .expect("seed non-ChatGPT Codex live auth");
+
+    let mut initial_config = MultiAppConfig::default();
+    {
+        let manager = initial_config
+            .get_manager_mut(&AppType::Codex)
+            .expect("codex manager");
+        manager.current = "old-provider".to_string();
+        manager.providers.insert(
+            "old-provider".to_string(),
+            Provider::with_id(
+                "old-provider".to_string(),
+                "Old".to_string(),
+                json!({
+                    "auth": {"OPENAI_API_KEY": "old-key"},
+                    "config": ""
+                }),
+                None,
+            ),
+        );
+        manager.providers.insert(
+            "third-party".to_string(),
+            Provider::with_id(
+                "third-party".to_string(),
+                "Third Party".to_string(),
+                json!({
+                    "auth": {"OPENAI_API_KEY": "third-party-key"},
+                    "config": r#"model_provider = "third-party"
+model = "gpt-5.1-codex"
+
+[model_providers.third-party]
+name = "Third Party"
+base_url = "https://third.example/v1"
+wire_api = "responses"
+"#
+                }),
+                None,
+            ),
+        );
+    }
+
+    let state = create_test_state_with_config(&initial_config).expect("create test state");
+    let mut proxy_config = futures::executor::block_on(state.db.get_proxy_config_for_app("codex"))
+        .expect("get codex proxy config");
+    proxy_config.codex_chatgpt_auth_takeover = true;
+    futures::executor::block_on(state.db.update_proxy_config_for_app(proxy_config))
+        .expect("seed stale codex chatgpt auth takeover flag");
+
+    ProviderService::switch(&state, AppType::Codex, "third-party").expect(
+        "stale takeover flag should not require ChatGPT login while global preservation is off",
+    );
+
+    let auth_value: serde_json::Value =
+        read_json_file(&cc_switch_lib::get_codex_auth_path()).expect("read auth.json");
+    assert_eq!(
+        auth_value.get("OPENAI_API_KEY").and_then(|v| v.as_str()),
+        Some("third-party-key")
+    );
+    assert!(
+        auth_value.get("auth_mode").is_none(),
+        "global opt-out should keep ordinary third-party auth semantics"
     );
 }
 

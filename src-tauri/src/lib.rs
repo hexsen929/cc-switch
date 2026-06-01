@@ -1655,7 +1655,10 @@ async fn sync_codex_chatgpt_auth_takeover_on_startup(state: &store::AppState) {
         }
     };
 
-    if !config.codex_chatgpt_auth_takeover || config.enabled {
+    if !crate::settings::preserve_codex_official_auth_on_switch()
+        || !config.codex_chatgpt_auth_takeover
+        || config.enabled
+    {
         return;
     }
 

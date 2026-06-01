@@ -130,7 +130,7 @@ pub async fn get_proxy_config_for_app(
 #[tauri::command]
 pub async fn update_proxy_config_for_app(
     state: tauri::State<'_, AppState>,
-    config: AppProxyConfig,
+    mut config: AppProxyConfig,
 ) -> Result<(), String> {
     let db = &state.db;
     let app_type = config.app_type.clone();
@@ -139,6 +139,13 @@ pub async fn update_proxy_config_for_app(
     } else {
         None
     };
+    if app_type == "codex"
+        && config.codex_chatgpt_auth_takeover
+        && !crate::settings::preserve_codex_official_auth_on_switch()
+    {
+        config.codex_chatgpt_auth_takeover = false;
+    }
+
     let should_sync_codex_auth_mode = previous
         .as_ref()
         .is_some_and(|prev| prev.codex_chatgpt_auth_takeover != config.codex_chatgpt_auth_takeover);
