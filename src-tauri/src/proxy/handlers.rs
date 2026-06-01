@@ -20,7 +20,8 @@ use super::{
         get_adapter, get_claude_api_format,
         streaming::create_anthropic_sse_stream,
         streaming_codex_chat::{
-            build_responses_sse_from_chat_completion, create_responses_sse_stream_from_chat,
+            build_responses_sse_from_chat_completion,
+            create_responses_sse_stream_from_chat_with_context,
         },
         streaming_gemini::create_anthropic_sse_stream_from_gemini,
         streaming_responses::create_anthropic_sse_stream_from_responses,
@@ -819,6 +820,7 @@ pub async fn handle_responses(
         .get("stream")
         .and_then(|v| v.as_bool())
         .unwrap_or(false);
+    let codex_tool_context = transform_codex_chat::build_codex_tool_context_from_request(&body);
 
     let forwarder = ctx.create_forwarder(&state);
     let mut result = match forwarder
@@ -854,6 +856,7 @@ pub async fn handle_responses(
             &state,
             is_stream,
             connection_guard,
+            codex_tool_context,
         )
         .await;
     }
@@ -894,6 +897,7 @@ pub async fn handle_responses_compact(
         .get("stream")
         .and_then(|v| v.as_bool())
         .unwrap_or(false);
+    let codex_tool_context = transform_codex_chat::build_codex_tool_context_from_request(&body);
 
     let forwarder = ctx.create_forwarder(&state);
     let mut result = match forwarder
@@ -929,6 +933,7 @@ pub async fn handle_responses_compact(
             &state,
             is_stream,
             connection_guard,
+            codex_tool_context,
         )
         .await;
     }
@@ -949,6 +954,7 @@ async fn handle_codex_chat_to_responses_transform(
     state: &ProxyState,
     is_stream: bool,
     connection_guard: Option<ActiveConnectionGuard>,
+    tool_context: transform_codex_chat::CodexToolContext,
 ) -> Result<axum::response::Response, ProxyError> {
     let status = response.status();
     let use_virtual_tools = super::providers::tool_virtual::is_enabled(&ctx.provider);
@@ -967,7 +973,7 @@ async fn handle_codex_chat_to_responses_transform(
 
     if is_stream || response.is_sse() {
         let stream = response.bytes_stream();
-        let sse_stream = create_responses_sse_stream_from_chat(stream);
+        let sse_stream = create_responses_sse_stream_from_chat_with_context(stream, tool_context);
         let sse_stream = record_responses_sse_stream(sse_stream, state.codex_chat_history.clone());
 
         let usage_collector = if usage_logging_enabled(state) {
@@ -1056,11 +1062,14 @@ async fn handle_codex_chat_to_responses_transform(
     } else {
         chat_response
     };
-    let responses_response = transform_codex_chat::chat_completion_to_response(chat_response)
-        .map_err(|e| {
-            log::error!("[Codex] Chat → Responses 响应转换失败: {e}");
-            e
-        })?;
+    let responses_response = transform_codex_chat::chat_completion_to_response_with_context(
+        chat_response,
+        &tool_context,
+    )
+    .map_err(|e| {
+        log::error!("[Codex] Chat → Responses 响应转换失败: {e}");
+        e
+    })?;
     state
         .codex_chat_history
         .record_response(&responses_response)

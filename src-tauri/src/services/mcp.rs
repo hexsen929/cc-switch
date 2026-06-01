@@ -237,7 +237,8 @@ impl McpService {
 
         let servers = db.get_all_mcp_servers()?;
         let enabled = Self::collect_codex_enabled_server_specs(db, &servers);
-        mcp::sync_enabled_servers_to_codex_config_text(config_text, &enabled)
+        let new_text = mcp::sync_enabled_servers_to_codex_config_text(config_text, &enabled)?;
+        Self::merge_codex_common_config_mcp_servers(db, &new_text)
     }
 
     fn sync_all_enabled_for_app_from_servers(
@@ -287,7 +288,64 @@ impl McpService {
         config.mcp.codex = McpConfig {
             servers: codex_servers,
         };
-        mcp::sync_enabled_to_codex(&config)
+        mcp::sync_enabled_to_codex(&config)?;
+        Self::merge_codex_common_config_mcp_servers_into_live(db)
+    }
+
+    fn merge_codex_common_config_mcp_servers_into_live(db: &Database) -> Result<(), AppError> {
+        let config_text = crate::codex_config::read_and_validate_codex_config_text()?;
+        let merged = Self::merge_codex_common_config_mcp_servers(db, &config_text)?;
+        if merged != config_text {
+            crate::codex_config::write_codex_config_text(&merged)?;
+        }
+        Ok(())
+    }
+
+    fn merge_codex_common_config_mcp_servers(
+        db: &Database,
+        config_text: &str,
+    ) -> Result<String, AppError> {
+        let Some(snippet) = db.get_config_snippet(AppType::Codex.as_str())? else {
+            return Ok(config_text.to_string());
+        };
+        if snippet.trim().is_empty() || !snippet.contains("mcp_servers") {
+            return Ok(config_text.to_string());
+        }
+
+        let source_doc = snippet
+            .parse::<toml_edit::DocumentMut>()
+            .map_err(|e| AppError::McpValidation(format!("解析 Codex 通用 MCP 配置失败: {e}")))?;
+        let Some(source_mcp_servers) = source_doc.get("mcp_servers").cloned() else {
+            return Ok(config_text.to_string());
+        };
+
+        let mut target_doc = if config_text.trim().is_empty() {
+            toml_edit::DocumentMut::new()
+        } else {
+            config_text
+                .parse::<toml_edit::DocumentMut>()
+                .map_err(|e| AppError::McpValidation(format!("解析 Codex config.toml 失败: {e}")))?
+        };
+
+        match target_doc.get_mut("mcp_servers") {
+            Some(target_mcp_servers) => {
+                if let (Some(target_table), Some(source_table)) = (
+                    target_mcp_servers.as_table_like_mut(),
+                    source_mcp_servers.as_table_like(),
+                ) {
+                    for (server_id, server_item) in source_table.iter() {
+                        if target_table.get(server_id).is_none() {
+                            target_table.insert(server_id, server_item.clone());
+                        }
+                    }
+                }
+            }
+            None => {
+                target_doc["mcp_servers"] = source_mcp_servers;
+            }
+        }
+
+        Ok(target_doc.to_string())
     }
 
     fn collect_codex_enabled_server_specs(

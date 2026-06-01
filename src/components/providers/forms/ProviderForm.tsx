@@ -232,6 +232,7 @@ export interface ProviderFormProps {
     iconColor?: string;
   };
   showButtons?: boolean;
+  isProxyTakeover?: boolean;
 }
 
 function normalizeResourceOverrides(
@@ -286,6 +287,7 @@ function ProviderFormFull({
   onSubmittingChange,
   initialData,
   showButtons = true,
+  isProxyTakeover = false,
 }: ProviderFormProps) {
   if (appId === "claude-desktop") {
     throw new Error("ProviderFormFull should not receive claude-desktop");
@@ -2231,6 +2233,7 @@ function ProviderFormFull({
                 configValue={codexConfig}
                 providerName={form.watch("name")}
                 showRemoteCompaction={category !== "official"}
+                isProxyTakeover={isProxyTakeover}
                 onAuthChange={setCodexAuth}
                 onConfigChange={handleCodexConfigChange}
                 useCommonConfig={useCodexCommonConfigFlag}

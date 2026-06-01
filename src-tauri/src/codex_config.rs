@@ -647,6 +647,29 @@ pub fn extract_codex_api_key(auth: Option<&Value>, config_text: Option<&str>) ->
         .or_else(|| config_text.and_then(extract_codex_experimental_bearer_token))
 }
 
+/// Extract the upstream base URL from a Codex `config.toml` string.
+///
+/// Prefers the active `[model_providers.<model_provider>].base_url`, falling
+/// back to a top-level `base_url` when no model provider is selected.
+pub fn extract_codex_base_url(config_text: &str) -> Option<String> {
+    let doc = config_text.parse::<toml::Value>().ok()?;
+
+    if let Some(active_provider) = doc.get("model_provider").and_then(|v| v.as_str()) {
+        if let Some(base_url) = doc
+            .get("model_providers")
+            .and_then(|providers| providers.get(active_provider))
+            .and_then(|provider| provider.get("base_url"))
+            .and_then(|v| v.as_str())
+        {
+            return Some(base_url.to_string());
+        }
+    }
+
+    doc.get("base_url")
+        .and_then(|v| v.as_str())
+        .map(ToString::to_string)
+}
+
 pub fn codex_auth_has_login_material(auth: &Value) -> bool {
     let Some(obj) = auth.as_object() else {
         return false;
@@ -1265,18 +1288,39 @@ fn build_simplified_catalog_from_texts(config_text: &str, catalog_text: &str) ->
     Some(json!({ "models": entries }))
 }
 
-/// Unified helper: write Codex live config with model catalog preparation.
-/// Replaces scattered `prepare_codex_config_text_with_model_catalog` calls.
-pub fn write_codex_live_with_catalog(
+/// Decide the `config.toml` text to write during a takeover-off restore,
+/// projecting the model catalog **only when `settings` carries an inline
+/// `modelCatalog`**.
+///
+/// Restore feeds back a stored backup, and Codex backups come in two shapes that
+/// need opposite handling:
+///
+/// - **Snapshot backup** (`read_codex_live_settings`): `{ auth, config }` with no
+///   inline `modelCatalog`. Its `config.toml` text already carries whatever
+///   `model_catalog_json` pointer existed at backup time, and the generated
+///   catalog file on disk is untouched. Here we must keep the config **raw** —
+///   running catalog projection would see "no specs" and strip the live pointer.
+/// - **Provider-rebuilt backup** (`update_live_backup_from_provider`): the DB
+///   provider's settings, i.e. `{ auth, config (no pointer), modelCatalog
+///   (inline DB SSOT) }`. Here the pointer/catalog file must be (re)generated
+///   from the inline `modelCatalog`, or the mapping is lost on restore.
+///
+/// Gating on the presence of the inline `modelCatalog` key routes each shape
+/// correctly; an empty inline catalog still projects (and so correctly drops a
+/// now-stale pointer), while an absent key leaves the text untouched. This is
+/// **orthogonal to auth** — a provider-rebuilt backup can pair an inline
+/// `modelCatalog` with empty `auth.json` (the API key living in the config's
+/// `experimental_bearer_token`), so the caller must decide config projection
+/// independently of whether it writes or deletes `auth.json`.
+pub fn prepare_codex_live_config_text_with_optional_catalog(
     settings: &Value,
-    auth: &Value,
-    config_text: Option<&str>,
-) -> Result<(), AppError> {
-    let prepared_config = config_text
-        .map(|text| prepare_codex_config_text_with_model_catalog(settings, text))
-        .transpose()?;
-
-    write_codex_live_atomic(auth, prepared_config.as_deref())
+    config_text: &str,
+) -> Result<String, AppError> {
+    if settings.get("modelCatalog").is_some() {
+        prepare_codex_config_text_with_model_catalog(settings, config_text)
+    } else {
+        Ok(config_text.to_string())
+    }
 }
 
 pub fn write_codex_provider_live_with_catalog(
