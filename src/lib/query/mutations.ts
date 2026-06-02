@@ -254,6 +254,19 @@ export const useSwitchProviderMutation = (appId: AppId) => {
           queryKey: ["claudeDesktopStatus"],
         });
       }
+      if (appId === "codex") {
+        await queryClient.invalidateQueries({ queryKey: ["proxyStatus"] });
+        await queryClient.invalidateQueries({
+          queryKey: ["proxyTakeoverStatus"],
+        });
+        await queryClient.invalidateQueries({
+          queryKey: ["liveTakeoverActive"],
+        });
+        await queryClient.invalidateQueries({
+          queryKey: ["appProxyConfig", "codex"],
+        });
+        await queryClient.invalidateQueries({ queryKey: ["proxyConfig"] });
+      }
 
       // OpenCode/OpenClaw: also invalidate live provider IDs cache to update button state
       if (appId === "opencode") {

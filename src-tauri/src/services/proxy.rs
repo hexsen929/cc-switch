@@ -2713,6 +2713,59 @@ impl ProxyService {
         self.hot_switch_provider_inner(app_type, provider_id).await
     }
 
+    async fn leave_codex_takeover_for_official_provider(
+        &self,
+        provider: &Provider,
+        had_backup: bool,
+        live_taken_over: bool,
+    ) -> Result<(), String> {
+        let app_type = AppType::Codex;
+        let app_type_str = app_type.as_str();
+
+        if had_backup || live_taken_over {
+            self.restore_live_config_for_app_with_fallback_inner(&app_type)
+                .await?;
+            self.db
+                .delete_live_backup(app_type_str)
+                .await
+                .map_err(|e| format!("删除 Codex Live 备份失败: {e}"))?;
+        }
+
+        let effective_settings =
+            build_effective_settings_with_common_config(self.db.as_ref(), &app_type, provider)
+                .map_err(|e| format!("构建 Codex Official 有效配置失败: {e}"))?;
+        self.write_codex_live_for_provider(&effective_settings, Some(provider))?;
+        self.sync_codex_provider_bound_resources()?;
+
+        let mut updated_config = self
+            .db
+            .get_proxy_config_for_app(app_type_str)
+            .await
+            .map_err(|e| format!("获取 Codex 配置失败: {e}"))?;
+        updated_config.enabled = false;
+        self.db
+            .update_proxy_config_for_app(updated_config)
+            .await
+            .map_err(|e| format!("清除 Codex enabled 状态失败: {e}"))?;
+
+        self.db
+            .clear_provider_health_for_app(app_type_str)
+            .await
+            .map_err(|e| format!("清除 Codex 健康状态失败: {e}"))?;
+
+        let any_enabled = self
+            .db
+            .is_live_takeover_active()
+            .await
+            .map_err(|e| format!("检查接管状态失败: {e}"))?;
+
+        if !any_enabled {
+            let _ = self.db.set_live_takeover_active(false).await;
+        }
+
+        Ok(())
+    }
+
     pub(crate) async fn hot_switch_provider_inner(
         &self,
         app_type: &str,
@@ -2727,7 +2780,9 @@ impl ProxyService {
             .ok_or_else(|| format!("供应商不存在: {provider_id}"))?;
 
         // Defense-in-depth: block official providers during proxy takeover
-        if provider.category.as_deref() == Some("official") {
+        if provider.category.as_deref() == Some("official")
+            && !matches!(app_type_enum, AppType::Codex)
+        {
             return Err(
                 "代理接管模式下不能切换到官方供应商 (Cannot switch to official provider during proxy takeover)"
                     .to_string(),
@@ -2754,6 +2809,23 @@ impl ProxyService {
             .map_err(|e| format!("更新当前供应商失败: {e}"))?;
         crate::settings::set_current_provider(&app_type_enum, Some(provider_id))
             .map_err(|e| format!("更新本地当前供应商失败: {e}"))?;
+
+        if matches!(app_type_enum, AppType::Codex)
+            && provider.category.as_deref() == Some("official")
+        {
+            self.leave_codex_takeover_for_official_provider(&provider, has_backup, live_taken_over)
+                .await?;
+
+            if let Some(server) = self.server.read().await.as_ref() {
+                server
+                    .set_active_target(app_type_enum.as_str(), &provider.id, &provider.name)
+                    .await;
+            }
+
+            return Ok(HotSwitchOutcome {
+                logical_target_changed,
+            });
+        }
 
         if should_sync_backup {
             self.update_live_backup_from_provider_inner(app_type, &provider)

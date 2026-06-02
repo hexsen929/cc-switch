@@ -149,13 +149,9 @@ pub async fn update_proxy_config_for_app(
     let should_sync_codex_auth_mode = previous
         .as_ref()
         .is_some_and(|prev| prev.codex_chatgpt_auth_takeover != config.codex_chatgpt_auth_takeover);
+    let enabling_codex_chatgpt_auth_takeover =
+        app_type == "codex" && should_sync_codex_auth_mode && config.codex_chatgpt_auth_takeover;
     let circuit_config = CircuitBreakerConfig::from(&config);
-
-    if should_sync_codex_auth_mode && app_type == "codex" && config.codex_chatgpt_auth_takeover {
-        state
-            .proxy_service
-            .validate_codex_chatgpt_auth_takeover_ready()?;
-    }
 
     db.update_proxy_config_for_app(config)
         .await
@@ -167,10 +163,19 @@ pub async fn update_proxy_config_for_app(
         .await?;
 
     if should_sync_codex_auth_mode {
-        state
+        if let Err(err) = state
             .proxy_service
             .sync_codex_auth_takeover_mode_to_live()
-            .await?;
+            .await
+        {
+            if enabling_codex_chatgpt_auth_takeover {
+                log::warn!(
+                    "Codex ChatGPT 登录态保留模式已保存，但当前还没有可用登录态，暂不重写 Live 配置: {err}"
+                );
+            } else {
+                return Err(err);
+            }
+        }
     }
 
     Ok(())
@@ -315,7 +320,7 @@ pub async fn switch_proxy_provider(
         .get_provider_by_id(&provider_id, &app_type)
         .map_err(|e| format!("读取供应商失败: {e}"))?
         .ok_or_else(|| format!("供应商不存在: {provider_id}"))?;
-    if provider.category.as_deref() == Some("official") {
+    if provider.category.as_deref() == Some("official") && app_type != "codex" {
         return Err(
             "代理接管模式下不能切换到官方供应商 (Cannot switch to official provider during proxy takeover)"
                 .to_string(),

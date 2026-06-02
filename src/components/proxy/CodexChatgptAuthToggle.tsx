@@ -9,7 +9,7 @@
 import { KeyRound, Loader2 } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { Switch } from "@/components/ui/switch";
-import { useSettingsQuery } from "@/lib/query";
+import { useSaveSettingsMutation, useSettingsQuery } from "@/lib/query";
 import { useAppProxyConfig, useUpdateAppProxyConfig } from "@/lib/query/proxy";
 import { cn } from "@/lib/utils";
 
@@ -23,18 +23,27 @@ export function CodexChatgptAuthToggle({
   const { t } = useTranslation();
   const { data: codexProxyConfig, isLoading } = useAppProxyConfig("codex");
   const { data: settings, isLoading: isSettingsLoading } = useSettingsQuery();
+  const saveSettings = useSaveSettingsMutation();
   const updateAppProxyConfig = useUpdateAppProxyConfig();
 
   const officialAuthPreservationEnabled =
     settings?.preserveCodexOfficialAuthOnSwitch ?? false;
-  const enabled =
-    officialAuthPreservationEnabled &&
-    (codexProxyConfig?.codexChatgptAuthTakeover ?? false);
+  const enabled = codexProxyConfig?.codexChatgptAuthTakeover ?? false;
   const isBusy =
-    isLoading || isSettingsLoading || updateAppProxyConfig.isPending;
+    isLoading ||
+    isSettingsLoading ||
+    saveSettings.isPending ||
+    updateAppProxyConfig.isPending;
 
   const handleToggle = async (checked: boolean) => {
     if (!codexProxyConfig) return;
+
+    if (checked && settings && !settings.preserveCodexOfficialAuthOnSwitch) {
+      await saveSettings.mutateAsync({
+        ...settings,
+        preserveCodexOfficialAuthOnSwitch: true,
+      });
+    }
 
     await updateAppProxyConfig.mutateAsync({
       ...codexProxyConfig,
@@ -43,9 +52,9 @@ export function CodexChatgptAuthToggle({
   };
 
   const tooltipText = !officialAuthPreservationEnabled
-    ? t("proxy.takeover.codexChatgptAuth.requiresGlobalSettingTooltip", {
+    ? t("proxy.takeover.codexChatgptAuth.autoEnableGlobalSettingTooltip", {
         defaultValue:
-          "先在设置中开启“切换第三方时保留官方登录”，再使用 ChatGPT 登录态保留模式",
+          "开启后会自动启用“切换第三方时保留官方登录”，并使用 ChatGPT 登录态保留模式",
       })
     : enabled
       ? t("proxy.takeover.codexChatgptAuth.enabledTooltip", {
@@ -81,9 +90,7 @@ export function CodexChatgptAuthToggle({
       <Switch
         checked={enabled}
         onCheckedChange={handleToggle}
-        disabled={
-          isBusy || !codexProxyConfig || !officialAuthPreservationEnabled
-        }
+        disabled={isBusy || !codexProxyConfig}
       />
     </div>
   );

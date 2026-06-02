@@ -228,8 +228,11 @@ export function ProviderCard({
 
   const usageEnabled = provider.meta?.usage_script?.enabled ?? false;
   const isOfficial = isOfficialProvider(provider, appId);
+  const isCodexOfficial = appId === "codex" && isOfficial;
   const isOfficialBlockedByProxy =
-    isProxyTakeover && (provider.category === "official" || isOfficial);
+    isProxyTakeover &&
+    (provider.category === "official" || isOfficial) &&
+    !isCodexOfficial;
   const isCopilot =
     provider.meta?.providerType === PROVIDER_TYPES.GITHUB_COPILOT ||
     provider.meta?.usage_script?.templateType === "github_copilot";

@@ -242,6 +242,53 @@ describe("useProviderActions", () => {
     expect(switchProviderMutateAsync).toHaveBeenCalledWith(provider.id);
   });
 
+  it("allows Codex OpenAI Official switch while proxy takeover is active", async () => {
+    switchProviderMutateAsync.mockResolvedValueOnce(undefined);
+    const { wrapper } = createWrapper();
+    const provider = createProvider({
+      id: "official-provider",
+      name: "OpenAI Official",
+      category: "official",
+    });
+
+    const { result } = renderHook(
+      () => useProviderActions("codex", true, true),
+      {
+        wrapper,
+      },
+    );
+
+    await act(async () => {
+      await result.current.switchProvider(provider);
+    });
+
+    expect(switchProviderMutateAsync).toHaveBeenCalledWith(provider.id);
+    expect(toastErrorMock).not.toHaveBeenCalled();
+  });
+
+  it("continues blocking non-Codex official providers while proxy takeover is active", async () => {
+    const { wrapper } = createWrapper();
+    const provider = createProvider({
+      id: "claude-official",
+      name: "Claude Official",
+      category: "official",
+    });
+
+    const { result } = renderHook(
+      () => useProviderActions("claude", true, true),
+      {
+        wrapper,
+      },
+    );
+
+    await act(async () => {
+      await result.current.switchProvider(provider);
+    });
+
+    expect(switchProviderMutateAsync).not.toHaveBeenCalled();
+    expect(toastErrorMock).toHaveBeenCalledTimes(1);
+  });
+
   it("should sync plugin config when switching Claude provider with integration enabled", async () => {
     switchProviderMutateAsync.mockResolvedValueOnce(undefined);
     settingsApiGetMock.mockResolvedValueOnce({

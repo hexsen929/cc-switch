@@ -217,8 +217,16 @@ export function useProviderActions(
         );
       }
 
-      // Block official providers when proxy takeover is active
-      if (isProxyTakeover && provider.category === "official") {
+      // Block official providers when proxy takeover is active. Codex is the
+      // exception: OpenAI Official is the recovery/login path, so the backend
+      // exits Codex takeover before writing the official live config.
+      const allowCodexOfficialRecovery =
+        activeApp === "codex" && provider.category === "official";
+      if (
+        isProxyTakeover &&
+        provider.category === "official" &&
+        !allowCodexOfficialRecovery
+      ) {
         toast.error(
           t("notifications.officialBlockedByProxy", {
             defaultValue:

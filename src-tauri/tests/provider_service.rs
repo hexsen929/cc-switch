@@ -917,6 +917,142 @@ wire_api = "responses"
     );
 }
 
+#[tokio::test(flavor = "current_thread")]
+#[allow(
+    clippy::await_holding_lock,
+    reason = "this integration-style test must serialize global test HOME and settings mutations across async takeover calls"
+)]
+async fn codex_takeover_allows_switching_back_to_official_and_leaves_route_mode() {
+    let _guard = test_mutex().lock().expect("acquire test mutex");
+    reset_test_fs();
+    enable_codex_official_auth_preservation();
+    let _home = ensure_test_home();
+
+    let oauth_auth = json!({
+        "auth_mode": "chatgpt",
+        "preferred_auth_method": "chatgpt",
+        "OPENAI_API_KEY": null,
+        "tokens": {
+            "access_token": "official-oauth-token",
+            "refresh_token": "official-refresh-token",
+            "id_token": "x.eyJlbWFpbCI6InVzZXJAZXhhbXBsZS5jb20iLCJodHRwczovL2FwaS5vcGVuYWkuY29tL2F1dGgiOnsiY2hhdGdwdF9wbGFuX3R5cGUiOiJwbHVzIiwiY2hhdGdwdF9hY2NvdW50X2lkIjoiYWNjLTEyMyIsImNoYXRncHRfdXNlcl9pZCI6InVzZXItMTIzIn0sInN1YiI6InN1Yi0xMjMifQ.y"
+        }
+    });
+    let third_party_config = r#"model_provider = "deepseek"
+model = "deepseek-chat"
+preferred_auth_method = "chatgpt"
+
+[model_providers.deepseek]
+name = "DeepSeek"
+base_url = "https://api.deepseek.com/v1"
+wire_api = "responses"
+requires_openai_auth = true
+experimental_bearer_token = "deepseek-key"
+"#;
+    write_codex_live_atomic(&oauth_auth, Some(third_party_config))
+        .expect("seed ChatGPT-authenticated third-party Codex live config");
+
+    let mut initial_config = MultiAppConfig::default();
+    {
+        let manager = initial_config
+            .get_manager_mut(&AppType::Codex)
+            .expect("codex manager");
+        manager.current = "deepseek-provider".to_string();
+
+        let mut deepseek_provider = Provider::with_id(
+            "deepseek-provider".to_string(),
+            "DeepSeek".to_string(),
+            json!({
+                "auth": {"OPENAI_API_KEY": "deepseek-key"},
+                "config": third_party_config
+            }),
+            None,
+        );
+        deepseek_provider.category = Some("custom".to_string());
+        manager
+            .providers
+            .insert("deepseek-provider".to_string(), deepseek_provider);
+
+        let mut official_provider = Provider::with_id(
+            "official-provider".to_string(),
+            "OpenAI Official".to_string(),
+            json!({
+                "auth": {},
+                "config": ""
+            }),
+            None,
+        );
+        official_provider.category = Some("official".to_string());
+        manager
+            .providers
+            .insert("official-provider".to_string(), official_provider);
+    }
+
+    let state = create_test_state_with_config(&initial_config).expect("create test state");
+    let mut global_proxy_config = state.db.get_proxy_config().await.expect("get proxy config");
+    global_proxy_config.listen_port = 0;
+    state
+        .db
+        .update_proxy_config(global_proxy_config)
+        .await
+        .expect("use ephemeral proxy port");
+
+    state
+        .proxy_service
+        .set_takeover_for_app("codex", true)
+        .await
+        .expect("enable Codex takeover");
+    assert!(
+        state
+            .db
+            .get_proxy_config_for_app("codex")
+            .await
+            .expect("get codex proxy config")
+            .enabled,
+        "precondition: Codex takeover should be enabled"
+    );
+
+    ProviderService::switch(&state, AppType::Codex, "official-provider")
+        .expect("switching Codex back to OpenAI Official should leave takeover mode");
+
+    assert!(
+        !state
+            .db
+            .get_proxy_config_for_app("codex")
+            .await
+            .expect("get codex proxy config")
+            .enabled,
+        "switching to OpenAI Official must disable Codex local route takeover"
+    );
+    assert!(
+        state
+            .db
+            .get_live_backup("codex")
+            .await
+            .expect("read Codex backup")
+            .is_none(),
+        "Codex takeover backup should be removed after leaving route mode"
+    );
+
+    let auth_after_switch: serde_json::Value =
+        read_json_file(&cc_switch_lib::get_codex_auth_path()).expect("read auth after switch");
+    assert_eq!(
+        auth_after_switch
+            .pointer("/tokens/access_token")
+            .and_then(|v| v.as_str()),
+        Some("official-oauth-token"),
+        "OpenAI Official recovery should preserve the user's ChatGPT OAuth token"
+    );
+
+    let config_after_switch =
+        std::fs::read_to_string(cc_switch_lib::get_codex_config_path()).expect("read config");
+    assert!(
+        !config_after_switch.contains("127.0.0.1")
+            && !config_after_switch.contains("PROXY_MANAGED"),
+        "OpenAI Official must not keep local-route proxy fields"
+    );
+}
+
 #[test]
 fn provider_service_switch_codex_default_overwrites_official_auth_when_preservation_off() {
     let _guard = test_mutex().lock().expect("acquire test mutex");
