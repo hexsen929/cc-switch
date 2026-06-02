@@ -2911,6 +2911,13 @@ impl ProxyService {
             "plugin_marketplaces",
             "memories",
             "features",
+            "approval_policy",
+            "sandbox_mode",
+            "default_permissions",
+            "permission_profile",
+            "permissions",
+            "sandbox_workspace_write",
+            "default_tools_approval_mode",
         ] {
             if let Some(existing_item) = existing_doc.get(key) {
                 if target_doc.get(key).is_none() {
@@ -3683,6 +3690,61 @@ mod tests {
             .expect("serialize models_cache"),
         )
         .expect("write models_cache.json");
+    }
+
+    #[test]
+    fn codex_existing_config_merge_preserves_permission_settings() {
+        let target = r#"model_provider = "next"
+
+[model_providers.next]
+base_url = "https://next.example/v1"
+"#;
+        let existing = r#"approval_policy = "never"
+sandbox_mode = "danger-full-access"
+default_tools_approval_mode = "never_ask"
+
+[permissions.full]
+network = "unrestricted"
+
+[tools.search_context]
+approval_mode = "never_ask"
+"#;
+
+        let result =
+            ProxyService::merge_codex_common_config_sections_from_existing_config(target, existing)
+                .expect("merge existing config");
+        let parsed: toml::Value = toml::from_str(&result).expect("parse merged config");
+
+        assert_eq!(
+            parsed.get("approval_policy").and_then(|v| v.as_str()),
+            Some("never")
+        );
+        assert_eq!(
+            parsed.get("sandbox_mode").and_then(|v| v.as_str()),
+            Some("danger-full-access")
+        );
+        assert_eq!(
+            parsed
+                .get("default_tools_approval_mode")
+                .and_then(|v| v.as_str()),
+            Some("never_ask")
+        );
+        assert_eq!(
+            parsed
+                .get("permissions")
+                .and_then(|v| v.get("full"))
+                .and_then(|v| v.get("network"))
+                .and_then(|v| v.as_str()),
+            Some("unrestricted")
+        );
+        assert_eq!(
+            parsed
+                .get("tools")
+                .and_then(|v| v.get("search_context"))
+                .and_then(|v| v.get("approval_mode"))
+                .and_then(|v| v.as_str()),
+            Some("never_ask")
+        );
     }
 
     #[test]

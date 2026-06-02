@@ -258,8 +258,20 @@ fn normalize_codex_live_config_model_provider(config_text: &str) -> Result<Strin
     Ok(config_text.to_string())
 }
 
-const CODEX_USER_CONFIG_SECTIONS_TO_PRESERVE: &[&str] =
-    &["plugins", "marketplaces", "memories", "features"];
+const CODEX_USER_CONFIG_SECTIONS_TO_PRESERVE: &[&str] = &[
+    "plugins",
+    "marketplaces",
+    "memories",
+    "features",
+    "tools",
+    "approval_policy",
+    "sandbox_mode",
+    "default_permissions",
+    "permission_profile",
+    "permissions",
+    "sandbox_workspace_write",
+    "default_tools_approval_mode",
+];
 
 fn codex_known_local_marketplace_source(marketplace_id: &str) -> Option<PathBuf> {
     match marketplace_id {
@@ -1796,6 +1808,11 @@ command = "npx"
     fn merge_codex_user_config_sections_preserves_plugins_marketplaces_memories_and_features() {
         let current = r#"model_provider = "custom"
 model = "gpt-5.4"
+approval_policy = "never"
+sandbox_mode = "danger-full-access"
+default_permissions = "full"
+permission_profile = "full"
+default_tools_approval_mode = "never_ask"
 
 [model_providers.custom]
 name = "Current"
@@ -1820,6 +1837,15 @@ use_memories = true
 [features]
 remote_control = true
 hooks = true
+
+[tools.web_search]
+enabled = true
+
+[permissions.full]
+network = "unrestricted"
+
+[sandbox_workspace_write]
+network_access = true
 
 [mcp_servers.context7]
 command = "npx"
@@ -1885,6 +1911,51 @@ wire_api = "responses"
                 .and_then(|v| v.as_bool()),
             Some(true)
         );
+        assert_eq!(
+            parsed.get("approval_policy").and_then(|v| v.as_str()),
+            Some("never")
+        );
+        assert_eq!(
+            parsed.get("sandbox_mode").and_then(|v| v.as_str()),
+            Some("danger-full-access")
+        );
+        assert_eq!(
+            parsed.get("default_permissions").and_then(|v| v.as_str()),
+            Some("full")
+        );
+        assert_eq!(
+            parsed.get("permission_profile").and_then(|v| v.as_str()),
+            Some("full")
+        );
+        assert_eq!(
+            parsed
+                .get("default_tools_approval_mode")
+                .and_then(|v| v.as_str()),
+            Some("never_ask")
+        );
+        assert_eq!(
+            parsed
+                .get("tools")
+                .and_then(|v| v.get("web_search"))
+                .and_then(|v| v.get("enabled"))
+                .and_then(|v| v.as_bool()),
+            Some(true)
+        );
+        assert_eq!(
+            parsed
+                .get("permissions")
+                .and_then(|v| v.get("full"))
+                .and_then(|v| v.get("network"))
+                .and_then(|v| v.as_str()),
+            Some("unrestricted")
+        );
+        assert_eq!(
+            parsed
+                .get("sandbox_workspace_write")
+                .and_then(|v| v.get("network_access"))
+                .and_then(|v| v.as_bool()),
+            Some(true)
+        );
         assert!(
             parsed.get("mcp_servers").is_none(),
             "MCP is provider-bound and must be recalculated by McpService, not blindly preserved from the previous live config"
@@ -1907,7 +1978,10 @@ wire_api = "responses"
 
     #[test]
     fn merge_codex_user_config_sections_keeps_target_overrides() {
-        let current = r#"[plugins."computer-use@openai-bundled"]
+        let current = r#"approval_policy = "never"
+sandbox_mode = "danger-full-access"
+
+[plugins."computer-use@openai-bundled"]
 enabled = true
 
 [features]
@@ -1915,6 +1989,7 @@ hooks = true
 remote_control = true
 "#;
         let target = r#"model_provider = "next"
+approval_policy = "on-request"
 
 [model_providers.next]
 base_url = "https://next.example/v1"
@@ -1953,6 +2028,16 @@ hooks = false
                 .and_then(|v| v.as_bool()),
             Some(true),
             "missing feature keys should still be filled from current live config"
+        );
+        assert_eq!(
+            parsed.get("approval_policy").and_then(|v| v.as_str()),
+            Some("on-request"),
+            "target config should win when it already has an approval policy"
+        );
+        assert_eq!(
+            parsed.get("sandbox_mode").and_then(|v| v.as_str()),
+            Some("danger-full-access"),
+            "missing permission keys should still be filled from current live config"
         );
     }
 
