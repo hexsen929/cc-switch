@@ -776,7 +776,7 @@ pub async fn handle_chat_completions(
                 ctx.provider = provider;
             }
             log_forward_error(&state, &ctx, is_stream, &err.error);
-            return build_codex_proxy_error_response(&ctx, &endpoint, &err.error);
+            return build_codex_proxy_error_response(&ctx, &endpoint, &err.error, is_stream);
         }
     };
 
@@ -841,7 +841,7 @@ pub async fn handle_responses(
                 ctx.provider = provider;
             }
             log_forward_error(&state, &ctx, is_stream, &err.error);
-            return build_codex_proxy_error_response(&ctx, &endpoint, &err.error);
+            return build_codex_proxy_error_response(&ctx, &endpoint, &err.error, is_stream);
         }
     };
 
@@ -918,7 +918,7 @@ pub async fn handle_responses_compact(
                 ctx.provider = provider;
             }
             log_forward_error(&state, &ctx, is_stream, &err.error);
-            return build_codex_proxy_error_response(&ctx, &endpoint, &err.error);
+            return build_codex_proxy_error_response(&ctx, &endpoint, &err.error, is_stream);
         }
     };
 
@@ -1305,10 +1305,33 @@ fn build_codex_proxy_error_response(
     ctx: &RequestContext,
     endpoint: &str,
     error: &ProxyError,
+    stream_requested: bool,
 ) -> Result<axum::response::Response, ProxyError> {
     let status = axum::http::StatusCode::from_u16(map_proxy_error_to_status(error))
         .unwrap_or(axum::http::StatusCode::INTERNAL_SERVER_ERROR);
     let body = codex_proxy_error_json(&ctx.provider.name, &ctx.request_model, endpoint, error);
+    if stream_requested {
+        let body = build_codex_proxy_error_sse_body(&body, &ctx.request_model)?;
+        return axum::response::Response::builder()
+            // Keep the HTTP layer successful so Codex can parse the Responses
+            // stream and surface the real upstream/proxy error instead of
+            // reporting a generic "stream disconnected before completion".
+            .status(axum::http::StatusCode::OK)
+            .header(
+                axum::http::header::CONTENT_TYPE,
+                axum::http::HeaderValue::from_static("text/event-stream"),
+            )
+            .header(
+                axum::http::header::CACHE_CONTROL,
+                axum::http::HeaderValue::from_static("no-cache"),
+            )
+            .body(axum::body::Body::from(body))
+            .map_err(|e| {
+                log::error!("[Codex] 构建代理 SSE 错误响应失败: {e}");
+                ProxyError::Internal(format!("Failed to build proxy SSE error response: {e}"))
+            });
+    }
+
     let body = serde_json::to_vec(&body).map_err(|e| {
         log::error!("[Codex] 序列化代理错误体失败: {e}");
         ProxyError::Internal(format!("Failed to serialize proxy error: {e}"))
@@ -1325,6 +1348,49 @@ fn build_codex_proxy_error_response(
             log::error!("[Codex] 构建代理错误响应失败: {e}");
             ProxyError::Internal(format!("Failed to build proxy error response: {e}"))
         })
+}
+
+fn build_codex_proxy_error_sse_body(
+    error_body: &Value,
+    request_model: &str,
+) -> Result<Vec<u8>, ProxyError> {
+    let error = error_body
+        .get("error")
+        .cloned()
+        .unwrap_or_else(|| json!({"message":"CC Switch local proxy failed","type":"proxy_error"}));
+    let response_id = format!(
+        "resp_ccswitch_error_{}",
+        chrono::Utc::now().timestamp_millis()
+    );
+    let created_at = chrono::Utc::now().timestamp();
+    let created = json!({
+        "type": "response.created",
+        "response": {
+            "id": response_id,
+            "object": "response",
+            "created_at": created_at,
+            "status": "in_progress",
+            "model": request_model,
+            "output": [],
+        }
+    });
+    let failed = json!({
+        "type": "response.failed",
+        "response": {
+            "id": response_id,
+            "object": "response",
+            "created_at": created_at,
+            "status": "failed",
+            "model": request_model,
+            "error": error,
+            "output": [],
+        }
+    });
+
+    let mut body = Vec::new();
+    push_named_sse_event(&mut body, "response.created", &created)?;
+    push_named_sse_event(&mut body, "response.failed", &failed)?;
+    Ok(body)
 }
 
 fn codex_proxy_error_json(
@@ -1732,7 +1798,7 @@ async fn log_usage(
 #[cfg(test)]
 mod tests {
     use super::{
-        codex_proxy_error_json, responses_sse_to_response_value,
+        build_codex_proxy_error_sse_body, codex_proxy_error_json, responses_sse_to_response_value,
         should_use_claude_transform_streaming,
     };
     use crate::proxy::ProxyError;
@@ -1836,6 +1902,19 @@ data: {\"type\":\"response.output_item.done\",\"item\":{\"type\":\"message\"}}\n
         assert_eq!(body["error"]["code"], "cc_switch_forward_failed");
         assert_eq!(body["error"]["provider"], "DeepSeek");
         assert_eq!(body["error"]["model"], "deepseek-chat");
+    }
+
+    #[test]
+    fn codex_proxy_stream_error_body_uses_responses_failed_event() {
+        let error = ProxyError::ForwardFailed("连接失败: dns lookup failed".to_string());
+        let body = codex_proxy_error_json("DeepSeek", "deepseek-chat", "/responses", &error);
+        let sse = build_codex_proxy_error_sse_body(&body, "deepseek-chat").unwrap();
+        let text = String::from_utf8(sse).unwrap();
+
+        assert!(text.contains("event: response.created"));
+        assert!(text.contains("event: response.failed"));
+        assert!(text.contains("dns lookup failed"));
+        assert!(text.contains("DeepSeek"));
     }
 
     #[test]
