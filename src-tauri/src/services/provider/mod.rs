@@ -1088,11 +1088,12 @@ experimental_bearer_token = "provider-key-old"
         )
         .expect("seed taken-over codex live config");
 
-        state
+        let proxy_info = state
             .proxy_service
             .start()
             .await
             .expect("start proxy service");
+        let expected_proxy_base_url = format!("http://127.0.0.1:{}/v1", proxy_info.port);
 
         let updated = Provider::with_id(
             "p1".into(),
@@ -1163,7 +1164,7 @@ request_max_retries = 2
             .expect("provider table");
         assert_eq!(
             provider.get("base_url").and_then(|v| v.as_str()),
-            Some("http://127.0.0.1:0/v1"),
+            Some(expected_proxy_base_url.as_str()),
             "local route should remain active in live config"
         );
         assert_eq!(
