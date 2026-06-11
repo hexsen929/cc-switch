@@ -93,6 +93,8 @@ const renderCopilotForm = (overrides: Partial<ClaudeFormFieldsProps> = {}) => {
     onFullUrlChange: vi.fn(),
     toolCallBridge: false,
     onToolCallBridgeChange: vi.fn(),
+    customUserAgent: "",
+    onCustomUserAgentChange: vi.fn(),
     ...overrides,
   };
 
