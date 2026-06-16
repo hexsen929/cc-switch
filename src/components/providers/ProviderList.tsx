@@ -68,8 +68,6 @@ import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import type { ClaudeModelKey, ClaudeModelRoutePolicy } from "@/types/proxy";
-import { ConfirmDialog } from "@/components/ConfirmDialog";
-import { settingsApi } from "@/lib/api/settings";
 import { isTextEditableTarget } from "@/utils/domUtils";
 
 interface ProviderListProps {
@@ -222,7 +220,6 @@ export function ProviderList({
     providers,
     appId,
   );
-  const [isSortMutating, setIsSortMutating] = useState(false);
   const [contextMenu, setContextMenu] = useState<{
     providerId: string;
     x: number;
@@ -521,98 +518,6 @@ export function ProviderList({
       window.removeEventListener("keydown", handleWindowKeyDown);
     };
   }, [closeContextMenu, contextMenu]);
-
-  const applyQuickSort = useCallback(
-    async (reordered: Provider[]) => {
-      const updates = reordered.map((item, index) => ({
-        id: item.id,
-        sortIndex: index,
-      }));
-
-      try {
-        setIsSortMutating(true);
-        await providersApi.updateSortOrder(updates, appId);
-        await queryClient.invalidateQueries({
-          queryKey: ["providers", appId],
-        });
-        await queryClient.invalidateQueries({
-          queryKey: ["failoverQueue", appId],
-        });
-        try {
-          await providersApi.updateTrayMenu();
-        } catch (trayError) {
-          console.error(
-            "Failed to update tray menu after quick sort",
-            trayError,
-          );
-        }
-        toast.success(
-          t("provider.sortUpdated", {
-            defaultValue: "排序已更新",
-          }),
-          { closeButton: true },
-        );
-      } catch (error) {
-        console.error("Failed to quick sort providers", error);
-        toast.error(
-          t("provider.sortUpdateFailed", {
-            defaultValue: "排序更新失败",
-          }),
-        );
-      } finally {
-        setIsSortMutating(false);
-      }
-    },
-    [appId, queryClient, t],
-  );
-
-  const moveProviderToTopQuick = useCallback(
-    async (providerId: string) => {
-      if (isSortMutating) return;
-      const list = [...sortedProviders];
-      const currentIndex = list.findIndex((item) => item.id === providerId);
-      if (currentIndex < 0) return;
-
-      const targetIndex = 0;
-      if (currentIndex === targetIndex) {
-        toast.info(
-          t("provider.quickMoveAlreadyTop", {
-            defaultValue: "该供应商已在目标位置",
-          }),
-        );
-        return;
-      }
-
-      const [item] = list.splice(currentIndex, 1);
-      list.splice(targetIndex, 0, item);
-      await applyQuickSort(list);
-    },
-    [applyQuickSort, isSortMutating, sortedProviders, t],
-  );
-
-  const moveProviderToBottomQuick = useCallback(
-    async (providerId: string) => {
-      if (isSortMutating) return;
-      const list = [...sortedProviders];
-      const currentIndex = list.findIndex((item) => item.id === providerId);
-      if (currentIndex < 0) return;
-
-      const targetIndex = list.length - 1;
-      if (currentIndex === targetIndex) {
-        toast.info(
-          t("provider.quickMoveAlreadyBottom", {
-            defaultValue: "该供应商已在末尾",
-          }),
-        );
-        return;
-      }
-
-      const [item] = list.splice(currentIndex, 1);
-      list.push(item);
-      await applyQuickSort(list);
-    },
-    [applyQuickSort, isSortMutating, sortedProviders, t],
-  );
 
   const handleProviderContextMenu = useCallback(
     (event: ReactMouseEvent<HTMLDivElement>, providerId: string) => {
