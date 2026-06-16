@@ -646,7 +646,6 @@ fn restore_live_settings_for_provider_backfill(
         );
     }
 
-<<<<<<< HEAD
     strip_codex_proxy_placeholder_for_provider_backfill(&mut settings, &provider.settings_config);
     restore_codex_provider_config_for_backfill(&mut settings, &provider.settings_config);
     if restore_provider_token {
