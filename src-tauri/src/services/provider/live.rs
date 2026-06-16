@@ -646,6 +646,7 @@ fn restore_live_settings_for_provider_backfill(
         );
     }
 
+<<<<<<< HEAD
     strip_codex_proxy_placeholder_for_provider_backfill(&mut settings, &provider.settings_config);
     restore_codex_provider_config_for_backfill(&mut settings, &provider.settings_config);
     if restore_provider_token {
@@ -661,6 +662,19 @@ fn restore_live_settings_for_provider_backfill(
     }
     if provider.category.as_deref() != Some("official") {
         restore_codex_provider_auth_for_backfill(&mut settings, &provider.settings_config);
+    }
+
+    // 统一会话开关注入的共享 `custom` 路由只属于 live 配置；切换回填时
+    // 必须剥掉，否则官方供应商的存储配置被污染，关闭开关后无法还原。
+    if provider.category.as_deref() == Some("official") {
+        if let Err(err) =
+            crate::codex_config::strip_codex_unified_session_bucket_from_settings(&mut settings)
+        {
+            log::warn!(
+                "Failed to strip unified session bucket while backfilling '{}': {err}",
+                provider.id
+            );
+        }
     }
 
     // `modelCatalog` is a cc-switch–private field whose SSOT is the DB. Live's
