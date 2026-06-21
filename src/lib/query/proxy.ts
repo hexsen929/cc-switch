@@ -239,6 +239,9 @@ export function useUpdateAppProxyConfig() {
       queryClient.invalidateQueries({
         queryKey: ["autoFailoverEnabled", variables.appType],
       });
+      if (variables.appType === "codex") {
+        queryClient.invalidateQueries({ queryKey: ["settings"] });
+      }
       queryClient.invalidateQueries({ queryKey: ["proxyConfig"] });
       queryClient.invalidateQueries({ queryKey: ["circuitBreakerConfig"] });
       queryClient.invalidateQueries({ queryKey: ["proxyStatus"] });

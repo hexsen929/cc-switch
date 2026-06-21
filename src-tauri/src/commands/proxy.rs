@@ -139,12 +139,6 @@ pub async fn update_proxy_config_for_app(
     } else {
         None
     };
-    if app_type == "codex"
-        && config.codex_chatgpt_auth_takeover
-        && !crate::settings::preserve_codex_official_auth_on_switch()
-    {
-        config.codex_chatgpt_auth_takeover = false;
-    }
 
     let should_sync_codex_auth_mode = previous
         .as_ref()
@@ -159,7 +153,14 @@ pub async fn update_proxy_config_for_app(
         .await
         .map_err(|e| e.to_string())?;
 
-    if disabling_codex_chatgpt_auth_takeover
+    if enabling_codex_chatgpt_auth_takeover
+        && !crate::settings::preserve_codex_official_auth_on_switch()
+    {
+        let mut settings = crate::settings::get_settings();
+        settings.preserve_codex_official_auth_on_switch = true;
+        crate::settings::update_settings(settings)
+            .map_err(|e| format!("开启 Codex ChatGPT 登录态保留设置失败: {e}"))?;
+    } else if disabling_codex_chatgpt_auth_takeover
         && crate::settings::preserve_codex_official_auth_on_switch()
     {
         let mut settings = crate::settings::get_settings();
