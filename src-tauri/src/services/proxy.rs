@@ -3551,9 +3551,13 @@ impl ProxyService {
                     crate::codex_config::prepare_codex_provider_live_config(auth, &prepared_config)
                         .map_err(|e| format!("写入 Codex 配置失败: {e}"))?
                 };
+                // ChatGPT takeover is controlled by the per-Codex toggle, not by
+                // the broader "preserve official auth on switch" setting. When
+                // the toggle is off, local routing must replace any stale
+                // ChatGPT auth.json with the API/placeholder auth shape so
+                // Codex App does not ask for ChatGPT login in API mode.
                 let should_write_auth = Self::codex_auth_has_chatgpt_login(auth)
-                    || (Self::codex_auth_has_proxy_placeholder(auth)
-                        && !self.codex_live_auth_has_chatgpt_login());
+                    || Self::codex_auth_has_proxy_placeholder(auth);
                 if should_write_auth {
                     crate::codex_config::write_codex_live_atomic_with_stable_provider(
                         auth,
@@ -5178,6 +5182,113 @@ wire_api = "responses"
         assert!(
             !live_config.contains(PROXY_TOKEN_PLACEHOLDER),
             "disabled preservation should not move the takeover placeholder into config.toml"
+        );
+
+        crate::settings::update_settings(crate::settings::AppSettings::default())
+            .expect("reset settings");
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn codex_takeover_toggle_off_replaces_stale_chatgpt_auth_in_api_mode() {
+        let _home = TempHome::new();
+        crate::settings::reload_settings().expect("reload settings");
+        crate::settings::update_settings(crate::settings::AppSettings {
+            preserve_codex_official_auth_on_switch: true,
+            ..Default::default()
+        })
+        .expect("enable Codex official auth preservation");
+
+        let db = Arc::new(Database::memory().expect("init db"));
+        let service = ProxyService::new(db.clone());
+        let oauth_auth = json!({
+            "auth_mode": "chatgpt",
+            "preferred_auth_method": "chatgpt",
+            "tokens": {
+                "id_token": "oauth-id",
+                "access_token": "oauth-access"
+            },
+            "OPENAI_API_KEY": null
+        });
+        crate::codex_config::write_codex_live_atomic(
+            &oauth_auth,
+            Some(
+                r#"model_provider = "deepseek"
+model = "deepseek-v4-flash"
+
+[model_providers.deepseek]
+name = "DeepSeek"
+base_url = "https://api.deepseek.com/v1"
+wire_api = "responses"
+"#,
+            ),
+        )
+        .expect("seed stale ChatGPT live auth");
+
+        let mut provider = Provider::with_id(
+            "deepseek".to_string(),
+            "DeepSeek".to_string(),
+            json!({
+                "auth": {
+                    "OPENAI_API_KEY": "deepseek-key"
+                },
+                "config": r#"model_provider = "deepseek"
+model = "deepseek-v4-flash"
+
+[model_providers.deepseek]
+name = "DeepSeek"
+base_url = "https://api.deepseek.com/v1"
+wire_api = "responses"
+"#
+            }),
+            None,
+        );
+        provider.category = Some("cn_official".to_string());
+        db.save_provider("codex", &provider)
+            .expect("save DeepSeek provider");
+        db.set_current_provider("codex", "deepseek")
+            .expect("set current provider");
+        crate::settings::set_current_provider(&AppType::Codex, Some("deepseek"))
+            .expect("set local current provider");
+
+        let mut proxy_config = db
+            .get_proxy_config_for_app("codex")
+            .await
+            .expect("get proxy config");
+        proxy_config.codex_chatgpt_auth_takeover = false;
+        db.update_proxy_config_for_app(proxy_config)
+            .await
+            .expect("disable ChatGPT auth takeover");
+
+        service
+            .takeover_live_config_strict(&AppType::Codex)
+            .await
+            .expect("take over Codex live config with ChatGPT toggle off");
+
+        let live_auth: Value =
+            crate::config::read_json_file(&crate::codex_config::get_codex_auth_path())
+                .expect("read live auth");
+        assert_eq!(
+            live_auth
+                .get("OPENAI_API_KEY")
+                .and_then(|value| value.as_str()),
+            Some(PROXY_TOKEN_PLACEHOLDER),
+            "ChatGPT toggle off should use API/placeholder auth mode"
+        );
+        assert!(
+            live_auth.get("auth_mode").is_none(),
+            "ChatGPT toggle off must clear stale ChatGPT auth mode"
+        );
+        assert!(
+            live_auth.get("tokens").is_none(),
+            "ChatGPT toggle off must not keep stale OAuth tokens in auth.json"
+        );
+
+        let live_config = std::fs::read_to_string(crate::codex_config::get_codex_config_path())
+            .expect("read live config");
+        assert!(
+            live_config.contains(PROXY_TOKEN_PLACEHOLDER),
+            "API/placeholder mode should keep the proxy bearer token available to Codex"
         );
 
         crate::settings::update_settings(crate::settings::AppSettings::default())
