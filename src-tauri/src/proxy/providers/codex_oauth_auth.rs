@@ -120,7 +120,7 @@ struct DevicePollSuccess {
 
 /// OAuth Token 响应
 #[derive(Debug, Clone, Deserialize)]
-struct OAuthTokenResponse {
+pub struct OAuthTokenResponse {
     access_token: String,
     refresh_token: Option<String>,
     #[serde(default)]
@@ -134,6 +134,12 @@ struct OAuthTokenResponse {
 struct IdTokenClaims {
     #[serde(default)]
     chatgpt_account_id: Option<String>,
+    #[serde(default)]
+    chatgpt_plan_type: Option<String>,
+    #[serde(default)]
+    chatgpt_user_id: Option<String>,
+    #[serde(default)]
+    sub: Option<String>,
     #[serde(default)]
     email: Option<String>,
     #[serde(default)]
@@ -152,6 +158,12 @@ struct OrgClaim {
 struct OpenAiAuthClaim {
     #[serde(default)]
     chatgpt_account_id: Option<String>,
+    #[serde(default)]
+    chatgpt_plan_type: Option<String>,
+    #[serde(default)]
+    chatgpt_user_id: Option<String>,
+    #[serde(default)]
+    user_id: Option<String>,
 }
 
 /// 缓存的 access_token（含过期时间）
@@ -328,6 +340,16 @@ impl CodexOAuthManager {
         &self,
         device_code: &str,
     ) -> Result<Option<GitHubAccount>, CodexOAuthError> {
+        Ok(self
+            .poll_for_token_with_codex_live_auth(device_code)
+            .await?
+            .map(|(account, _)| account))
+    }
+
+    pub async fn poll_for_token_with_codex_live_auth(
+        &self,
+        device_code: &str,
+    ) -> Result<Option<(GitHubAccount, serde_json::Value)>, CodexOAuthError> {
         let entry = {
             let pending = self.pending_device_codes.read().await;
             pending.get(device_code).cloned()
@@ -418,11 +440,88 @@ impl CodexOAuthManager {
             );
         }
 
+        let codex_live_auth =
+            Self::build_codex_live_auth_from_tokens(&tokens, &account_id, email.as_deref());
+
         let account = self
             .add_account_internal(account_id, refresh_token, email)
             .await?;
 
-        Ok(Some(account))
+        Ok(Some((account, codex_live_auth)))
+    }
+
+    /// Build a Codex CLI-compatible `auth.json` payload from a freshly
+    /// completed ChatGPT device login.
+    ///
+    /// cc-switch stores managed ChatGPT accounts separately, but Codex app
+    /// plugins/mobile features read the official login cache from
+    /// `~/.codex/auth.json`. Projecting the successful login here lets users
+    /// click the ChatGPT login button from a third-party provider without first
+    /// switching to OpenAI Official.
+    pub fn build_codex_live_auth_from_tokens(
+        tokens: &OAuthTokenResponse,
+        account_id: &str,
+        email: Option<&str>,
+    ) -> serde_json::Value {
+        let mut auth = serde_json::Map::new();
+        auth.insert("auth_mode".to_string(), serde_json::json!("chatgpt"));
+        auth.insert(
+            "preferred_auth_method".to_string(),
+            serde_json::json!("chatgpt"),
+        );
+        auth.insert("OPENAI_API_KEY".to_string(), serde_json::Value::Null);
+        auth.insert(
+            "last_refresh".to_string(),
+            serde_json::json!(chrono::Utc::now().to_rfc3339()),
+        );
+        auth.insert("account_id".to_string(), serde_json::json!(account_id));
+        if let Some(email) = email.map(str::trim).filter(|value| !value.is_empty()) {
+            auth.insert("email".to_string(), serde_json::json!(email));
+        }
+
+        if let Some(claims) = tokens.id_token.as_deref().and_then(parse_jwt_claims) {
+            if !auth.contains_key("email") {
+                if let Some(email) = claims.email.as_deref() {
+                    auth.insert("email".to_string(), serde_json::json!(email));
+                }
+            }
+            if let Some(plan_type) = claims
+                .openai_auth
+                .as_ref()
+                .and_then(|auth| auth.chatgpt_plan_type.as_deref())
+                .or(claims.chatgpt_plan_type.as_deref())
+            {
+                auth.insert("plan_type".to_string(), serde_json::json!(plan_type));
+            }
+            if let Some(user_id) = claims
+                .openai_auth
+                .as_ref()
+                .and_then(|auth| auth.chatgpt_user_id.as_deref().or(auth.user_id.as_deref()))
+                .or(claims.chatgpt_user_id.as_deref())
+                .or(claims.sub.as_deref())
+            {
+                auth.insert("user_id".to_string(), serde_json::json!(user_id));
+            }
+        }
+
+        let mut token_obj = serde_json::Map::new();
+        token_obj.insert(
+            "access_token".to_string(),
+            serde_json::json!(tokens.access_token),
+        );
+        token_obj.insert("account_id".to_string(), serde_json::json!(account_id));
+        if let Some(refresh_token) = tokens.refresh_token.as_deref() {
+            token_obj.insert(
+                "refresh_token".to_string(),
+                serde_json::json!(refresh_token),
+            );
+        }
+        if let Some(id_token) = tokens.id_token.as_deref() {
+            token_obj.insert("id_token".to_string(), serde_json::json!(id_token));
+        }
+        auth.insert("tokens".to_string(), serde_json::Value::Object(token_obj));
+
+        serde_json::Value::Object(auth)
     }
 
     /// 用 authorization_code + code_verifier 换取 tokens

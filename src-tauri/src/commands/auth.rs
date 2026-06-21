@@ -6,6 +6,7 @@ use crate::proxy::providers::codex_oauth_auth::CodexOAuthError;
 use crate::proxy::providers::copilot_auth::{
     CopilotAuthError, GitHubAccount, GitHubDeviceCodeResponse,
 };
+use crate::store::AppState;
 
 const AUTH_PROVIDER_GITHUB_COPILOT: &str = "github_copilot";
 const AUTH_PROVIDER_CODEX_OAUTH: &str = "codex_oauth";
@@ -114,6 +115,7 @@ pub async fn auth_poll_for_account(
     github_domain: Option<String>,
     copilot_state: State<'_, CopilotAuthState>,
     codex_state: State<'_, CodexOAuthState>,
+    app_state: State<'_, AppState>,
 ) -> Result<Option<ManagedAuthAccount>, String> {
     let auth_provider = ensure_auth_provider(&auth_provider)?;
     match auth_provider {
@@ -135,12 +137,30 @@ pub async fn auth_poll_for_account(
         }
         AUTH_PROVIDER_CODEX_OAUTH => {
             let auth_manager = codex_state.0.write().await;
-            match auth_manager.poll_for_token(&device_code).await {
-                Ok(account) => {
-                    let default_account_id = auth_manager.get_status().await.default_account_id;
-                    Ok(account.map(|account| {
-                        map_account(auth_provider, account, default_account_id.as_deref())
-                    }))
+            match auth_manager
+                .poll_for_token_with_codex_live_auth(&device_code)
+                .await
+            {
+                Ok(result) => {
+                    if let Some((account, codex_live_auth)) = result {
+                        if let Err(err) = app_state
+                            .proxy_service
+                            .install_codex_chatgpt_auth_from_managed_login(codex_live_auth)
+                            .await
+                        {
+                            log::warn!(
+                                "写入 Codex ChatGPT 登录态到 Live 配置失败，稍后切换或启动时会重试: {err}"
+                            );
+                        }
+                        let default_account_id = auth_manager.get_status().await.default_account_id;
+                        Ok(Some(map_account(
+                            auth_provider,
+                            account,
+                            default_account_id.as_deref(),
+                        )))
+                    } else {
+                        Ok(None)
+                    }
                 }
                 Err(CodexOAuthError::AuthorizationPending) => Ok(None),
                 Err(e) => Err(e.to_string()),

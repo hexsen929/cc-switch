@@ -535,6 +535,54 @@ impl ProxyService {
         self.cache_codex_chatgpt_auth_from_live_config(live_config);
     }
 
+    pub async fn install_codex_chatgpt_auth_from_managed_login(
+        &self,
+        auth: Value,
+    ) -> Result<(), String> {
+        let auth = auth
+            .as_object()
+            .cloned()
+            .ok_or_else(|| "Codex ChatGPT 登录态格式无效".to_string())?;
+        let normalized = self.normalize_and_store_codex_chatgpt_auth(auth)?;
+        let current_config = self
+            .read_codex_live()
+            .ok()
+            .and_then(|live| {
+                live.get("config")
+                    .and_then(Value::as_str)
+                    .map(str::to_string)
+            })
+            .unwrap_or_default();
+        crate::codex_config::write_codex_live_atomic(
+            &Value::Object(normalized.clone()),
+            Some(&current_config),
+        )
+        .map_err(|e| format!("写入 Codex ChatGPT 登录态失败: {e}"))?;
+
+        let mut config = self
+            .db
+            .get_proxy_config_for_app("codex")
+            .await
+            .map_err(|e| format!("获取 Codex 代理配置失败: {e}"))?;
+        if !crate::settings::preserve_codex_official_auth_on_switch() {
+            let mut settings = crate::settings::get_settings();
+            settings.preserve_codex_official_auth_on_switch = true;
+            crate::settings::update_settings(settings)
+                .map_err(|e| format!("开启 Codex ChatGPT 登录态保留设置失败: {e}"))?;
+        }
+        if !config.codex_chatgpt_auth_takeover {
+            config.codex_chatgpt_auth_takeover = true;
+            self.db
+                .update_proxy_config_for_app(config)
+                .await
+                .map_err(|e| format!("保存 Codex ChatGPT 登录态保留配置失败: {e}"))?;
+        }
+        self.sync_codex_auth_takeover_mode_to_live().await?;
+
+        let _ = normalized;
+        Ok(())
+    }
+
     fn load_codex_chatgpt_auth_for_takeover(&self) -> Result<Map<String, Value>, String> {
         let live_error = match self.read_codex_live() {
             Ok(live_config) => {
