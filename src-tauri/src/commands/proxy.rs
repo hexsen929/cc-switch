@@ -151,11 +151,22 @@ pub async fn update_proxy_config_for_app(
         .is_some_and(|prev| prev.codex_chatgpt_auth_takeover != config.codex_chatgpt_auth_takeover);
     let enabling_codex_chatgpt_auth_takeover =
         app_type == "codex" && should_sync_codex_auth_mode && config.codex_chatgpt_auth_takeover;
+    let disabling_codex_chatgpt_auth_takeover =
+        app_type == "codex" && should_sync_codex_auth_mode && !config.codex_chatgpt_auth_takeover;
     let circuit_config = CircuitBreakerConfig::from(&config);
 
     db.update_proxy_config_for_app(config)
         .await
         .map_err(|e| e.to_string())?;
+
+    if disabling_codex_chatgpt_auth_takeover
+        && crate::settings::preserve_codex_official_auth_on_switch()
+    {
+        let mut settings = crate::settings::get_settings();
+        settings.preserve_codex_official_auth_on_switch = false;
+        crate::settings::update_settings(settings)
+            .map_err(|e| format!("关闭 Codex ChatGPT 登录态保留设置失败: {e}"))?;
+    }
 
     state
         .proxy_service

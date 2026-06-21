@@ -49,22 +49,28 @@ export function CodexChatgptAuthToggle({
       ...codexProxyConfig,
       codexChatgptAuthTakeover: checked,
     });
+
+    if (!checked && settings?.preserveCodexOfficialAuthOnSwitch) {
+      await saveSettings.mutateAsync({
+        ...settings,
+        preserveCodexOfficialAuthOnSwitch: false,
+      });
+    }
   };
 
-  const tooltipText = !officialAuthPreservationEnabled
-    ? t("proxy.takeover.codexChatgptAuth.autoEnableGlobalSettingTooltip", {
-        defaultValue:
-          "开启后会自动启用“切换第三方时保留官方登录”，并使用 ChatGPT 登录态保留模式",
-      })
-    : enabled
+  const tooltipText = enabled
+    ? officialAuthPreservationEnabled
       ? t("proxy.takeover.codexChatgptAuth.enabledTooltip", {
           defaultValue:
             "Codex 将保留 ChatGPT 登录态；路由开启或关闭都会写入 chatgpt 模式",
         })
-      : t("proxy.takeover.codexChatgptAuth.disabledTooltip", {
-          defaultValue:
-            "Codex 使用默认认证写入逻辑；本地路由开启时写入代理占位 token",
-        });
+      : t("proxy.takeover.codexChatgptAuth.enablingTooltip", {
+          defaultValue: "Codex 将开启 ChatGPT 登录态保留模式",
+        })
+    : t("proxy.takeover.codexChatgptAuth.disabledTooltip", {
+        defaultValue:
+          "Codex 使用默认 API 认证写入逻辑；不会保留 ChatGPT 登录态",
+      });
 
   return (
     <div
