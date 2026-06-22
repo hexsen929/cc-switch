@@ -130,7 +130,7 @@ pub async fn get_proxy_config_for_app(
 #[tauri::command]
 pub async fn update_proxy_config_for_app(
     state: tauri::State<'_, AppState>,
-    mut config: AppProxyConfig,
+    config: AppProxyConfig,
 ) -> Result<(), String> {
     let db = &state.db;
     let app_type = config.app_type.clone();

@@ -3502,13 +3502,6 @@ impl ProxyService {
             && crate::codex_config::codex_auth_has_oauth_login_material(auth)
     }
 
-    fn codex_live_auth_has_chatgpt_login(&self) -> bool {
-        self.read_codex_live()
-            .ok()
-            .and_then(|live| live.get("auth").cloned())
-            .is_some_and(|auth| Self::codex_auth_has_chatgpt_login(&auth))
-    }
-
     fn codex_config_has_proxy_placeholder(config: &Value) -> bool {
         config
             .get("config")
