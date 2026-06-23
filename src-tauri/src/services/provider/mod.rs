@@ -981,7 +981,7 @@ command = "stale-command"
         )
         .expect("seed taken-over live file");
 
-        state
+        let proxy_info = state
             .proxy_service
             .start()
             .await
@@ -1034,7 +1034,7 @@ command = "stale-command"
             live.get("env")
                 .and_then(|env| env.get("ANTHROPIC_BASE_URL"))
                 .and_then(|v| v.as_str()),
-            Some("http://127.0.0.1:0"),
+            Some(format!("http://127.0.0.1:{}", proxy_info.port).as_str()),
             "proxy base URL should stay intact"
         );
         assert!(
