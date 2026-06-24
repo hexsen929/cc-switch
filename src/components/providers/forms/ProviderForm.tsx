@@ -9,6 +9,7 @@ import { Form, FormField, FormItem, FormMessage } from "@/components/ui/form";
 import { Input } from "@/components/ui/input";
 import { providerSchema, type ProviderFormData } from "@/lib/schemas/provider";
 import { providersApi, settingsApi, type AppId } from "@/lib/api";
+import { useDarkMode } from "@/hooks/useDarkMode";
 import type {
   ProviderCategory,
   ProviderMeta,
@@ -299,6 +300,7 @@ function ProviderFormFull({
   const { data: settingsData } = useSettingsQuery();
   const showCommonConfigNotice =
     settingsData != null && settingsData.commonConfigConfirmed !== true;
+  const isDarkMode = useDarkMode();
 
   const handleCommonConfigConfirm = async () => {
     try {
@@ -2299,6 +2301,7 @@ function ProviderFormFull({
                 rows={14}
                 showValidation={false}
                 language="json"
+                darkMode={isDarkMode}
               />
             </div>
           ) : appId === "opencode" &&
@@ -2323,6 +2326,7 @@ function ProviderFormFull({
                   rows={14}
                   showValidation={true}
                   language="json"
+                  darkMode={isDarkMode}
                 />
               </div>
               {settingsConfigErrorField}
@@ -2353,6 +2357,7 @@ function ProviderFormFull({
                   rows={14}
                   showValidation={true}
                   language="json"
+                  darkMode={isDarkMode}
                 />
               </div>
               <FormField
