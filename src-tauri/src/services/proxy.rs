@@ -3502,6 +3502,24 @@ impl ProxyService {
             && crate::codex_config::codex_auth_has_oauth_login_material(auth)
     }
 
+    fn codex_live_auth_has_chatgpt_login(&self) -> bool {
+        self.read_codex_live()
+            .ok()
+            .and_then(|live| live.get("auth").cloned())
+            .is_some_and(|auth| Self::codex_auth_has_chatgpt_login(&auth))
+    }
+
+    fn codex_live_config_has_bearer_token(&self) -> bool {
+        self.read_codex_live()
+            .ok()
+            .and_then(|live| {
+                live.get("config")
+                    .and_then(Value::as_str)
+                    .and_then(crate::codex_config::extract_codex_experimental_bearer_token)
+            })
+            .is_some()
+    }
+
     fn codex_config_has_proxy_placeholder(config: &Value) -> bool {
         config
             .get("config")
@@ -3544,13 +3562,16 @@ impl ProxyService {
                     crate::codex_config::prepare_codex_provider_live_config(auth, &prepared_config)
                         .map_err(|e| format!("写入 Codex 配置失败: {e}"))?
                 };
-                // ChatGPT takeover is controlled by the per-Codex toggle, not by
-                // the broader "preserve official auth on switch" setting. When
-                // the toggle is off, local routing must replace any stale
-                // ChatGPT auth.json with the API/placeholder auth shape so
-                // Codex App does not ask for ChatGPT login in API mode.
+                // Preserve the user's ChatGPT OAuth auth.json whenever it is still
+                // paired with a provider/proxy bearer token in config.toml. If API
+                // mode left a stale ChatGPT auth.json without a TOML bearer token,
+                // write the generated PROXY_MANAGED auth shape so Codex does not try
+                // to authenticate that local-proxy route with ChatGPT OAuth.
+                let live_auth_has_chatgpt_login = self.codex_live_auth_has_chatgpt_login();
+                let live_config_has_bearer_token = self.codex_live_config_has_bearer_token();
                 let should_write_auth = Self::codex_auth_has_chatgpt_login(auth)
-                    || Self::codex_auth_has_proxy_placeholder(auth);
+                    || (Self::codex_auth_has_proxy_placeholder(auth)
+                        && (!live_auth_has_chatgpt_login || !live_config_has_bearer_token));
                 if should_write_auth {
                     crate::codex_config::write_codex_live_atomic_with_stable_provider(
                         auth,
