@@ -77,6 +77,8 @@ describe("CodexChatgptAuthToggle", () => {
 
     await waitFor(() => {
       expect(saveSettingsMutateAsync).toHaveBeenCalledWith({
+        showInTray: true,
+        minimizeToTrayOnClose: true,
         preserveCodexOfficialAuthOnSwitch: true,
       });
     });

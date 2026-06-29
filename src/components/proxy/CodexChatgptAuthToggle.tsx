@@ -9,7 +9,7 @@
 import { KeyRound, Loader2 } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { Switch } from "@/components/ui/switch";
-import { useSettingsQuery } from "@/lib/query";
+import { useSaveSettingsMutation, useSettingsQuery } from "@/lib/query";
 import { useAppProxyConfig, useUpdateAppProxyConfig } from "@/lib/query/proxy";
 import { cn } from "@/lib/utils";
 
@@ -23,16 +23,29 @@ export function CodexChatgptAuthToggle({
   const { t } = useTranslation();
   const { data: codexProxyConfig, isLoading } = useAppProxyConfig("codex");
   const { data: settings, isLoading: isSettingsLoading } = useSettingsQuery();
+  const saveSettings = useSaveSettingsMutation();
   const updateAppProxyConfig = useUpdateAppProxyConfig();
 
   const officialAuthPreservationEnabled =
     settings?.preserveCodexOfficialAuthOnSwitch ?? false;
   const enabled = codexProxyConfig?.codexChatgptAuthTakeover ?? false;
   const isBusy =
-    isLoading || isSettingsLoading || updateAppProxyConfig.isPending;
+    isLoading ||
+    isSettingsLoading ||
+    saveSettings.isPending ||
+    updateAppProxyConfig.isPending;
 
   const handleToggle = async (checked: boolean) => {
     if (!codexProxyConfig) return;
+
+    if (checked && !officialAuthPreservationEnabled) {
+      await saveSettings.mutateAsync({
+        ...settings,
+        showInTray: settings?.showInTray ?? true,
+        minimizeToTrayOnClose: settings?.minimizeToTrayOnClose ?? true,
+        preserveCodexOfficialAuthOnSwitch: true,
+      });
+    }
 
     await updateAppProxyConfig.mutateAsync({
       ...codexProxyConfig,
