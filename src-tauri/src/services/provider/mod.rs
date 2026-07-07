@@ -106,7 +106,14 @@ fn sync_provider_bound_resources(
     }
     crate::services::skill::SkillService::sync_to_app(&state.db, app_type)
         .map_err(|e| AppError::Message(format!("同步 Skill 失败: {e}")))?;
-    crate::services::prompt::PromptService::sync_effective_prompt_to_file(state, app_type.clone())?;
+    // Claude Desktop 3P profiles do not have a prompt file target. Provider saves
+    // still need to sync supported resources, but prompt sync must be a no-op.
+    if !matches!(app_type, AppType::ClaudeDesktop) {
+        crate::services::prompt::PromptService::sync_effective_prompt_to_file(
+            state,
+            app_type.clone(),
+        )?;
+    }
     Ok(())
 }
 
@@ -691,6 +698,7 @@ mod tests {
                 "AWS_BEARER_TOKEN_BEDROCK": "bedrock-tok",
                 "ANTHROPIC_BASE_URL": "https://example.com",
                 "ANTHROPIC_MODEL": "claude-x",
+                "CLAUDE_CODE_SUBAGENT_MODEL": "gpt-5.4-mini",
                 // 可共享、非机密配置（复数 _TOKENS 不应被误剥）
                 "ENABLE_TOOL_SEARCH": "true",
                 "CLAUDE_CODE_MAX_OUTPUT_TOKENS": "8192"
@@ -733,6 +741,9 @@ mod tests {
         // 端点/模型（provider-specific 非机密）也应剥掉
         assert!(env.and_then(|e| e.get("ANTHROPIC_BASE_URL")).is_none());
         assert!(env.and_then(|e| e.get("ANTHROPIC_MODEL")).is_none());
+        assert!(env
+            .and_then(|e| e.get("CLAUDE_CODE_SUBAGENT_MODEL"))
+            .is_none());
 
         // 可共享的非机密配置必须保留（含复数 _TOKENS 不被误剥）
         assert_eq!(
@@ -2000,8 +2011,15 @@ experimental_bearer_token = "real-key-a"
                 .await
                 .expect("update app proxy config");
         }
+        {
+            let mut config = db.get_proxy_config().await.expect("get proxy config");
+            config.listen_port = 0;
+            db.update_proxy_config(config)
+                .await
+                .expect("use ephemeral proxy port");
+        }
 
-        state
+        let proxy_info = state
             .proxy_service
             .start()
             .await
@@ -2049,7 +2067,10 @@ experimental_bearer_token = "real-key-a"
         let profile: Value = read_json_file(&profile_path).expect("read desktop profile");
         assert_eq!(
             profile["inferenceGatewayBaseUrl"],
-            json!("http://127.0.0.1:15721/claude-desktop"),
+            json!(format!(
+                "http://127.0.0.1:{}/claude-desktop",
+                proxy_info.port
+            )),
             "desktop profile should stay pointed at the local gateway during takeover"
         );
         assert_eq!(profile["inferenceGatewayAuthScheme"], json!("bearer"));
@@ -3705,6 +3726,7 @@ impl ProviderService {
             "ANTHROPIC_DEFAULT_OPUS_MODEL_NAME",
             "ANTHROPIC_DEFAULT_SONNET_MODEL",
             "ANTHROPIC_DEFAULT_SONNET_MODEL_NAME",
+            "CLAUDE_CODE_SUBAGENT_MODEL",
             "ANTHROPIC_BASE_URL",
         ];
 

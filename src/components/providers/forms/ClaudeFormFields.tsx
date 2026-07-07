@@ -127,6 +127,7 @@ interface ClaudeFormFieldsProps {
   defaultOpusModelName: string;
   defaultFableModel: string;
   defaultFableModelName: string;
+  subagentModel: string;
   onModelChange: (field: ClaudeModelEnvField, value: string) => void;
 
   // Speed Test Endpoints
@@ -201,6 +202,7 @@ export function ClaudeFormFields({
   defaultOpusModelName,
   defaultFableModel,
   defaultFableModelName,
+  subagentModel,
   onModelChange,
   speedTestEndpoints,
   apiFormat,
@@ -228,6 +230,7 @@ export function ClaudeFormFields({
     defaultSonnetModel ||
     defaultOpusModel ||
     defaultFableModel ||
+    subagentModel ||
     apiFormat !== "anthropic" ||
     toolCallBridge ||
     apiKeyField !== "ANTHROPIC_AUTH_TOKEN" ||
@@ -521,12 +524,12 @@ export function ClaudeFormFields({
   };
 
   type ModelRoleRow = {
-    role: "sonnet" | "opus" | "fable" | "haiku";
+    role: "sonnet" | "opus" | "fable" | "haiku" | "subagent";
     label: string;
     model: string;
-    displayName: string;
+    displayName?: string;
     modelField: ClaudeModelEnvField;
-    displayNameField: ClaudeModelEnvField;
+    displayNameField?: ClaudeModelEnvField;
     inputId: string;
     supportsOneM: boolean;
   };
@@ -572,6 +575,16 @@ export function ClaudeFormFields({
       inputId: "claudeDefaultHaikuModel",
       supportsOneM: false,
     },
+    {
+      role: "subagent",
+      label: t("providerForm.modelRoleSubagent", {
+        defaultValue: "Subagent",
+      }),
+      model: subagentModel,
+      modelField: "CLAUDE_CODE_SUBAGENT_MODEL",
+      inputId: "claudeCodeSubagentModel",
+      supportsOneM: true,
+    },
   ];
 
   const handleRoleModelChange = (row: ModelRoleRow, value: string) => {
@@ -580,10 +593,10 @@ export function ClaudeFormFields({
       ? value
       : stripClaudeOneMMarker(value);
     const nextModelBase = stripClaudeOneMMarker(normalizedValue).trim();
-    const displayName = row.displayName.trim();
+    const displayName = row.displayName?.trim() ?? "";
     const shouldSyncDisplayName = !displayName || displayName === oldModelBase;
     onModelChange(row.modelField, normalizedValue);
-    if (shouldSyncDisplayName) {
+    if (row.displayNameField && shouldSyncDisplayName) {
       onModelChange(row.displayNameField, nextModelBase);
     }
   };
@@ -846,17 +859,20 @@ export function ClaudeFormFields({
                         defaultSonnetModel ||
                         defaultOpusModel ||
                         defaultFableModel ||
-                        defaultHaikuModel;
+                        defaultHaikuModel ||
+                        subagentModel;
                       if (value) {
                         for (const row of modelRoleRows) {
                           const roleValue = row.supportsOneM
                             ? value
                             : stripClaudeOneMMarker(value);
                           onModelChange(row.modelField, roleValue);
-                          onModelChange(
-                            row.displayNameField,
-                            stripClaudeOneMMarker(roleValue),
-                          );
+                          if (row.displayNameField) {
+                            onModelChange(
+                              row.displayNameField,
+                              stripClaudeOneMMarker(roleValue),
+                            );
+                          }
                         }
                         toast.success(
                           t("providerForm.quickSetSuccess", {
@@ -870,7 +886,8 @@ export function ClaudeFormFields({
                       !defaultHaikuModel &&
                       !defaultSonnetModel &&
                       !defaultOpusModel &&
-                      !defaultFableModel
+                      !defaultFableModel &&
+                      !subagentModel
                     }
                     className="h-7 gap-1"
                   >
@@ -938,19 +955,30 @@ export function ClaudeFormFields({
                     <div className="flex h-9 items-center rounded-md border border-input bg-muted px-3 text-sm font-medium text-muted-foreground">
                       {row.label}
                     </div>
-                    <Input
-                      value={row.displayName}
-                      onChange={(event) =>
-                        onModelChange(row.displayNameField, event.target.value)
-                      }
-                      placeholder={
-                        modelBase ||
-                        t("providerForm.modelDisplayNamePlaceholder", {
-                          defaultValue: "例如 DeepSeek V4 Pro",
-                        })
-                      }
-                      autoComplete="off"
-                    />
+                    {row.displayNameField ? (
+                      <Input
+                        value={row.displayName ?? ""}
+                        onChange={(event) =>
+                          onModelChange(
+                            row.displayNameField!,
+                            event.target.value,
+                          )
+                        }
+                        placeholder={
+                          modelBase ||
+                          t("providerForm.modelDisplayNamePlaceholder", {
+                            defaultValue: "例如 DeepSeek V4 Pro",
+                          })
+                        }
+                        autoComplete="off"
+                      />
+                    ) : (
+                      <div className="flex h-9 items-center rounded-md border border-input bg-muted px-3 text-sm text-muted-foreground">
+                        {t("providerForm.modelNoDisplayName", {
+                          defaultValue: "不显示在 /model 菜单",
+                        })}
+                      </div>
+                    )}
                     {renderModelInput(
                       row.inputId,
                       modelBase,

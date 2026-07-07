@@ -39,6 +39,7 @@ pub(crate) use dao::proxy::{
 };
 pub use dao::FailoverQueueItem;
 pub use dao::ForkFailoverChainItem;
+pub use dao::Profile;
 
 use crate::config::{get_app_config_dir, get_fork_db_path};
 use crate::error::AppError;
@@ -50,7 +51,7 @@ use std::sync::Mutex;
 
 /// 当前 Schema 版本号
 /// 每次修改表结构时递增，并在 schema.rs 中添加相应的迁移逻辑
-pub(crate) const SCHEMA_VERSION: i32 = 11;
+pub(crate) const SCHEMA_VERSION: i32 = 12;
 
 /// 安全地序列化 JSON，避免 unwrap panic
 pub(crate) fn to_json_string<T: Serialize>(value: &T) -> Result<String, AppError> {
@@ -99,6 +100,34 @@ fn attach_fork_database(conn: &Connection, in_memory: bool) -> Result<(), AppErr
         .map_err(|e| AppError::Database(format!("启用 forkdb 外键失败: {e}")))?;
 
     Ok(())
+}
+
+pub(crate) fn ensure_fork_database_attached(conn: &Connection) -> Result<(), AppError> {
+    let mut stmt = conn
+        .prepare("PRAGMA database_list")
+        .map_err(|e| AppError::Database(format!("读取数据库列表失败: {e}")))?;
+    let mut rows = stmt
+        .query([])
+        .map_err(|e| AppError::Database(format!("查询数据库列表失败: {e}")))?;
+    while let Some(row) = rows
+        .next()
+        .map_err(|e| AppError::Database(format!("读取数据库列表失败: {e}")))?
+    {
+        let name: String = row
+            .get(1)
+            .map_err(|e| AppError::Database(format!("读取数据库名失败: {e}")))?;
+        if name == "forkdb" {
+            return Ok(());
+        }
+    }
+
+    drop(rows);
+    drop(stmt);
+
+    // Standalone schema tests/migrations may call create_tables_on_conn without
+    // going through Database::init/memory. Attach an isolated in-memory forkdb
+    // instead of touching the user's real fork database from such callers.
+    attach_fork_database(conn, true)
 }
 
 fn register_db_change_hook(conn: &Connection) {
