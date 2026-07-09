@@ -199,26 +199,42 @@ impl McpService {
 
     /// 手动同步所有启用的 MCP 服务器到对应的应用。
     ///
-    /// 同步时会按 app 维度读取一次当前 provider 的 MCP 覆盖列表，
+    /// Best-effort：单个应用投影失败（如 ~/.claude.json 坏 JSON）不阻断
+    /// 其余应用。同步时会按 app 维度读取当前 provider 的 MCP 覆盖列表，
     /// 全局启用但被该 provider 覆盖禁用的 server 会从 live 配置中移除。
+    /// 全部跑完后若有失败，聚合成一个错误上报，保留调用方的可见性。
     pub fn sync_all_enabled(state: &AppState) -> Result<(), AppError> {
         let servers = Self::get_all_servers(state)?;
 
+        let mut failures: Vec<String> = Vec::new();
         for app in AppType::all() {
-            if matches!(app, AppType::OpenClaw | AppType::ClaudeDesktop) {
-                continue;
+            if let Err(err) = Self::project_servers_to_app(state, &servers, &app) {
+                log::warn!("同步 MCP 到 {app:?} 失败: {err}");
+                failures.push(format!("{}: {err}", app.as_str()));
             }
-
-            Self::sync_all_enabled_for_app_from_servers(state, &app, &servers)?;
         }
 
-        Ok(())
+        if failures.is_empty() {
+            Ok(())
+        } else {
+            Err(AppError::Message(format!(
+                "部分应用 MCP 同步失败: {}",
+                failures.join("; ")
+            )))
+        }
     }
 
-    /// 同步指定 app 的 MCP，按“全局 app 启用状态 + 当前 provider 覆盖”重建目标段。
-    pub fn sync_all_enabled_for_app(state: &AppState, app: &AppType) -> Result<(), AppError> {
+    /// 只把启用状态投影到单个应用。某个应用的 live 被整体重写后用它做
+    /// 定向重投影，避免把无关应用的失败面牵连进目标应用的关键路径。
+    pub fn sync_enabled_for_app(state: &AppState, app: &AppType) -> Result<(), AppError> {
         let servers = Self::get_all_servers(state)?;
-        Self::sync_all_enabled_for_app_from_servers(state, app, &servers)
+        Self::project_servers_to_app(state, &servers, app)
+    }
+
+    /// 兼容旧调用名：同步指定 app 的 MCP，按“全局 app 启用状态 + 当前
+    /// provider 覆盖”重建目标段。
+    pub fn sync_all_enabled_for_app(state: &AppState, app: &AppType) -> Result<(), AppError> {
+        Self::sync_enabled_for_app(state, app)
     }
 
     /// 将指定 app 的 MCP 写入已经生成好的 live 配置文本。
@@ -241,10 +257,10 @@ impl McpService {
         Self::merge_codex_common_config_mcp_servers(db, &new_text)
     }
 
-    fn sync_all_enabled_for_app_from_servers(
+    fn project_servers_to_app(
         state: &AppState,
-        app: &AppType,
         servers: &IndexMap<String, McpServer>,
+        app: &AppType,
     ) -> Result<(), AppError> {
         if matches!(app, AppType::OpenClaw | AppType::ClaudeDesktop) {
             return Ok(());
@@ -254,12 +270,9 @@ impl McpService {
             return Self::sync_codex_enabled_from_servers(state.db.as_ref(), servers);
         }
 
-        // 每个 app 独立计算一次覆盖集合，避免逐 server 重复查询数据库
-        let disabled = Self::disabled_server_ids_for_app(state, app);
-
         for server in servers.values() {
-            if server.apps.is_enabled_for(app) && !disabled.contains(&server.id) {
-                Self::sync_server_to_app_no_config(server, app)?;
+            if server.apps.is_enabled_for(app) {
+                Self::sync_server_to_app(state, server, app)?;
             } else {
                 Self::remove_server_from_app(state, &server.id, app)?;
             }
@@ -640,5 +653,42 @@ impl McpService {
         }
 
         Ok(new_count)
+    }
+
+    /// 从所有支持 MCP 的应用导入服务器，返回新导入的数量。
+    ///
+    /// Best-effort：单个应用导入失败（如坏 config.toml）不阻断其余应用；
+    /// 全部跑完后若有失败，聚合成一个错误上报——历史实现逐应用
+    /// `unwrap_or(0)` 吞错，坏文件只会表现为"导入成功 0 个"，用户
+    /// 无从得知哪个应用出了问题。
+    pub fn import_from_all_apps(state: &AppState) -> Result<usize, AppError> {
+        let mut total = 0;
+        let mut failures: Vec<String> = Vec::new();
+
+        let results: [(&str, Result<usize, AppError>); 5] = [
+            ("claude", Self::import_from_claude(state)),
+            ("codex", Self::import_from_codex(state)),
+            ("gemini", Self::import_from_gemini(state)),
+            ("opencode", Self::import_from_opencode(state)),
+            ("hermes", Self::import_from_hermes(state)),
+        ];
+        for (app, result) in results {
+            match result {
+                Ok(count) => total += count,
+                Err(err) => {
+                    log::warn!("从 {app} 导入 MCP 失败: {err}");
+                    failures.push(format!("{app}: {err}"));
+                }
+            }
+        }
+
+        if failures.is_empty() {
+            Ok(total)
+        } else {
+            Err(AppError::Message(format!(
+                "已导入 {total} 个，部分应用导入失败: {}",
+                failures.join("; ")
+            )))
+        }
     }
 }
