@@ -20,8 +20,10 @@
 //! ## 行为
 //! - 输入：请求体 `Value` + 要剥除的工具 `type` 列表
 //! - 输出：剥除指定工具后的 `Value`
-//! - 仅当 `tools` 是数组时才处理，其它形态原样返回
-//! - 数组元素必须是 object 且 `type` 为 string 才参与匹配，其它原样保留
+//! - 处理顶层 `tools` 数组、`tool_choice` / `tool_choice.tools` 限定列表，
+//!   以及新版 Codex `input[].additional_tools.tools` 嵌套工具声明
+//! - 遇到名为 `tools` 的数组时处理；其它同名非数组字段原样返回
+//! - 数组元素支持 object `type` 和字符串简写匹配，其它原样保留
 //! - 列表为空时直接返回原 body，零开销
 //!
 //! ## 范围
@@ -29,22 +31,21 @@
 //! 不经过本函数。
 //!
 //! ## 不做什么
-//! - 不修改 `tools` 之外的任何字段
 //! - 不剥除 user-defined function tools（type=function）—— 那是用户自己
 //!   定义的工具，不在内置工具范畴
-//! - 不递归到嵌套对象 —— Codex `tools` 是顶层数组，无嵌套需求
+//! - 不改写消息文本、认证字段、模型名或 provider 配置；只清理工具声明/选择里的命中项
 
 use serde_json::Value;
 use std::collections::HashSet;
 
-/// 从请求体的 `tools` 数组中剥除指定 `type` 的内置工具项。
+/// 从请求体的工具声明/选择中剥除指定 `type` 的内置工具项。
 ///
 /// # Arguments
 /// * `body` - 请求体（mutable，原地修改）
 /// * `strip_types` - 要剥除的工具 type 列表（如 `["image_generation"]`）
 ///
 /// # Returns
-/// 实际被剥除的工具项数量。0 表示未命中或 tools 不存在。
+/// 实际被剥除的工具项数量。0 表示未命中或工具声明不存在。
 ///
 /// # Example
 /// ```ignore
@@ -64,23 +65,149 @@ pub fn strip_codex_tools_by_type(body: &mut Value, strip_types: &[String]) -> us
         return 0;
     }
 
-    let strip_set: HashSet<&str> = strip_types.iter().map(|s| s.as_str()).collect();
+    let strip_set = build_strip_set(strip_types);
+    if strip_set.is_empty() {
+        return 0;
+    }
 
-    let Some(tools) = body.get_mut("tools").and_then(Value::as_array_mut) else {
+    strip_nested_tool_references(body, &strip_set)
+}
+
+fn build_strip_set(strip_types: &[String]) -> HashSet<String> {
+    let mut strip_set: HashSet<String> = strip_types
+        .iter()
+        .map(|s| s.trim())
+        .filter(|s| !s.is_empty())
+        .map(ToString::to_string)
+        .collect();
+
+    // 用户面板暴露的是 OpenAI 文档里的主名称 `image_generation`。部分客户端
+    // / 网关在兼容层会用 preview/call 变体；勾选主项时一并剥除这些别名，避免
+    // 升级 Codex 后字段名轻微漂移导致兼容开关看起来“失效”。
+    if strip_set.contains("image_generation") {
+        strip_set.insert("image_generation_preview".to_string());
+        strip_set.insert("image_generation_call".to_string());
+    }
+
+    strip_set
+}
+
+fn strip_tools_array(tools: &mut Value, strip_set: &HashSet<String>) -> usize {
+    let Some(tools) = tools.as_array_mut() else {
         return 0;
     };
 
     let original_len = tools.len();
-    tools.retain(|tool| {
-        // 仅剔除 object 且 type 命中 strip_set 的项；其它形态（function、
-        // 字符串简写等）原样保留。
-        let Some(t) = tool.get("type").and_then(Value::as_str) else {
-            return true;
-        };
-        !strip_set.contains(t)
+    tools.retain(|tool| match tool {
+        // 正常 Responses tool 形态：{"type":"image_generation"}
+        Value::Object(_) => {
+            let Some(t) = tool.get("type").and_then(Value::as_str) else {
+                return true;
+            };
+            !strip_set.contains(t)
+        }
+        // 防御性兼容字符串简写："image_generation"
+        Value::String(t) => !strip_set.contains(t.as_str()),
+        _ => true,
     });
 
     original_len - tools.len()
+}
+
+fn strip_nested_tool_references(value: &mut Value, strip_set: &HashSet<String>) -> usize {
+    match value {
+        Value::Object(obj) => {
+            let mut removed = 0usize;
+
+            // 新版 Codex / OpenAI Responses 可能不只在顶层 `tools` 声明内置工具，
+            // 还会通过 `tool_choice` 约束可用工具。例如：
+            //   {"tool_choice":{"type":"allowed_tools","mode":"auto","tools":[...]}}
+            // 如果只删 tools，部分中转仍会看到 tool_choice 里的 image_generation，
+            // 继续返回 403 "Image generation is not enabled for this group"。
+            let remove_tool_choice = if let Some(tool_choice) = obj.get_mut("tool_choice") {
+                let (choice_removed, should_remove_choice) =
+                    strip_tool_choice(tool_choice, strip_set);
+                removed += choice_removed;
+                should_remove_choice
+            } else {
+                false
+            };
+            if remove_tool_choice {
+                obj.remove("tool_choice");
+            }
+
+            // Codex 0.144.0 起真实请求不一定有顶层 `tools`：本地抓包可见工具
+            // 声明会被放在 `input[]` 的 `additional_tools.tools` 中。这里递归清理
+            // 所有嵌套数组，覆盖顶层 tools、additional_tools.tools、namespace.tools
+            // 和未来同类字段。
+            for child in obj.values_mut() {
+                removed += strip_nested_tool_references(child, strip_set);
+            }
+
+            removed
+        }
+        Value::Array(items) => {
+            let original_len = items.len();
+            items.retain(|item| !value_type_matches(item, strip_set));
+            let mut removed = original_len - items.len();
+
+            for item in items {
+                removed += strip_nested_tool_references(item, strip_set);
+            }
+
+            removed
+        }
+        _ => 0,
+    }
+}
+
+fn value_type_matches(value: &Value, strip_set: &HashSet<String>) -> bool {
+    match value {
+        Value::Object(_) => value
+            .get("type")
+            .and_then(Value::as_str)
+            .is_some_and(|t| strip_set.contains(t)),
+        Value::String(t) => strip_set.contains(t.as_str()),
+        _ => false,
+    }
+}
+
+fn strip_tool_choice(tool_choice: &mut Value, strip_set: &HashSet<String>) -> (usize, bool) {
+    match tool_choice {
+        Value::String(choice) => {
+            // 非标准但防御性处理：若某个网关/客户端用字符串直接指定 hosted tool，
+            // 删除整个 tool_choice，让请求回到默认 auto。
+            if strip_set.contains(choice.as_str()) {
+                (1, true)
+            } else {
+                (0, false)
+            }
+        }
+        Value::Object(obj) => {
+            if obj
+                .get("type")
+                .and_then(Value::as_str)
+                .is_some_and(|t| strip_set.contains(t))
+            {
+                return (1, true);
+            }
+
+            let mut removed = 0usize;
+            if let Some(tools) = obj.get_mut("tools") {
+                removed += strip_tools_array(tools, strip_set);
+
+                // allowed_tools 约束在剥完后为空会变成无效请求；删除 tool_choice
+                // 比强行保留空列表更接近 Responses 默认行为。
+                let tools_empty = tools.as_array().is_some_and(|items| items.is_empty());
+                if tools_empty {
+                    return (removed, true);
+                }
+            }
+
+            (removed, false)
+        }
+        _ => (0, false),
+    }
 }
 
 #[cfg(test)]
@@ -206,5 +333,138 @@ mod tests {
         let n = strip_codex_tools_by_type(&mut body, &["image_generation".to_string()]);
         assert_eq!(n, 0);
         assert_eq!(body["tools"], "weird_string");
+    }
+
+    #[test]
+    fn strip_removes_direct_hosted_tool_choice() {
+        let mut body = json!({
+            "tools": [
+                {"type": "function", "name": "keep"}
+            ],
+            "tool_choice": {"type": "image_generation"}
+        });
+
+        let n = strip_codex_tools_by_type(&mut body, &["image_generation".to_string()]);
+
+        assert_eq!(n, 1);
+        assert!(body.get("tool_choice").is_none());
+        assert_eq!(body["tools"].as_array().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn strip_removes_nested_allowed_tool_choice_entries() {
+        let mut body = json!({
+            "tools": [
+                {"type": "image_generation"},
+                {"type": "function", "name": "keep"}
+            ],
+            "tool_choice": {
+                "type": "allowed_tools",
+                "mode": "auto",
+                "tools": [
+                    {"type": "image_generation"},
+                    {"type": "function", "name": "keep"}
+                ]
+            }
+        });
+
+        let n = strip_codex_tools_by_type(&mut body, &["image_generation".to_string()]);
+
+        assert_eq!(n, 2);
+        assert_eq!(body["tools"].as_array().unwrap().len(), 1);
+        assert_eq!(body["tools"][0]["type"], "function");
+
+        let choice_tools = body["tool_choice"]["tools"].as_array().unwrap();
+        assert_eq!(choice_tools.len(), 1);
+        assert_eq!(choice_tools[0]["type"], "function");
+    }
+
+    #[test]
+    fn strip_removes_allowed_tool_choice_when_empty() {
+        let mut body = json!({
+            "tools": [{"type": "image_generation"}],
+            "tool_choice": {
+                "type": "allowed_tools",
+                "mode": "auto",
+                "tools": [{"type": "image_generation"}]
+            }
+        });
+
+        let n = strip_codex_tools_by_type(&mut body, &["image_generation".to_string()]);
+
+        assert_eq!(n, 2);
+        assert_eq!(body["tools"].as_array().unwrap().len(), 0);
+        assert!(body.get("tool_choice").is_none());
+    }
+
+    #[test]
+    fn strip_image_generation_also_removes_preview_alias() {
+        let mut body = json!({
+            "tools": [
+                {"type": "image_generation_preview"},
+                {"type": "function", "name": "keep"}
+            ]
+        });
+
+        let n = strip_codex_tools_by_type(&mut body, &["image_generation".to_string()]);
+
+        assert_eq!(n, 1);
+        let tools = body["tools"].as_array().unwrap();
+        assert_eq!(tools.len(), 1);
+        assert_eq!(tools[0]["type"], "function");
+    }
+
+    #[test]
+    fn strip_removes_string_shorthand_tool_type() {
+        let mut body = json!({
+            "tools": ["image_generation", {"type": "function", "name": "keep"}]
+        });
+
+        let n = strip_codex_tools_by_type(&mut body, &["image_generation".to_string()]);
+
+        assert_eq!(n, 1);
+        let tools = body["tools"].as_array().unwrap();
+        assert_eq!(tools.len(), 1);
+        assert_eq!(tools[0]["type"], "function");
+    }
+
+    #[test]
+    fn strip_removes_codex_additional_tools_nested_entries() {
+        let mut body = json!({
+            "model": "gpt-5.6-sol",
+            "input": [
+                {
+                    "type": "additional_tools",
+                    "role": "developer",
+                    "tools": [
+                        {"type": "image_generation", "name": "imagegen"},
+                        {"type": "custom", "name": "exec"},
+                        {
+                            "type": "namespace",
+                            "name": "collaboration",
+                            "tools": [
+                                {"type": "image_generation_call", "name": "gen"},
+                                {"type": "function", "name": "wait_agent"}
+                            ]
+                        }
+                    ]
+                },
+                {"type": "message", "role": "user", "content": [{"type": "input_text", "text": "hi"}]}
+            ],
+            "tool_choice": "auto"
+        });
+
+        let n = strip_codex_tools_by_type(&mut body, &["image_generation".to_string()]);
+
+        assert_eq!(n, 2);
+        let tools = body["input"][0]["tools"].as_array().unwrap();
+        assert_eq!(tools.len(), 2);
+        assert_eq!(tools[0]["type"], "custom");
+        assert_eq!(tools[1]["type"], "namespace");
+
+        let namespace_tools = tools[1]["tools"].as_array().unwrap();
+        assert_eq!(namespace_tools.len(), 1);
+        assert_eq!(namespace_tools[0]["type"], "function");
+        assert_eq!(body["tool_choice"], "auto");
     }
 }
