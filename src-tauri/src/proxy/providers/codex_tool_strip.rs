@@ -1,7 +1,7 @@
 //! Codex 内置工具剥离
 //!
 //! 用于在 cc-switch 转发 Codex `/v1/responses` 请求到上游中转之前，
-//! 剔除请求体 `tools` 数组里指定 `type` 的元素。
+//! 剔除请求体工具声明里指定的 OpenAI 内置工具。
 //!
 //! ## 背景
 //! Codex CLI 在 ChatGPT 登录态（`preferred_auth_method = "chatgpt"`）或
@@ -18,12 +18,13 @@
 //! `403 Image generation is not enabled for this group` 之类的硬错误。
 //!
 //! ## 行为
-//! - 输入：请求体 `Value` + 要剥除的工具 `type` 列表
+//! - 输入：请求体 `Value` + 要剥除的工具主名称列表
 //! - 输出：剥除指定工具后的 `Value`
 //! - 处理顶层 `tools` 数组、`tool_choice` / `tool_choice.tools` 限定列表，
 //!   以及新版 Codex `input[].additional_tools.tools` 嵌套工具声明
-//! - 遇到名为 `tools` 的数组时处理；其它同名非数组字段原样返回
-//! - 数组元素支持 object `type` 和字符串简写匹配，其它原样保留
+//! - `image_generation` 同时匹配 hosted tool，以及 Codex 0.144.0 起的
+//!   `image_gen/imagegen` 扩展命名空间和 Chat 展平名称
+//! - 数组元素支持 object `type`、官方扩展标识和字符串简写匹配，其它原样保留
 //! - 列表为空时直接返回原 body，零开销
 //!
 //! ## 范围
@@ -31,14 +32,19 @@
 //! 不经过本函数。
 //!
 //! ## 不做什么
-//! - 不剥除 user-defined function tools（type=function）—— 那是用户自己
-//!   定义的工具，不在内置工具范畴
+//! - 不剥除其它 user-defined function tools（type=function）；仅额外识别
+//!   Codex 官方图像扩展的精确命名空间/展平名称
 //! - 不改写消息文本、认证字段、模型名或 provider 配置；只清理工具声明/选择里的命中项
 
 use serde_json::Value;
 use std::collections::HashSet;
 
-/// 从请求体的工具声明/选择中剥除指定 `type` 的内置工具项。
+const IMAGE_GENERATION_TYPE: &str = "image_generation";
+const IMAGE_GEN_NAMESPACE: &str = "image_gen";
+const IMAGEGEN_TOOL_NAME: &str = "imagegen";
+const IMAGEGEN_CHAT_NAME: &str = "image_gen__imagegen";
+
+/// 从请求体的工具声明/选择中剥除指定主名称对应的内置工具项。
 ///
 /// # Arguments
 /// * `body` - 请求体（mutable，原地修改）
@@ -84,7 +90,7 @@ fn build_strip_set(strip_types: &[String]) -> HashSet<String> {
     // 用户面板暴露的是 OpenAI 文档里的主名称 `image_generation`。部分客户端
     // / 网关在兼容层会用 preview/call 变体；勾选主项时一并剥除这些别名，避免
     // 升级 Codex 后字段名轻微漂移导致兼容开关看起来“失效”。
-    if strip_set.contains("image_generation") {
+    if strip_set.contains(IMAGE_GENERATION_TYPE) {
         strip_set.insert("image_generation_preview".to_string());
         strip_set.insert("image_generation_call".to_string());
     }
@@ -98,18 +104,7 @@ fn strip_tools_array(tools: &mut Value, strip_set: &HashSet<String>) -> usize {
     };
 
     let original_len = tools.len();
-    tools.retain(|tool| match tool {
-        // 正常 Responses tool 形态：{"type":"image_generation"}
-        Value::Object(_) => {
-            let Some(t) = tool.get("type").and_then(Value::as_str) else {
-                return true;
-            };
-            !strip_set.contains(t)
-        }
-        // 防御性兼容字符串简写："image_generation"
-        Value::String(t) => !strip_set.contains(t.as_str()),
-        _ => true,
-    });
+    tools.retain(|tool| !value_matches_strip(tool, strip_set));
 
     original_len - tools.len()
 }
@@ -148,7 +143,7 @@ fn strip_nested_tool_references(value: &mut Value, strip_set: &HashSet<String>) 
         }
         Value::Array(items) => {
             let original_len = items.len();
-            items.retain(|item| !value_type_matches(item, strip_set));
+            items.retain(|item| !value_matches_strip(item, strip_set));
             let mut removed = original_len - items.len();
 
             for item in items {
@@ -161,37 +156,60 @@ fn strip_nested_tool_references(value: &mut Value, strip_set: &HashSet<String>) 
     }
 }
 
-fn value_type_matches(value: &Value, strip_set: &HashSet<String>) -> bool {
+fn value_matches_strip(value: &Value, strip_set: &HashSet<String>) -> bool {
     match value {
-        Value::Object(_) => value
-            .get("type")
-            .and_then(Value::as_str)
-            .is_some_and(|t| strip_set.contains(t)),
-        Value::String(t) => strip_set.contains(t.as_str()),
+        Value::Object(_) => {
+            value
+                .get("type")
+                .and_then(Value::as_str)
+                .is_some_and(|t| strip_set.contains(t))
+                || (strip_set.contains(IMAGE_GENERATION_TYPE)
+                    && matches_image_generation_extension(value))
+        }
+        Value::String(value) => strip_set.contains(value.as_str()),
         _ => false,
     }
 }
 
-fn strip_tool_choice(tool_choice: &mut Value, strip_set: &HashSet<String>) -> (usize, bool) {
-    match tool_choice {
-        Value::String(choice) => {
-            // 非标准但防御性处理：若某个网关/客户端用字符串直接指定 hosted tool，
-            // 删除整个 tool_choice，让请求回到默认 auto。
-            if strip_set.contains(choice.as_str()) {
-                (1, true)
-            } else {
-                (0, false)
-            }
-        }
-        Value::Object(obj) => {
-            if obj
-                .get("type")
-                .and_then(Value::as_str)
-                .is_some_and(|t| strip_set.contains(t))
-            {
-                return (1, true);
-            }
+/// Codex 0.144.0 将旧 hosted `image_generation` 替换成扩展工具：
+/// `namespace=image_gen`、`name=imagegen`。Responses 请求保留 namespace，
+/// 转成 Chat Completions 后则使用 `image_gen__imagegen`。
+fn matches_image_generation_extension(value: &Value) -> bool {
+    let Some(obj) = value.as_object() else {
+        return false;
+    };
 
+    let tool_type = obj.get("type").and_then(Value::as_str);
+    let name = obj.get("name").and_then(Value::as_str);
+    let namespace = obj.get("namespace").and_then(Value::as_str);
+    let function_name = obj
+        .get("function")
+        .and_then(|function| function.get("name"))
+        .and_then(Value::as_str);
+    let is_function_call = obj.contains_key("id")
+        || obj.contains_key("call_id")
+        || obj
+            .get("function")
+            .and_then(|function| function.get("arguments"))
+            .is_some();
+    let is_function_spec = tool_type == Some("function") && !is_function_call;
+
+    (tool_type == Some("namespace") && name == Some(IMAGE_GEN_NAMESPACE))
+        || (is_function_spec
+            && namespace == Some(IMAGE_GEN_NAMESPACE)
+            && name == Some(IMAGEGEN_TOOL_NAME))
+        || (is_function_spec
+            && (name == Some(IMAGEGEN_CHAT_NAME) || function_name == Some(IMAGEGEN_CHAT_NAME)))
+}
+
+fn strip_tool_choice(tool_choice: &mut Value, strip_set: &HashSet<String>) -> (usize, bool) {
+    if value_matches_strip(tool_choice, strip_set) {
+        return (1, true);
+    }
+
+    match tool_choice {
+        Value::String(_) => (0, false),
+        Value::Object(obj) => {
             let mut removed = 0usize;
             if let Some(tools) = obj.get_mut("tools") {
                 removed += strip_tools_array(tools, strip_set);
@@ -429,7 +447,7 @@ mod tests {
     }
 
     #[test]
-    fn strip_removes_codex_additional_tools_nested_entries() {
+    fn strip_removes_codex_0144_imagegen_namespace() {
         let mut body = json!({
             "model": "gpt-5.6-sol",
             "input": [
@@ -437,16 +455,22 @@ mod tests {
                     "type": "additional_tools",
                     "role": "developer",
                     "tools": [
-                        {"type": "image_generation", "name": "imagegen"},
+                        {
+                            "type": "namespace",
+                            "name": "image_gen",
+                            "tools": [
+                                {"type": "function", "name": "imagegen"}
+                            ]
+                        },
                         {"type": "custom", "name": "exec"},
                         {
                             "type": "namespace",
                             "name": "collaboration",
                             "tools": [
-                                {"type": "image_generation_call", "name": "gen"},
                                 {"type": "function", "name": "wait_agent"}
                             ]
-                        }
+                        },
+                        {"type": "function", "name": "imagegen"}
                     ]
                 },
                 {"type": "message", "role": "user", "content": [{"type": "input_text", "text": "hi"}]}
@@ -456,15 +480,119 @@ mod tests {
 
         let n = strip_codex_tools_by_type(&mut body, &["image_generation".to_string()]);
 
-        assert_eq!(n, 2);
+        assert_eq!(n, 1);
         let tools = body["input"][0]["tools"].as_array().unwrap();
-        assert_eq!(tools.len(), 2);
+        assert_eq!(tools.len(), 3);
         assert_eq!(tools[0]["type"], "custom");
         assert_eq!(tools[1]["type"], "namespace");
-
-        let namespace_tools = tools[1]["tools"].as_array().unwrap();
-        assert_eq!(namespace_tools.len(), 1);
-        assert_eq!(namespace_tools[0]["type"], "function");
+        assert_eq!(tools[2]["name"], "imagegen");
         assert_eq!(body["tool_choice"], "auto");
+    }
+
+    #[test]
+    fn strip_removes_image_generation_alias_inside_other_namespace() {
+        let mut body = json!({
+            "input": [{
+                "type": "additional_tools",
+                "tools": [{
+                    "type": "namespace",
+                    "name": "collaboration",
+                    "tools": [
+                        {"type": "image_generation_call", "name": "gen"},
+                        {"type": "function", "name": "wait_agent"}
+                    ]
+                }]
+            }]
+        });
+
+        let n = strip_codex_tools_by_type(&mut body, &[IMAGE_GENERATION_TYPE.to_string()]);
+
+        assert_eq!(n, 1);
+        let tools = body["input"][0]["tools"][0]["tools"].as_array().unwrap();
+        assert_eq!(tools.len(), 1);
+        assert_eq!(tools[0]["name"], "wait_agent");
+    }
+
+    #[test]
+    fn strip_removes_flattened_imagegen_chat_tool_and_choice() {
+        let mut body = json!({
+            "tools": [
+                {
+                    "type": "function",
+                    "function": {"name": "image_gen__imagegen", "parameters": {}}
+                },
+                {
+                    "type": "function",
+                    "function": {"name": "keep", "parameters": {}}
+                }
+            ],
+            "tool_choice": {
+                "type": "function",
+                "function": {"name": "image_gen__imagegen"}
+            }
+        });
+
+        let n = strip_codex_tools_by_type(&mut body, &[IMAGE_GENERATION_TYPE.to_string()]);
+
+        assert_eq!(n, 2);
+        assert!(body.get("tool_choice").is_none());
+        let tools = body["tools"].as_array().unwrap();
+        assert_eq!(tools.len(), 1);
+        assert_eq!(tools[0]["function"]["name"], "keep");
+    }
+
+    #[test]
+    fn strip_removes_namespaced_imagegen_tool_choice() {
+        let mut body = json!({
+            "tools": [{"type": "function", "name": "keep"}],
+            "tool_choice": {
+                "type": "function",
+                "name": "imagegen",
+                "namespace": "image_gen"
+            }
+        });
+
+        let n = strip_codex_tools_by_type(&mut body, &[IMAGE_GENERATION_TYPE.to_string()]);
+
+        assert_eq!(n, 1);
+        assert!(body.get("tool_choice").is_none());
+        assert_eq!(body["tools"].as_array().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn strip_preserves_imagegen_history_calls() {
+        let mut body = json!({
+            "input": [
+                {
+                    "type": "function_call",
+                    "name": "imagegen",
+                    "namespace": "image_gen",
+                    "call_id": "call_1",
+                    "arguments": "{}"
+                },
+                {
+                    "type": "function_call_output",
+                    "call_id": "call_1",
+                    "output": "ok"
+                }
+            ],
+            "messages": [{
+                "role": "assistant",
+                "tool_calls": [{
+                    "id": "call_2",
+                    "type": "function",
+                    "function": {
+                        "name": "image_gen__imagegen",
+                        "arguments": "{}"
+                    }
+                }]
+            }]
+        });
+
+        let original = body.clone();
+        let n = strip_codex_tools_by_type(&mut body, &[IMAGE_GENERATION_TYPE.to_string()]);
+
+        assert_eq!(n, 0);
+        assert_eq!(body, original);
     }
 }

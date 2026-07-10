@@ -7,11 +7,11 @@ import { AlertTriangle } from "lucide-react";
 /**
  * Codex 中转兼容性 Panel
  *
- * 让用户精细勾选要从 codex CLI 请求体的 `tools` 数组中剥除的 OpenAI 内置工具。
+ * 让用户精细勾选要从 Codex 请求体工具声明中剥除的 OpenAI 内置工具。
  *
  * ## 背景
- * Codex CLI 在 ChatGPT 登录态或加载官方 plugin 时，会自动在请求 `tools` 字段
- * 中注入 OpenAI 内置工具（image_generation、web_search_preview 等）。许多
+ * Codex CLI 在 ChatGPT 登录态或加载官方 plugin 时，会自动在 `tools` 或
+ * `input[].additional_tools.tools` 中注入内置工具。许多
  * 第三方中转对这些工具不开放权限，会返回 `403 Image generation is not enabled
  * for this group`。本 Panel 让用户按 provider 维度勾选剥除哪些。
  *
@@ -38,7 +38,7 @@ const KNOWN_BUILTIN_TOOLS: ToolEntry[] = [
   {
     type: "image_generation",
     label: "image_generation",
-    hint: "图像生成（DALL-E）。中转最常拒绝的工具",
+    hint: "图像生成。兼容 hosted 工具和新版 image_gen/imagegen 扩展",
   },
   {
     type: "web_search_preview",
@@ -105,7 +105,7 @@ export function CodexToolStripPanel({
         <p className="text-xs text-muted-foreground leading-relaxed">
           {t(
             "provider.codexToolStrip.description",
-            "Codex CLI 在 ChatGPT 登录态或加载 plugin 时会在请求 tools 数组中自动注入 OpenAI 内置工具。多数第三方中转对这些工具不开放权限，会返回 403 \"Image generation is not enabled for this group\" 等错误。在此勾选要从转发请求中剥除的工具。仅在 cc-switch 代理转发时生效，默认不勾 = 完全透传。",
+            'Codex CLI 在 ChatGPT 登录态或加载 plugin 时会在请求中自动注入 OpenAI 内置工具。多数第三方中转对这些工具不开放权限，会返回 403 "Image generation is not enabled for this group" 等错误。在此勾选要从转发请求中剥除的工具。仅在 cc-switch 代理转发时生效，默认不勾 = 完全透传。',
           )}
         </p>
 
