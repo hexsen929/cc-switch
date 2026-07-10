@@ -43,12 +43,12 @@ const KNOWN_BUILTIN_TOOLS: ToolEntry[] = [
   {
     type: "web_search_preview",
     label: "web_search_preview",
-    hint: "网页搜索预览。多数中转不支持",
+    hint: "网页搜索预览。兼容新版 web/run 扩展",
   },
   {
     type: "web_search",
     label: "web_search",
-    hint: "网页搜索（正式版）",
+    hint: "网页搜索（正式版）。兼容新版 web/run 扩展",
   },
   {
     type: "computer_use_preview",

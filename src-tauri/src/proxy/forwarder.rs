@@ -1420,8 +1420,8 @@ impl RequestForwarder {
         }
 
         // Codex 中转兼容性补丁：在 body override 之后做最终剥离，确保 override
-        // 无法把已勾选的内置工具重新注入出站请求。image_generation 同时覆盖旧
-        // hosted tool 和 Codex 0.144.0 起的 image_gen/imagegen 扩展。
+        // 无法把已勾选的内置工具重新注入出站请求。Codex 0.144.0 的
+        // image_gen/imagegen、web/run 扩展也映射到对应的面板选项。
         if adapter.name() == "Codex" {
             if let Some(strip_types) = provider
                 .settings_config

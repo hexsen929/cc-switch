@@ -24,6 +24,7 @@
 //!   以及新版 Codex `input[].additional_tools.tools` 嵌套工具声明
 //! - `image_generation` 同时匹配 hosted tool，以及 Codex 0.144.0 起的
 //!   `image_gen/imagegen` 扩展命名空间和 Chat 展平名称
+//! - `web_search` / `web_search_preview` 同时匹配 `web/run` 搜索扩展
 //! - 数组元素支持 object `type`、官方扩展标识和字符串简写匹配，其它原样保留
 //! - 列表为空时直接返回原 body，零开销
 //!
@@ -43,6 +44,11 @@ const IMAGE_GENERATION_TYPE: &str = "image_generation";
 const IMAGE_GEN_NAMESPACE: &str = "image_gen";
 const IMAGEGEN_TOOL_NAME: &str = "imagegen";
 const IMAGEGEN_CHAT_NAME: &str = "image_gen__imagegen";
+const WEB_SEARCH_TYPE: &str = "web_search";
+const WEB_SEARCH_PREVIEW_TYPE: &str = "web_search_preview";
+const WEB_NAMESPACE: &str = "web";
+const WEB_RUN_TOOL_NAME: &str = "run";
+const WEB_RUN_CHAT_NAME: &str = "web__run";
 
 /// 从请求体的工具声明/选择中剥除指定主名称对应的内置工具项。
 ///
@@ -164,17 +170,34 @@ fn value_matches_strip(value: &Value, strip_set: &HashSet<String>) -> bool {
                 .and_then(Value::as_str)
                 .is_some_and(|t| strip_set.contains(t))
                 || (strip_set.contains(IMAGE_GENERATION_TYPE)
-                    && matches_image_generation_extension(value))
+                    && matches_namespaced_extension(
+                        value,
+                        IMAGE_GEN_NAMESPACE,
+                        IMAGEGEN_TOOL_NAME,
+                        IMAGEGEN_CHAT_NAME,
+                    ))
+                || ((strip_set.contains(WEB_SEARCH_TYPE)
+                    || strip_set.contains(WEB_SEARCH_PREVIEW_TYPE))
+                    && matches_namespaced_extension(
+                        value,
+                        WEB_NAMESPACE,
+                        WEB_RUN_TOOL_NAME,
+                        WEB_RUN_CHAT_NAME,
+                    ))
         }
         Value::String(value) => strip_set.contains(value.as_str()),
         _ => false,
     }
 }
 
-/// Codex 0.144.0 将旧 hosted `image_generation` 替换成扩展工具：
-/// `namespace=image_gen`、`name=imagegen`。Responses 请求保留 namespace，
-/// 转成 Chat Completions 后则使用 `image_gen__imagegen`。
-fn matches_image_generation_extension(value: &Value) -> bool {
+/// 匹配 Codex 0.144.0 起的官方扩展工具。Responses 请求保留 namespace，
+/// 转成 Chat Completions 后则使用 `{namespace}__{name}` 展平名称。
+fn matches_namespaced_extension(
+    value: &Value,
+    expected_namespace: &str,
+    expected_tool_name: &str,
+    expected_chat_name: &str,
+) -> bool {
     let Some(obj) = value.as_object() else {
         return false;
     };
@@ -194,12 +217,12 @@ fn matches_image_generation_extension(value: &Value) -> bool {
             .is_some();
     let is_function_spec = tool_type == Some("function") && !is_function_call;
 
-    (tool_type == Some("namespace") && name == Some(IMAGE_GEN_NAMESPACE))
+    (tool_type == Some("namespace") && name == Some(expected_namespace))
         || (is_function_spec
-            && namespace == Some(IMAGE_GEN_NAMESPACE)
-            && name == Some(IMAGEGEN_TOOL_NAME))
+            && namespace == Some(expected_namespace)
+            && name == Some(expected_tool_name))
         || (is_function_spec
-            && (name == Some(IMAGEGEN_CHAT_NAME) || function_name == Some(IMAGEGEN_CHAT_NAME)))
+            && (name == Some(expected_chat_name) || function_name == Some(expected_chat_name)))
 }
 
 fn strip_tool_choice(tool_choice: &mut Value, strip_set: &HashSet<String>) -> (usize, bool) {
@@ -594,5 +617,58 @@ mod tests {
 
         assert_eq!(n, 0);
         assert_eq!(body, original);
+    }
+
+    #[test]
+    fn strip_removes_codex_0144_web_search_namespace_for_both_names() {
+        for strip_type in [WEB_SEARCH_TYPE, WEB_SEARCH_PREVIEW_TYPE] {
+            let mut body = json!({
+                "input": [{
+                    "type": "additional_tools",
+                    "tools": [
+                        {
+                            "type": "namespace",
+                            "name": "web",
+                            "tools": [
+                                {"type": "function", "name": "run"}
+                            ]
+                        },
+                        {"type": "function", "name": "run"},
+                        {"type": "custom", "name": "exec"}
+                    ]
+                }]
+            });
+
+            let n = strip_codex_tools_by_type(&mut body, &[strip_type.to_string()]);
+
+            assert_eq!(n, 1, "strip type: {strip_type}");
+            let tools = body["input"][0]["tools"].as_array().unwrap();
+            assert_eq!(tools.len(), 2, "strip type: {strip_type}");
+            assert_eq!(tools[0]["name"], "run");
+            assert_eq!(tools[1]["name"], "exec");
+        }
+    }
+
+    #[test]
+    fn strip_removes_flattened_web_search_chat_tool() {
+        let mut body = json!({
+            "tools": [
+                {
+                    "type": "function",
+                    "function": {"name": "web__run", "parameters": {}}
+                },
+                {
+                    "type": "function",
+                    "function": {"name": "keep", "parameters": {}}
+                }
+            ]
+        });
+
+        let n = strip_codex_tools_by_type(&mut body, &[WEB_SEARCH_TYPE.to_string()]);
+
+        assert_eq!(n, 1);
+        let tools = body["tools"].as_array().unwrap();
+        assert_eq!(tools.len(), 1);
+        assert_eq!(tools[0]["function"]["name"], "keep");
     }
 }
