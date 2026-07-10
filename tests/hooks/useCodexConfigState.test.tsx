@@ -29,7 +29,7 @@ experimental_bearer_token = "real-provider-key"
     );
   });
 
-  it("seeds model catalog from config.toml model when modelCatalog is absent", () => {
+  it("keeps model catalog empty when only config.toml model is present", () => {
     const { result } = renderHook(() =>
       useCodexConfigState({
         initialData: {
@@ -47,9 +47,22 @@ base_url = "https://api.example/v1"
       }),
     );
 
-    expect(result.current.codexCatalogModels).toEqual([
-      { model: "deepseek-v4-flash" },
-    ]);
+    expect(result.current.codexCatalogModels).toEqual([]);
+  });
+
+  it("does not seed model catalog from config.toml during preset reset", () => {
+    const { result } = renderHook(() => useCodexConfigState({}));
+
+    act(() => {
+      result.current.resetCodexConfig(
+        {},
+        `model_provider = "custom"
+model = "deepseek-v4-flash"
+`,
+      );
+    });
+
+    expect(result.current.codexCatalogModels).toEqual([]);
   });
 
   it("keeps explicit modelCatalog over config.toml model", () => {

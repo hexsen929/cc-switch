@@ -2,7 +2,6 @@ import { useState, useCallback, useEffect, useRef } from "react";
 import {
   extractCodexBaseUrl,
   extractCodexExperimentalBearerToken,
-  extractCodexModelName,
   setCodexBaseUrl as setCodexBaseUrlInConfig,
   updateCodexExperimentalBearerToken,
 } from "@/utils/providerConfigUtils";
@@ -70,15 +69,6 @@ function normalizeCatalogModels(rawModels: unknown): CodexCatalogModel[] {
         })
         .filter((item: CodexCatalogModel) => item.model.trim())
     : [];
-}
-
-function catalogModelsOrConfigModel(
-  configText: string,
-  catalogModels: CodexCatalogModel[],
-): CodexCatalogModel[] {
-  if (catalogModels.length > 0) return catalogModels;
-  const model = extractCodexModelName(configText)?.trim();
-  return model ? [{ model }] : [];
 }
 
 function catalogModelsEqual(
@@ -154,10 +144,7 @@ export function useCodexConfigState({ initialData }: UseCodexConfigStateProps) {
       setCodexConfigState(configStr);
 
       const modelCatalog = (config as any).modelCatalog;
-      const nextCatalogModels = catalogModelsOrConfigModel(
-        configStr,
-        normalizeCatalogModels(modelCatalog?.models),
-      );
+      const nextCatalogModels = normalizeCatalogModels(modelCatalog?.models);
       setCodexCatalogModels((current) =>
         catalogModelsEqual(current, nextCatalogModels)
           ? current
@@ -306,12 +293,7 @@ export function useCodexConfigState({ initialData }: UseCodexConfigStateProps) {
       const authString = JSON.stringify(auth, null, 2);
       setCodexAuth(authString);
       setCodexConfig(config);
-      setCodexCatalogModels(
-        catalogModelsOrConfigModel(
-          config,
-          normalizeCatalogModels(modelCatalogModels),
-        ),
-      );
+      setCodexCatalogModels(normalizeCatalogModels(modelCatalogModels));
 
       const baseUrl = extractCodexBaseUrl(config);
       setCodexBaseUrl(baseUrl || "");
