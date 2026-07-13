@@ -25,6 +25,7 @@ import {
   isCodexAnthropicWireApi,
   isCodexChatWireApi,
 } from "@/utils/providerConfigUtils";
+import { supportsOfficialProxyTakeover } from "@/utils/providerCapabilities";
 
 /**
  * Hook for managing provider actions (add, update, delete, switch)
@@ -78,6 +79,7 @@ export function useProviderActions(
         suggestedDefaults?: OpenClawSuggestedDefaults;
         addToLive?: boolean;
         ensureClaudeDesktopOfficialSeed?: boolean;
+        ensureCodexOfficialSeed?: boolean;
       },
     ) => {
       const enhanced = injectCodingPlanUsageScript(activeApp, provider);
@@ -236,15 +238,16 @@ export function useProviderActions(
         );
       }
 
-      // Block official providers when proxy takeover is active. Codex is the
-      // exception: OpenAI Official is the recovery/login path, so the backend
-      // exits Codex takeover before writing the official live config.
-      const allowCodexOfficialRecovery =
-        activeApp === "codex" && provider.category === "official";
+      // The built-in Codex official provider can reuse Codex's native ChatGPT
+      // login through local routing. Other official providers remain blocked.
+      const officialSupportsTakeover = supportsOfficialProxyTakeover(
+        activeApp,
+        provider,
+      );
       if (
         isProxyTakeover &&
         provider.category === "official" &&
-        !allowCodexOfficialRecovery
+        !officialSupportsTakeover
       ) {
         toast.error(
           t("notifications.officialBlockedByProxy", {
