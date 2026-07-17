@@ -20,6 +20,27 @@ vi.mock("@/components/JsonEditor", () => ({
   ),
 }));
 
+vi.mock("@/components/providers/forms/ProviderResourceOverridesConfig", () => ({
+  ProviderResourceOverridesConfig: ({ appId, value, onChange }: any) => (
+    <div data-testid={`provider-resource-overrides-${appId}`}>
+      <span>{JSON.stringify(value ?? {})}</span>
+      <button
+        type="button"
+        onClick={() =>
+          onChange({
+            mcp: {
+              enabled: true,
+              disabledServerIds: ["grok-disabled-mcp"],
+            },
+          })
+        }
+      >
+        Configure resource overrides
+      </button>
+    </div>
+  ),
+}));
+
 describe("GrokBuildProviderForm", () => {
   it("offers Codex-compatible provider presets and applies one", async () => {
     const user = userEvent.setup();
@@ -66,6 +87,12 @@ describe("GrokBuildProviderForm", () => {
     fireEvent.change(screen.getByLabelText("API Key"), {
       target: { value: "secret-key" },
     });
+    expect(
+      screen.getByTestId("provider-resource-overrides-grokbuild"),
+    ).toBeInTheDocument();
+    await user.click(
+      screen.getByRole("button", { name: "Configure resource overrides" }),
+    );
     await user.click(screen.getByRole("button", { name: "Save" }));
 
     expect(onSubmit).toHaveBeenCalledTimes(1);
@@ -82,6 +109,12 @@ describe("GrokBuildProviderForm", () => {
       api_key: "secret-key",
       api_backend: "responses",
       context_window: 500000,
+    });
+    expect(submitted.meta.resourceOverrides).toEqual({
+      mcp: {
+        enabled: true,
+        disabledServerIds: ["grok-disabled-mcp"],
+      },
     });
   });
 
@@ -152,6 +185,12 @@ context_window = 250000
           name: "Existing Relay",
           settingsConfig: { config },
           meta: {
+            resourceOverrides: {
+              prompt: {
+                enabled: true,
+                mode: "disabled",
+              },
+            },
             custom_endpoints: {
               "https://deleted.example.com/v1": {
                 url: "https://deleted.example.com/v1",
@@ -174,5 +213,12 @@ context_window = 250000
 
     expect(onSubmit).toHaveBeenCalledTimes(1);
     expect(onSubmit.mock.calls[0][0].meta.custom_endpoints).toBeUndefined();
+    expect(onSubmit.mock.calls[0][0].meta.resourceOverrides).toEqual({
+      prompt: {
+        enabled: true,
+        mode: "disabled",
+        promptId: undefined,
+      },
+    });
   });
 });

@@ -83,6 +83,7 @@ import { CodexFormFields } from "./CodexFormFields";
 import { GeminiFormFields } from "./GeminiFormFields";
 import { OmoFormFields } from "./OmoFormFields";
 import { ProviderResourceOverridesConfig } from "./ProviderResourceOverridesConfig";
+import { normalizeProviderResourceOverrides } from "./providerResourceOverrides";
 import { parseOmoOtherFieldsObject } from "@/types/omo";
 import {
   ProviderAdvancedConfig,
@@ -240,39 +241,6 @@ export interface ProviderFormProps {
   };
   showButtons?: boolean;
   isProxyTakeover?: boolean;
-}
-
-function normalizeResourceOverrides(
-  value: ProviderResourceOverrides,
-): ProviderResourceOverrides | undefined {
-  const next: ProviderResourceOverrides = {};
-
-  if (value.mcp?.enabled) {
-    next.mcp = {
-      enabled: true,
-      disabledServerIds: (value.mcp.disabledServerIds ?? []).filter(Boolean),
-    };
-  }
-
-  if (value.skills?.enabled) {
-    next.skills = {
-      enabled: true,
-      disabledSkillIds: (value.skills.disabledSkillIds ?? []).filter(Boolean),
-    };
-  }
-
-  if (value.prompt?.enabled) {
-    next.prompt = {
-      enabled: true,
-      mode: value.prompt.mode ?? "selected",
-      promptId:
-        (value.prompt.mode ?? "selected") === "selected"
-          ? value.prompt.promptId || undefined
-          : undefined,
-    };
-  }
-
-  return Object.keys(next).length > 0 ? next : undefined;
 }
 
 export function ProviderForm(props: ProviderFormProps) {
@@ -1567,7 +1535,7 @@ function ProviderFormFull({
         pricingConfig.enabled && pricingConfig.pricingModelSource !== "inherit"
           ? pricingConfig.pricingModelSource
           : undefined,
-      resourceOverrides: normalizeResourceOverrides(resourceOverrides),
+      resourceOverrides: normalizeProviderResourceOverrides(resourceOverrides),
       toolCallBridge:
         category !== "official" &&
         ((appId === "claude" && localApiFormat === "openai_chat") ||

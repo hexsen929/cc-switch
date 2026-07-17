@@ -27,6 +27,7 @@ import type {
   PromptCacheRoutingMode,
   ProviderCategory,
   ProviderMeta,
+  ProviderResourceOverrides,
 } from "@/types";
 import type { ProviderFormProps, ProviderFormValues } from "./ProviderForm";
 import { BasicFormFields } from "./BasicFormFields";
@@ -49,6 +50,8 @@ import {
   validateGrokBuildConfig,
 } from "@/utils/grokBuildConfig";
 import { resolveProviderIcon } from "@/utils/providerIcon";
+import { ProviderResourceOverridesConfig } from "./ProviderResourceOverridesConfig";
+import { normalizeProviderResourceOverrides } from "./providerResourceOverrides";
 
 type GrokBuildProviderFormProps = Omit<ProviderFormProps, "appId">;
 
@@ -149,6 +152,10 @@ export function GrokBuildProviderForm({
   const [endpointAutoSelect, setEndpointAutoSelect] = useState(
     initialData?.meta?.endpointAutoSelect ?? true,
   );
+  const [resourceOverrides, setResourceOverrides] =
+    useState<ProviderResourceOverrides>(
+      () => initialData?.meta?.resourceOverrides ?? {},
+    );
   const [isEndpointModalOpen, setIsEndpointModalOpen] = useState(false);
   const [presetEndpoints, setPresetEndpoints] = useState<string[]>([]);
   const [draftCustomEndpoints, setDraftCustomEndpoints] = useState<string[]>(
@@ -367,6 +374,7 @@ export function GrokBuildProviderForm({
       codexChatReasoning,
       customUserAgent: customUserAgent.trim() || undefined,
       localProxyRequestOverrides: requestOverrides.overrides,
+      resourceOverrides: normalizeProviderResourceOverrides(resourceOverrides),
       maxOutputTokens:
         Number.isInteger(parsedMaxOutputTokens) && parsedMaxOutputTokens > 0
           ? parsedMaxOutputTokens
@@ -546,6 +554,12 @@ export function GrokBuildProviderForm({
             </p>
           )}
         </div>
+
+        <ProviderResourceOverridesConfig
+          appId="grokbuild"
+          value={resourceOverrides}
+          onChange={setResourceOverrides}
+        />
 
         <FormField
           control={form.control}
