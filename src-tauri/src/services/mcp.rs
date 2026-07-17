@@ -5,6 +5,7 @@ use crate::app_config::{AppType, McpConfig, McpServer, MultiAppConfig};
 use crate::database::Database;
 use crate::error::AppError;
 use crate::mcp;
+use crate::provider::Provider;
 use crate::store::AppState;
 
 /// MCP 相关业务逻辑（v3.7.0 统一结构）
@@ -37,6 +38,9 @@ impl McpService {
         }
         if prev_apps.gemini && !server.apps.gemini {
             Self::remove_server_from_app(state, &server.id, &AppType::Gemini)?;
+        }
+        if prev_apps.grokbuild && !server.apps.grokbuild {
+            Self::remove_server_from_app(state, &server.id, &AppType::GrokBuild)?;
         }
         if prev_apps.opencode && !server.apps.opencode {
             Self::remove_server_from_app(state, &server.id, &AppType::OpenCode)?;
@@ -143,6 +147,13 @@ impl McpService {
             AppType::Gemini => {
                 mcp::sync_single_server_to_gemini(&Default::default(), &server.id, &server.server)?;
             }
+            AppType::GrokBuild => {
+                mcp::sync_single_server_to_grokbuild(
+                    &Default::default(),
+                    &server.id,
+                    &server.server,
+                )?;
+            }
             AppType::OpenCode => {
                 mcp::sync_single_server_to_opencode(
                     &Default::default(),
@@ -183,6 +194,7 @@ impl McpService {
             }
             AppType::Codex => mcp::remove_server_from_codex(id)?,
             AppType::Gemini => mcp::remove_server_from_gemini(id)?,
+            AppType::GrokBuild => mcp::remove_server_from_grokbuild(id)?,
             AppType::OpenCode => {
                 mcp::remove_server_from_opencode(id)?;
             }
@@ -257,6 +269,34 @@ impl McpService {
         Self::merge_codex_common_config_mcp_servers(db, &new_text)
     }
 
+    /// 与 [`apply_enabled_for_app_to_config_text_for_db`] 相同，但在供应商切换事务
+    /// 尚未提交 current provider 时，显式使用目标供应商的 MCP 覆盖。
+    pub fn apply_enabled_for_app_to_config_text_for_provider(
+        db: &Database,
+        app: &AppType,
+        config_text: &str,
+        provider: &Provider,
+    ) -> Result<String, AppError> {
+        if !matches!(app, AppType::Codex) {
+            return Ok(config_text.to_string());
+        }
+
+        let servers = db.get_all_mcp_servers()?;
+        let enabled = Self::collect_codex_enabled_server_specs_for_provider(&servers, provider);
+        let new_text = mcp::sync_enabled_servers_to_codex_config_text(config_text, &enabled)?;
+        Self::merge_codex_common_config_mcp_servers(db, &new_text)
+    }
+
+    /// 在 current provider 尚未提交时，按显式目标供应商投影 Codex MCP。
+    pub fn sync_codex_enabled_for_provider(
+        state: &AppState,
+        provider: &Provider,
+    ) -> Result<(), AppError> {
+        let servers = Self::get_all_servers(state)?;
+        let enabled = Self::collect_codex_enabled_server_specs_for_provider(&servers, provider);
+        Self::sync_codex_enabled_specs(state.db.as_ref(), enabled)
+    }
+
     fn project_servers_to_app(
         state: &AppState,
         servers: &IndexMap<String, McpServer>,
@@ -285,8 +325,16 @@ impl McpService {
         db: &Database,
         servers: &IndexMap<String, McpServer>,
     ) -> Result<(), AppError> {
+        let enabled = Self::collect_codex_enabled_server_specs(db, servers);
+        Self::sync_codex_enabled_specs(db, enabled)
+    }
+
+    fn sync_codex_enabled_specs(
+        db: &Database,
+        enabled: HashMap<String, serde_json::Value>,
+    ) -> Result<(), AppError> {
         let mut config = MultiAppConfig::default();
-        let codex_servers = Self::collect_codex_enabled_server_specs(db, servers)
+        let codex_servers = enabled
             .into_iter()
             .map(|(id, server)| {
                 (
@@ -366,6 +414,21 @@ impl McpService {
         servers: &IndexMap<String, McpServer>,
     ) -> HashMap<String, serde_json::Value> {
         let disabled = Self::disabled_server_ids_for_db(db, &AppType::Codex);
+        Self::collect_codex_enabled_server_specs_with_disabled(servers, &disabled)
+    }
+
+    fn collect_codex_enabled_server_specs_for_provider(
+        servers: &IndexMap<String, McpServer>,
+        provider: &Provider,
+    ) -> HashMap<String, serde_json::Value> {
+        let disabled = Self::disabled_server_ids_for_provider(Some(provider));
+        Self::collect_codex_enabled_server_specs_with_disabled(servers, &disabled)
+    }
+
+    fn collect_codex_enabled_server_specs_with_disabled(
+        servers: &IndexMap<String, McpServer>,
+        disabled: &HashSet<String>,
+    ) -> HashMap<String, serde_json::Value> {
         let mut enabled = HashMap::new();
 
         for server in servers.values() {
@@ -393,9 +456,12 @@ impl McpService {
             _ => return HashSet::new(),
         };
 
+        Self::disabled_server_ids_for_provider(Some(&provider))
+    }
+
+    fn disabled_server_ids_for_provider(provider: Option<&Provider>) -> HashSet<String> {
         provider
-            .meta
-            .as_ref()
+            .and_then(|provider| provider.meta.as_ref())
             .and_then(|meta| meta.resource_overrides.as_ref())
             .and_then(|overrides| overrides.mcp.as_ref())
             .filter(|override_config| override_config.enabled)
@@ -579,6 +645,32 @@ impl McpService {
         Ok(new_count)
     }
 
+    /// 从 Grok Build 的 `[mcp_servers]` 导入 MCP。
+    pub fn import_from_grokbuild(state: &AppState) -> Result<usize, AppError> {
+        let mut temp_config = crate::app_config::MultiAppConfig::default();
+        let count = crate::mcp::import_from_grokbuild(&mut temp_config)?;
+        let mut new_count = 0;
+
+        if count > 0 {
+            if let Some(servers) = &temp_config.mcp.servers {
+                let mut existing = state.db.get_all_mcp_servers()?;
+                for server in servers.values() {
+                    let to_save = if let Some(existing_server) = existing.get(&server.id) {
+                        let mut merged = existing_server.clone();
+                        merged.apps.grokbuild = true;
+                        merged
+                    } else {
+                        new_count += 1;
+                        server.clone()
+                    };
+                    state.db.save_mcp_server(&to_save)?;
+                    existing.insert(to_save.id.clone(), to_save);
+                }
+            }
+        }
+        Ok(new_count)
+    }
+
     /// 从 OpenCode 导入 MCP（v3.9.2+ 新增）
     pub fn import_from_opencode(state: &AppState) -> Result<usize, AppError> {
         // 创建临时 MultiAppConfig 用于导入
@@ -665,10 +757,11 @@ impl McpService {
         let mut total = 0;
         let mut failures: Vec<String> = Vec::new();
 
-        let results: [(&str, Result<usize, AppError>); 5] = [
+        let results: [(&str, Result<usize, AppError>); 6] = [
             ("claude", Self::import_from_claude(state)),
             ("codex", Self::import_from_codex(state)),
             ("gemini", Self::import_from_gemini(state)),
+            ("grokbuild", Self::import_from_grokbuild(state)),
             ("opencode", Self::import_from_opencode(state)),
             ("hermes", Self::import_from_hermes(state)),
         ];

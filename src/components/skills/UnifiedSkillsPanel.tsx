@@ -120,6 +120,7 @@ const UnifiedSkillsPanel = React.forwardRef<
       "claude-desktop": 0,
       codex: 0,
       gemini: 0,
+      grokbuild: 0,
       opencode: 0,
       openclaw: 0,
       hermes: 0,
@@ -363,7 +364,8 @@ const UnifiedSkillsPanel = React.forwardRef<
               className="h-7 text-xs gap-1 whitespace-nowrap"
               onClick={handleUpdateAll}
               disabled={
-                updateAllSkillsMutation.isPending || updateSkillMutation.isPending
+                updateAllSkillsMutation.isPending ||
+                updateSkillMutation.isPending
               }
             >
               {updateAllSkillsMutation.isPending ? (
@@ -742,6 +744,7 @@ const ImportSkillsDialog: React.FC<ImportSkillsDialogProps> = ({
           claude: skill.foundIn.includes("claude"),
           codex: skill.foundIn.includes("codex"),
           gemini: skill.foundIn.includes("gemini"),
+          grokbuild: skill.foundIn.includes("grokbuild"),
           opencode: skill.foundIn.includes("opencode"),
           openclaw: false,
           hermes: skill.foundIn.includes("hermes"),
@@ -768,6 +771,7 @@ const ImportSkillsDialog: React.FC<ImportSkillsDialogProps> = ({
           claude: false,
           codex: false,
           gemini: false,
+          grokbuild: false,
           opencode: false,
           openclaw: false,
           hermes: false,
@@ -811,6 +815,7 @@ const ImportSkillsDialog: React.FC<ImportSkillsDialogProps> = ({
                           claude: false,
                           codex: false,
                           gemini: false,
+                          grokbuild: false,
                           opencode: false,
                           openclaw: false,
                           hermes: false,
@@ -824,6 +829,7 @@ const ImportSkillsDialog: React.FC<ImportSkillsDialogProps> = ({
                               claude: false,
                               codex: false,
                               gemini: false,
+                              grokbuild: false,
                               opencode: false,
                               openclaw: false,
                               hermes: false,

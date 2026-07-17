@@ -78,6 +78,7 @@ import { ProviderPresetSelector } from "./ProviderPresetSelector";
 import { BasicFormFields } from "./BasicFormFields";
 import { ClaudeFormFields } from "./ClaudeFormFields";
 import { ClaudeDesktopProviderForm } from "./ClaudeDesktopProviderForm";
+import { GrokBuildProviderForm } from "./GrokBuildProviderForm";
 import { CodexFormFields } from "./CodexFormFields";
 import { GeminiFormFields } from "./GeminiFormFields";
 import { OmoFormFields } from "./OmoFormFields";
@@ -277,6 +278,9 @@ function normalizeResourceOverrides(
 export function ProviderForm(props: ProviderFormProps) {
   if (props.appId === "claude-desktop") {
     return <ClaudeDesktopProviderForm {...props} />;
+  }
+  if (props.appId === "grokbuild") {
+    return <GrokBuildProviderForm {...props} />;
   }
 
   return <ProviderFormFull {...props} />;

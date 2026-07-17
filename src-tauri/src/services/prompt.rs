@@ -73,8 +73,19 @@ impl PromptService {
     }
 
     pub fn sync_effective_prompt_to_file(state: &AppState, app: AppType) -> Result<(), AppError> {
+        let provider = Self::get_current_provider_for_app(state, &app)?;
+        Self::sync_effective_prompt_to_file_for_provider(state, app, provider.as_ref())
+    }
+
+    /// 在供应商切换事务尚未提交 current provider 时，按显式目标供应商同步 Prompt。
+    pub(crate) fn sync_effective_prompt_to_file_for_provider(
+        state: &AppState,
+        app: AppType,
+        provider: Option<&Provider>,
+    ) -> Result<(), AppError> {
         let target_path = prompt_file_path(&app)?;
-        let content = Self::resolve_effective_prompt(state, &app)?
+        let prompts = state.db.get_prompts(app.as_str())?;
+        let content = Self::resolve_effective_prompt_from_map(&prompts, provider)
             .map(|prompt| prompt.content)
             .unwrap_or_default();
 
