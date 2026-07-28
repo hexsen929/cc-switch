@@ -1872,6 +1872,13 @@ async fn recover_and_sync_live_configs_on_startup(state: &store::AppState) {
         }
     }
 
+    // 必须排在 auto-extract 之前，避免历史凭据再次进入 Gemini 共享片段。
+    if let Err(e) =
+        crate::services::provider::ProviderService::scrub_leaked_gemini_common_config(state).await
+    {
+        log::warn!("清理 Gemini 通用配置泄漏凭据失败: {e}");
+    }
+
     initialize_common_config_snippets(state);
 
     sync_codex_chatgpt_auth_takeover_on_startup(state).await;
