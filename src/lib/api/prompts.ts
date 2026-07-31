@@ -6,6 +6,8 @@ export interface Prompt {
   name: string;
   content: string;
   description?: string;
+  appendContent?: string;
+  managedImport?: boolean;
   enabled: boolean;
   createdAt?: number;
   updatedAt?: number;

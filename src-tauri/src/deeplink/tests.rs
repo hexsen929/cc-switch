@@ -6,10 +6,11 @@ use super::prompt::import_prompt_from_deeplink;
 use super::provider::parse_and_merge_config;
 use super::utils::{infer_homepage_from_endpoint, validate_url};
 use super::DeepLinkImportRequest;
+use crate::prompt_files::{append_prompt_file_path, prompt_file_path};
 use crate::AppType;
 use crate::{store::AppState, Database};
 use base64::prelude::*;
-use std::{env, ffi::OsString, sync::Arc};
+use std::{env, ffi::OsString, fs, sync::Arc};
 
 struct TestHomeGuard {
     _dir: tempfile::TempDir,
@@ -220,6 +221,7 @@ fn test_build_gemini_provider_with_model() {
         directory: None,
         branch: None,
         content: None,
+        append_content: None,
         description: None,
         enabled: None,
         usage_enabled: None,
@@ -273,6 +275,7 @@ fn test_build_gemini_provider_without_model() {
         directory: None,
         branch: None,
         content: None,
+        append_content: None,
         description: None,
         enabled: None,
         usage_enabled: None,
@@ -319,6 +322,7 @@ fn test_deeplink_usage_script_does_not_copy_provider_credentials() {
         directory: None,
         branch: None,
         content: None,
+        append_content: None,
         description: None,
         enabled: None,
         usage_enabled: Some(true),
@@ -366,6 +370,7 @@ fn usage_script_request(code: &str, usage_enabled: Option<bool>) -> DeepLinkImpo
         directory: None,
         branch: None,
         content: None,
+        append_content: None,
         description: None,
         enabled: None,
         usage_enabled,
@@ -449,6 +454,7 @@ fn test_deeplink_usage_script_omits_explicit_credentials_that_match_provider() {
         directory: None,
         branch: None,
         content: None,
+        append_content: None,
         description: None,
         enabled: None,
         usage_enabled: Some(true),
@@ -497,6 +503,7 @@ fn test_deeplink_usage_script_preserves_distinct_usage_credentials() {
         directory: None,
         branch: None,
         content: None,
+        append_content: None,
         description: None,
         enabled: None,
         usage_enabled: Some(true),
@@ -550,6 +557,7 @@ fn test_parse_and_merge_config_claude() {
         directory: None,
         branch: None,
         content: None,
+        append_content: None,
         description: None,
         enabled: None,
         usage_enabled: None,
@@ -673,6 +681,7 @@ fn test_parse_and_merge_config_url_override() {
         directory: None,
         branch: None,
         content: None,
+        append_content: None,
         description: None,
         enabled: None,
         usage_enabled: None,
@@ -736,6 +745,7 @@ fn test_build_claude_provider_preserves_custom_env_fields() {
         directory: None,
         branch: None,
         content: None,
+        append_content: None,
         description: None,
         enabled: None,
         usage_enabled: None,
@@ -791,6 +801,7 @@ fn test_build_claude_provider_without_config_unchanged() {
         directory: None,
         branch: None,
         content: None,
+        append_content: None,
         description: None,
         enabled: None,
         usage_enabled: None,
@@ -839,6 +850,40 @@ fn test_import_prompt_allows_space_in_base64_content() {
     assert_eq!(prompt.name, request.name.unwrap());
 }
 
+#[test]
+#[serial_test::serial]
+fn test_disabled_claude_prompt_import_does_not_rewrite_live_files() {
+    let _test_home = TestHomeGuard::new();
+    let main_path = prompt_file_path(&AppType::Claude).expect("resolve main prompt path");
+    let append_path = append_prompt_file_path(&AppType::Claude)
+        .expect("resolve append prompt path")
+        .expect("Claude append path");
+    fs::create_dir_all(main_path.parent().expect("main prompt parent"))
+        .expect("create Claude config directory");
+    fs::create_dir_all(append_path.parent().expect("append prompt parent"))
+        .expect("create append prompt directory");
+    fs::write(&main_path, "existing main").expect("seed main prompt");
+    fs::write(&append_path, "existing append").expect("seed append prompt");
+
+    let url = format!(
+        "ccswitch://v1/import?resource=prompt&app=claude&name=Imported&content={}&appendContent={}",
+        BASE64_STANDARD.encode("imported main"),
+        BASE64_STANDARD.encode("imported append")
+    );
+    let request = parse_deeplink_url(&url).expect("parse prompt deeplink");
+    let db = Arc::new(Database::memory().expect("create memory db"));
+    let state = AppState::new(db);
+
+    let prompt_id = import_prompt_from_deeplink(&state, request).expect("import prompt");
+    let prompts = state.db.get_prompts("claude").expect("get prompts");
+    let prompt = prompts.get(&prompt_id).expect("prompt saved");
+
+    assert!(!prompt.enabled);
+    assert_eq!(prompt.append_content.as_deref(), Some("imported append"));
+    assert_eq!(fs::read_to_string(main_path).unwrap(), "existing main");
+    assert_eq!(fs::read_to_string(append_path).unwrap(), "existing append");
+}
+
 // =============================================================================
 // MCP Tests
 // =============================================================================
@@ -868,9 +913,10 @@ fn test_parse_mcp_apps() {
 fn test_parse_prompt_deeplink() {
     let content = "Hello World";
     let content_b64 = BASE64_STANDARD.encode(content);
+    let append_content_b64 = BASE64_STANDARD.encode("Additional instructions");
     let url = format!(
-        "ccswitch://v1/import?resource=prompt&app=claude&name=test&content={}&description=desc&enabled=true",
-        content_b64
+        "ccswitch://v1/import?resource=prompt&app=claude&name=test&content={}&appendContent={}&description=desc&enabled=true",
+        content_b64, append_content_b64
     );
 
     let request = parse_deeplink_url(&url).unwrap();
@@ -878,8 +924,21 @@ fn test_parse_prompt_deeplink() {
     assert_eq!(request.app.unwrap(), "claude");
     assert_eq!(request.name.unwrap(), "test");
     assert_eq!(request.content.unwrap(), content_b64);
+    assert_eq!(request.append_content.unwrap(), append_content_b64);
     assert_eq!(request.description.unwrap(), "desc");
     assert!(request.enabled.unwrap());
+}
+
+#[test]
+fn test_parse_non_claude_prompt_rejects_append_content() {
+    let url = format!(
+        "ccswitch://v1/import?resource=prompt&app=codex&name=test&content={}&appendContent={}",
+        BASE64_STANDARD.encode("main"),
+        BASE64_STANDARD.encode("append")
+    );
+
+    let error = parse_deeplink_url(&url).expect_err("Codex appendContent must be rejected");
+    assert!(error.to_string().contains("appendContent"));
 }
 
 #[test]

@@ -79,6 +79,8 @@ impl Database {
         conn.execute("CREATE TABLE IF NOT EXISTS prompts (
             id TEXT NOT NULL, app_type TEXT NOT NULL, name TEXT NOT NULL, content TEXT NOT NULL,
             description TEXT, enabled BOOLEAN NOT NULL DEFAULT 1, created_at INTEGER, updated_at INTEGER,
+            append_content TEXT,
+            managed_import BOOLEAN NOT NULL DEFAULT 0,
             PRIMARY KEY (id, app_type)
         )", []).map_err(|e| AppError::Database(e.to_string()))?;
 
@@ -610,6 +612,16 @@ impl Database {
                         Self::migrate_v15_to_v16(conn)?;
                         Self::set_user_version(conn, 16)?;
                     }
+                    16 => {
+                        log::info!("迁移数据库从 v16 到 v17（Claude 追加系统提示词）");
+                        Self::migrate_v16_to_v17(conn)?;
+                        Self::set_user_version(conn, 17)?;
+                    }
+                    17 => {
+                        log::info!("迁移数据库从 v17 到 v18（Claude 受管理提示词导入块）");
+                        Self::migrate_v17_to_v18(conn)?;
+                        Self::set_user_version(conn, 18)?;
+                    }
                     _ => {
                         return Err(AppError::Database(format!(
                             "未知的数据库版本 {version}，无法迁移到 {SCHEMA_VERSION}"
@@ -678,6 +690,13 @@ impl Database {
         Self::add_column_if_missing(conn, "prompts", "enabled", "BOOLEAN NOT NULL DEFAULT 1")?;
         Self::add_column_if_missing(conn, "prompts", "created_at", "INTEGER")?;
         Self::add_column_if_missing(conn, "prompts", "updated_at", "INTEGER")?;
+        Self::add_column_if_missing(conn, "prompts", "append_content", "TEXT")?;
+        Self::add_column_if_missing(
+            conn,
+            "prompts",
+            "managed_import",
+            "BOOLEAN NOT NULL DEFAULT 0",
+        )?;
 
         // skills 表
         Self::add_column_if_missing(conn, "skills", "installed_at", "INTEGER NOT NULL DEFAULT 0")?;
@@ -1627,6 +1646,27 @@ impl Database {
     fn migrate_v15_to_v16(conn: &Connection) -> Result<(), AppError> {
         let codex_dir = crate::codex_config::get_codex_config_dir();
         crate::services::session_usage_codex::reset_codex_usage_on_conn(conn, &codex_dir)
+    }
+
+    /// v16 -> v17: persist Claude's optional appended system prompt.
+    fn migrate_v16_to_v17(conn: &Connection) -> Result<(), AppError> {
+        if Self::table_exists(conn, "prompts")? {
+            Self::add_column_if_missing(conn, "prompts", "append_content", "TEXT")?;
+        }
+        Ok(())
+    }
+
+    /// v17 -> v18: allow Claude prompts to preserve CLAUDE.md via a managed import block.
+    fn migrate_v17_to_v18(conn: &Connection) -> Result<(), AppError> {
+        if Self::table_exists(conn, "prompts")? {
+            Self::add_column_if_missing(
+                conn,
+                "prompts",
+                "managed_import",
+                "BOOLEAN NOT NULL DEFAULT 0",
+            )?;
+        }
+        Ok(())
     }
 
     /// 插入默认模型定价数据
@@ -3328,7 +3368,7 @@ mod tests {
 
         Database::apply_schema_migrations_on_conn(&conn)?;
 
-        assert_eq!(Database::get_user_version(&conn)?, 16);
+        assert_eq!(Database::get_user_version(&conn)?, SCHEMA_VERSION);
         let counts: (i64, i64, i64, i64) = conn.query_row(
             "SELECT
                 (SELECT COUNT(*) FROM proxy_request_logs WHERE data_source = 'codex_session'),
@@ -3339,6 +3379,77 @@ mod tests {
             |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
         )?;
         assert_eq!(counts, (0, 1, 0, 1));
+        Ok(())
+    }
+
+    #[test]
+    fn migrate_v16_to_v17_adds_append_content_without_losing_prompts() -> Result<(), AppError> {
+        let conn = Connection::open_in_memory()?;
+        conn.execute_batch(
+            "CREATE TABLE prompts (
+                id TEXT NOT NULL,
+                app_type TEXT NOT NULL,
+                name TEXT NOT NULL,
+                content TEXT NOT NULL,
+                description TEXT,
+                enabled BOOLEAN NOT NULL DEFAULT 1,
+                created_at INTEGER,
+                updated_at INTEGER,
+                PRIMARY KEY (id, app_type)
+            );
+            INSERT INTO prompts (id, app_type, name, content)
+            VALUES ('existing', 'claude', 'Existing', 'keep me');",
+        )?;
+        Database::set_user_version(&conn, 16)?;
+
+        Database::apply_schema_migrations_on_conn(&conn)?;
+
+        assert_eq!(Database::get_user_version(&conn)?, SCHEMA_VERSION);
+        assert!(Database::has_column(&conn, "prompts", "append_content")?);
+        let prompt: (String, Option<String>) = conn.query_row(
+            "SELECT content, append_content FROM prompts WHERE id = 'existing'",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )?;
+        assert_eq!(prompt, ("keep me".to_string(), None));
+        Ok(())
+    }
+
+    #[test]
+    fn migrate_v17_to_v18_adds_managed_import_without_losing_prompts() -> Result<(), AppError> {
+        let conn = Connection::open_in_memory()?;
+        conn.execute_batch(
+            "CREATE TABLE prompts (
+                id TEXT NOT NULL,
+                app_type TEXT NOT NULL,
+                name TEXT NOT NULL,
+                content TEXT NOT NULL,
+                description TEXT,
+                enabled BOOLEAN NOT NULL DEFAULT 1,
+                created_at INTEGER,
+                updated_at INTEGER,
+                append_content TEXT,
+                PRIMARY KEY (id, app_type)
+            );
+            INSERT INTO prompts (id, app_type, name, content, append_content)
+            VALUES ('existing', 'claude', 'Existing', 'keep me', 'append me');",
+        )?;
+        Database::set_user_version(&conn, 17)?;
+
+        Database::apply_schema_migrations_on_conn(&conn)?;
+
+        assert_eq!(Database::get_user_version(&conn)?, SCHEMA_VERSION);
+        assert!(Database::has_column(&conn, "prompts", "managed_import")?);
+        let prompt: (String, String, bool) = conn.query_row(
+            "SELECT content, append_content, managed_import
+             FROM prompts WHERE id = 'existing'",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        )?;
+        assert_eq!(
+            prompt,
+            ("keep me".to_string(), "append me".to_string(), false)
+        );
         Ok(())
     }
 }

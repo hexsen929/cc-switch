@@ -689,7 +689,7 @@
 
                     <div class="form-group">
                         <label>目标应用 *</label>
-                        <select id="promptApp">
+                        <select id="promptApp" onchange="document.getElementById('promptAppendContent').disabled = this.value !== 'claude'">
                             <option value="claude">Claude</option>
                             <option value="codex">Codex</option>
                             <option value="gemini">Gemini</option>
@@ -707,6 +707,14 @@
 
 你是一位专业的..."></textarea>
                         <small style="color: #7f8c8d;">支持 Markdown 格式，自动 Base64 编码</small>
+                    </div>
+
+                    <div class="form-group">
+                        <label>追加系统提示词（仅 Claude）</label>
+                        <textarea id="promptAppendContent" rows="5" placeholder="# 追加指令
+
+仅在需要随 Claude Code 默认 system prompt 一起加载时填写..."></textarea>
+                        <small style="color: #7f8c8d;">可选；自动 Base64 编码并写入 appendContent</small>
                     </div>
 
                     <div class="form-group">
@@ -2069,6 +2077,7 @@ requires_openai_auth = true`;
             const app = document.getElementById('promptApp').value;
             const name = document.getElementById('promptName').value.trim();
             const content = document.getElementById('promptContent').value.trim();
+            const appendContent = document.getElementById('promptAppendContent').value.trim();
             const description = document.getElementById('promptDescription').value.trim();
             const enabled = document.getElementById('promptEnabled').value;
 
@@ -2087,6 +2096,10 @@ requires_openai_auth = true`;
 
             // 构建深链接
             let url = `ccswitch://v1/import?resource=prompt&app=${app}&name=${encodeURIComponent(name)}&content=${encodeURIComponent(contentB64)}`;
+
+            if (app === 'claude' && appendContent) {
+                url += `&appendContent=${encodeURIComponent(utf8_to_b64(appendContent))}`;
+            }
 
             if (description) {
                 url += `&description=${encodeURIComponent(description)}`;

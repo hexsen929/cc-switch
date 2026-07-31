@@ -1656,10 +1656,125 @@ export const setCodexModelName = (
   return finalizeTomlText(lines);
 };
 
+// ========== Codex top-level field utils ==========
+
+const escapeRegExp = (value: string): string =>
+  value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+
+const tomlTopLevelFieldPattern = (field: string) =>
+  new RegExp(String.raw`^\s*${escapeRegExp(field)}\s*=`);
+
+const tomlTopLevelDoubleQuotedStringPattern = (field: string) =>
+  new RegExp(
+    String.raw`^\s*${escapeRegExp(field)}\s*=\s*"((?:[^"\\\r\n]|\\.)*)"\s*(?:#.*)?$`,
+  );
+
+const tomlTopLevelSingleQuotedStringPattern = (field: string) =>
+  new RegExp(
+    String.raw`^\s*${escapeRegExp(field)}\s*=\s*'([^'\r\n]*)'\s*(?:#.*)?$`,
+  );
+
+const findTopLevelFieldLineIndex = (
+  lines: string[],
+  fieldName: string,
+  topLevelEndIndex: number,
+): number => {
+  const pattern = tomlTopLevelFieldPattern(fieldName);
+  for (let i = 0; i < topLevelEndIndex; i += 1) {
+    if (pattern.test(lines[i])) return i;
+  }
+  return -1;
+};
+
+// Read a top-level TOML string while preserving the surrounding config text.
+// Basic strings use the same unescape path as the existing model field helper.
+export const extractCodexTopLevelString = (
+  configText: string | undefined | null,
+  fieldName: string,
+): string | undefined => {
+  try {
+    const raw = typeof configText === "string" ? configText : "";
+    const text = normalizeTomlText(raw);
+    if (!text) return undefined;
+
+    const lines = text.split("\n");
+    const topLevelEndIndex = getTopLevelEndIndex(lines);
+    const doubleQuotedPattern =
+      tomlTopLevelDoubleQuotedStringPattern(fieldName);
+    const singleQuotedPattern =
+      tomlTopLevelSingleQuotedStringPattern(fieldName);
+
+    for (let i = 0; i < topLevelEndIndex; i += 1) {
+      const doubleQuoted = lines[i].match(doubleQuotedPattern);
+      if (doubleQuoted) return unescapeTomlBasicString(doubleQuoted[1]);
+      const singleQuoted = lines[i].match(singleQuotedPattern);
+      if (singleQuoted) return singleQuoted[1];
+    }
+    return undefined;
+  } catch {
+    return undefined;
+  }
+};
+
+// Set or remove a top-level TOML string. Values are always emitted as escaped
+// TOML basic strings so a selected path cannot inject another TOML assignment.
+export const setCodexTopLevelString = (
+  configText: string,
+  fieldName: string,
+  value: string,
+): string => {
+  const normalizedText = normalizeTomlText(configText);
+  const trimmed = value.trim();
+  if (!trimmed) {
+    return removeCodexTopLevelField(normalizedText, fieldName);
+  }
+
+  const lines = normalizedText ? normalizedText.split("\n") : [];
+  const topLevelEndIndex = getTopLevelEndIndex(lines);
+  const existingIndex = findTopLevelFieldLineIndex(
+    lines,
+    fieldName,
+    topLevelEndIndex,
+  );
+  const replacementLine = `${fieldName} = ${tomlBasicString(trimmed)}`;
+
+  if (existingIndex !== -1) {
+    lines[existingIndex] = replacementLine;
+    return finalizeTomlText(lines);
+  }
+  if (lines.length === 0) {
+    return `${replacementLine}\n`;
+  }
+
+  lines.splice(topLevelEndIndex, 0, replacementLine);
+  return finalizeTomlText(lines);
+};
+
+export const normalizeCodexModelInstructionsFiles = (
+  rawFiles: unknown,
+  activeFile?: string,
+): string[] => {
+  const normalized: string[] = [];
+  const seen = new Set<string>();
+  const candidates = [
+    ...(Array.isArray(rawFiles) ? rawFiles : []),
+    ...(activeFile ? [activeFile] : []),
+  ];
+
+  for (const candidate of candidates) {
+    if (typeof candidate !== "string") continue;
+    const path = candidate.trim();
+    if (!path || /[\u0000\r\n]/.test(path) || seen.has(path)) continue;
+    seen.add(path);
+    normalized.push(path);
+  }
+  return normalized;
+};
+
 // ========== Codex top-level integer field utils ==========
 
 const tomlTopLevelIntPattern = (field: string) =>
-  new RegExp(`^\\s*${field}\\s*=\\s*(\\d+)\\s*(?:#.*)?$`);
+  new RegExp(`^\\s*${escapeRegExp(field)}\\s*=\\s*(\\d+)\\s*(?:#.*)?$`);
 
 const findTopLevelIntMatch = (
   lines: string[],
@@ -1728,9 +1843,13 @@ export const removeCodexTopLevelField = (
   if (!normalizedText) return normalizedText;
   const lines = normalizedText.split("\n");
   const topLevelEndIndex = getTopLevelEndIndex(lines);
-  const existing = findTopLevelIntMatch(lines, fieldName, topLevelEndIndex);
-  if (existing) {
-    lines.splice(existing.index, 1);
+  const existingIndex = findTopLevelFieldLineIndex(
+    lines,
+    fieldName,
+    topLevelEndIndex,
+  );
+  if (existingIndex !== -1) {
+    lines.splice(existingIndex, 1);
   }
   return finalizeTomlText(lines);
 };

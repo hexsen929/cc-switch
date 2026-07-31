@@ -158,6 +158,33 @@ describe("GrokBuildProviderForm", () => {
     expect(selected.base_url).toBe("https://api.apikey.fun/v1");
   });
 
+  it("does not render the Codex-only tool-call bridge for Grok chat providers", () => {
+    const chatConfig = `[models]
+default = "chat-profile"
+
+[model."chat-profile"]
+model = "grok-chat"
+base_url = "https://chat.example.com/v1"
+name = "Chat Relay"
+api_key = "secret-key"
+api_backend = "chat_completions"
+context_window = 250000
+`;
+    const { container } = render(
+      <GrokBuildProviderForm
+        submitLabel="Save"
+        onSubmit={() => {}}
+        onCancel={() => {}}
+        initialData={{
+          name: "Chat Relay",
+          settingsConfig: { config: chatConfig },
+        }}
+      />,
+    );
+
+    expect(container.querySelector("#codexToolCallBridge")).toBeNull();
+  });
+
   it("renders localized validation feedback for malformed TOML", async () => {
     const onSubmit = vi.fn();
     render(

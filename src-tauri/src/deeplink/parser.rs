@@ -158,6 +158,7 @@ fn parse_provider_deeplink(
         sonnet_model,
         opus_model,
         content: None,
+        append_content: None,
         description: None,
         apps: None,
         repo: None,
@@ -210,7 +211,14 @@ fn parse_prompt_deeplink(
         .clone();
 
     let description = params.get("description").cloned();
+    let append_content = params.get("appendContent").cloned();
     let enabled = params.get("enabled").and_then(|v| v.parse::<bool>().ok());
+
+    if append_content.is_some() && app != "claude" {
+        return Err(AppError::InvalidInput(
+            "'appendContent' is only supported for Claude prompts".to_string(),
+        ));
+    }
 
     Ok(DeepLinkImportRequest {
         version,
@@ -219,6 +227,7 @@ fn parse_prompt_deeplink(
         name: Some(name),
         enabled,
         content: Some(content),
+        append_content,
         description,
         icon: None,
         homepage: None,
@@ -303,6 +312,7 @@ fn parse_mcp_deeplink(
         sonnet_model: None,
         opus_model: None,
         content: None,
+        append_content: None,
         description: None,
         repo: None,
         directory: None,
@@ -358,6 +368,7 @@ fn parse_skill_deeplink(
         sonnet_model: None,
         opus_model: None,
         content: None,
+        append_content: None,
         description: None,
         apps: None,
         config: None,

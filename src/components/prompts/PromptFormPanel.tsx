@@ -3,6 +3,7 @@ import { useTranslation } from "react-i18next";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { Switch } from "@/components/ui/switch";
 import MarkdownEditor from "@/components/MarkdownEditor";
 import { FullScreenPanel } from "@/components/common/FullScreenPanel";
 import type { Prompt, AppId } from "@/lib/api";
@@ -38,6 +39,13 @@ const PromptFormPanel: React.FC<PromptFormPanelProps> = ({
   const [name, setName] = useState("");
   const [description, setDescription] = useState("");
   const [content, setContent] = useState("");
+  const [appendContent, setAppendContent] = useState("");
+  const [appendContentManaged, setAppendContentManaged] = useState(
+    initialData?.appendContent !== undefined || !initialData,
+  );
+  const [managedImport, setManagedImport] = useState(
+    Boolean(initialData?.managedImport),
+  );
   const [saving, setSaving] = useState(false);
   const [isDarkMode, setIsDarkMode] = useState(false);
 
@@ -61,6 +69,9 @@ const PromptFormPanel: React.FC<PromptFormPanelProps> = ({
       setName(initialData.name);
       setDescription(initialData.description || "");
       setContent(initialData.content);
+      setAppendContent(initialData.appendContent || "");
+      setAppendContentManaged(initialData.appendContent !== undefined);
+      setManagedImport(Boolean(initialData.managedImport));
     }
   }, [initialData]);
 
@@ -78,6 +89,11 @@ const PromptFormPanel: React.FC<PromptFormPanelProps> = ({
         name: name.trim(),
         description: description.trim() || undefined,
         content: content.trim(),
+        appendContent:
+          appId === "claude" && appendContentManaged
+            ? appendContent.trim()
+            : undefined,
+        managedImport: appId === "claude" && managedImport,
         enabled: initialData?.enabled || false,
         createdAt: initialData?.createdAt || timestamp,
         updatedAt: timestamp,
@@ -150,6 +166,53 @@ const PromptFormPanel: React.FC<PromptFormPanelProps> = ({
             minHeight="167px"
           />
         </div>
+
+        {appId === "claude" && (
+          <div className="flex items-start justify-between gap-4 rounded-md border border-border-default bg-muted/30 p-4">
+            <div className="min-w-0 space-y-1">
+              <Label htmlFor="managedImport">
+                {t("prompts.managedImport")}
+              </Label>
+              <p className="text-sm leading-relaxed text-muted-foreground">
+                {t(
+                  managedImport
+                    ? "prompts.managedImportHint"
+                    : "prompts.managedImportDisabledHint",
+                )}
+              </p>
+            </div>
+            <Switch
+              id="managedImport"
+              checked={managedImport}
+              onCheckedChange={setManagedImport}
+              className="shrink-0"
+            />
+          </div>
+        )}
+
+        {appId === "claude" && (
+          <div>
+            <Label
+              htmlFor="appendContent"
+              className="block mb-2 text-foreground"
+            >
+              {t("prompts.appendContent")}
+            </Label>
+            <div className="text-sm text-muted-foreground mb-2">
+              {t("prompts.appendContentHint")}
+            </div>
+            <MarkdownEditor
+              value={appendContent}
+              onChange={(value) => {
+                setAppendContent(value);
+                setAppendContentManaged(true);
+              }}
+              placeholder={t("prompts.appendContentPlaceholder")}
+              darkMode={isDarkMode}
+              minHeight="167px"
+            />
+          </div>
+        )}
       </div>
     </FullScreenPanel>
   );

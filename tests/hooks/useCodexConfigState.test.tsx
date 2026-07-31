@@ -58,11 +58,30 @@ base_url = "https://api.example/v1"
         {},
         `model_provider = "custom"
 model = "deepseek-v4-flash"
+model_instructions_file = "./instruction_5.6.md"
 `,
+        [],
+        ["./instruction_default.md"],
       );
     });
 
     expect(result.current.codexCatalogModels).toEqual([]);
+    expect(result.current.codexModelInstructionsEnabled).toBe(true);
+    expect(result.current.codexModelInstructionsFile).toBe(
+      "./instruction_5.6.md",
+    );
+    expect(result.current.codexModelInstructionsFiles).toEqual([
+      "./instruction_default.md",
+      "./instruction_5.6.md",
+    ]);
+
+    act(() => {
+      result.current.resetCodexConfig({}, 'model_provider = "custom"\n');
+    });
+
+    expect(result.current.codexModelInstructionsEnabled).toBe(false);
+    expect(result.current.codexModelInstructionsFile).toBe("");
+    expect(result.current.codexModelInstructionsFiles).toEqual([]);
   });
 
   it("keeps explicit modelCatalog over config.toml model", () => {
@@ -116,5 +135,107 @@ experimental_bearer_token = "old-key"
     expect(result.current.codexConfig).toContain(
       'experimental_bearer_token = "new-provider-key"',
     );
+  });
+
+  it("loads, switches, and disables saved model instruction files", () => {
+    const initialData = {
+      settingsConfig: {
+        auth: {},
+        config: `model_provider = "custom"
+model_instructions_file = "./instruction_5.6.md"
+
+[model_providers.custom]
+name = "custom"
+`,
+        modelInstructionsFiles: [
+          "./instruction_default.md",
+          "./instruction_5.6.md",
+        ],
+      },
+    };
+    const { result } = renderHook(() => useCodexConfigState({ initialData }));
+
+    expect(result.current.codexModelInstructionsEnabled).toBe(true);
+    expect(result.current.codexModelInstructionsFile).toBe(
+      "./instruction_5.6.md",
+    );
+    expect(result.current.codexModelInstructionsFiles).toEqual([
+      "./instruction_default.md",
+      "./instruction_5.6.md",
+    ]);
+
+    act(() => {
+      result.current.handleCodexModelInstructionsActiveFileChange(
+        "./instruction_default.md",
+      );
+    });
+    expect(result.current.codexConfig).toContain(
+      'model_instructions_file = "./instruction_default.md"',
+    );
+
+    act(() => {
+      result.current.handleCodexModelInstructionsActiveFileChange(null);
+    });
+    expect(result.current.codexModelInstructionsEnabled).toBe(false);
+    expect(result.current.codexConfig).not.toContain("model_instructions_file");
+    expect(result.current.codexModelInstructionsFiles).toEqual([
+      "./instruction_default.md",
+      "./instruction_5.6.md",
+    ]);
+
+    act(() => {
+      result.current.handleCodexModelInstructionsActiveFileChange(
+        "./instruction_default.md",
+      );
+    });
+    expect(result.current.codexConfig).toContain(
+      'model_instructions_file = "./instruction_default.md"',
+    );
+  });
+
+  it("adds a hand-written active instruction file to the saved list", () => {
+    const initialData = {
+      settingsConfig: {
+        auth: {},
+        config: 'model_instructions_file = "./manual.md"\n',
+        modelInstructionsFiles: ["./saved.md"],
+      },
+    };
+    const { result } = renderHook(() => useCodexConfigState({ initialData }));
+
+    expect(result.current.codexModelInstructionsFiles).toEqual([
+      "./saved.md",
+      "./manual.md",
+    ]);
+  });
+
+  it("keeps the file manager in sync with manual config edits", () => {
+    const initialData = {
+      settingsConfig: {
+        auth: {},
+        config: "",
+        modelInstructionsFiles: ["./saved.md"],
+      },
+    };
+    const { result } = renderHook(() =>
+      useCodexConfigState({
+        initialData,
+      }),
+    );
+
+    act(() => {
+      result.current.handleCodexConfigChange(
+        'model_instructions_file = "./typed-in-toml.md"\n',
+      );
+    });
+
+    expect(result.current.codexModelInstructionsEnabled).toBe(true);
+    expect(result.current.codexModelInstructionsFile).toBe(
+      "./typed-in-toml.md",
+    );
+    expect(result.current.codexModelInstructionsFiles).toEqual([
+      "./saved.md",
+      "./typed-in-toml.md",
+    ]);
   });
 });

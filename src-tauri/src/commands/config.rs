@@ -1,5 +1,10 @@
 #![allow(non_snake_case)]
 
+use serde::Serialize;
+use sha2::{Digest, Sha256};
+use std::io::ErrorKind;
+use std::path::{Path, PathBuf};
+use std::str::FromStr;
 use tauri::{AppHandle, State};
 use tauri_plugin_dialog::DialogExt;
 use tauri_plugin_opener::OpenerExt;
@@ -14,8 +19,6 @@ use crate::store::AppState;
 pub async fn get_claude_config_status() -> Result<ConfigStatus, String> {
     Ok(config::get_claude_config_status())
 }
-
-use std::str::FromStr;
 
 fn invalid_json_format_error(error: serde_json::Error) -> String {
     let lang = settings::get_settings()
@@ -168,6 +171,161 @@ pub async fn get_config_dir(app: String) -> Result<String, String> {
     };
 
     Ok(dir.to_string_lossy().to_string())
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum CodexInstructionsFileState {
+    Valid,
+    Missing,
+    NotFile,
+    Unreadable,
+    Empty,
+    Invalid,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CodexInstructionsFileStatus {
+    pub configured_path: String,
+    pub resolved_path: String,
+    pub state: CodexInstructionsFileState,
+    pub exists: bool,
+    pub is_file: bool,
+    pub is_symlink: bool,
+    pub readable: bool,
+    pub size_bytes: Option<u64>,
+    pub modified_at: Option<u64>,
+    pub sha256: Option<String>,
+    pub error: Option<String>,
+}
+
+impl CodexInstructionsFileStatus {
+    fn new(configured_path: String, resolved_path: PathBuf) -> Self {
+        Self {
+            configured_path,
+            resolved_path: resolved_path.to_string_lossy().to_string(),
+            state: CodexInstructionsFileState::Invalid,
+            exists: false,
+            is_file: false,
+            is_symlink: false,
+            readable: false,
+            size_bytes: None,
+            modified_at: None,
+            sha256: None,
+            error: None,
+        }
+    }
+}
+
+fn resolve_codex_instructions_path(configured_path: &str, config_dir: &Path) -> PathBuf {
+    let path = PathBuf::from(configured_path);
+    let resolved = if path.is_absolute() {
+        path
+    } else {
+        config_dir.join(path)
+    };
+
+    resolved.components().collect()
+}
+
+fn set_file_access_error(status: &mut CodexInstructionsFileStatus, error: std::io::Error) {
+    status.state = match error.kind() {
+        ErrorKind::NotFound => CodexInstructionsFileState::Missing,
+        ErrorKind::PermissionDenied => CodexInstructionsFileState::Unreadable,
+        _ => CodexInstructionsFileState::Invalid,
+    };
+    status.error = Some(error.to_string());
+}
+
+fn inspect_codex_instructions_file_at(
+    configured_path: &str,
+    config_dir: &Path,
+) -> CodexInstructionsFileStatus {
+    let configured_path = configured_path.trim().to_string();
+    let resolved_path = resolve_codex_instructions_path(&configured_path, config_dir);
+    let mut status = CodexInstructionsFileStatus::new(configured_path, resolved_path.clone());
+
+    if status.configured_path.is_empty() {
+        status.error = Some("Model instructions file path is empty".to_string());
+        return status;
+    }
+
+    let link_metadata = match std::fs::symlink_metadata(&resolved_path) {
+        Ok(metadata) => metadata,
+        Err(error) => {
+            set_file_access_error(&mut status, error);
+            return status;
+        }
+    };
+
+    status.exists = true;
+    status.is_symlink = link_metadata.file_type().is_symlink();
+    let metadata = if status.is_symlink {
+        match std::fs::metadata(&resolved_path) {
+            Ok(metadata) => metadata,
+            Err(error) => {
+                set_file_access_error(&mut status, error);
+                return status;
+            }
+        }
+    } else {
+        link_metadata
+    };
+
+    status.is_file = metadata.is_file();
+    status.size_bytes = Some(metadata.len());
+    status.modified_at = metadata
+        .modified()
+        .ok()
+        .and_then(|time| time.duration_since(std::time::UNIX_EPOCH).ok())
+        .map(|duration| duration.as_secs());
+
+    if !status.is_file {
+        status.state = CodexInstructionsFileState::NotFile;
+        status.error = Some("Configured path does not point to a file".to_string());
+        return status;
+    }
+
+    let bytes = match std::fs::read(&resolved_path) {
+        Ok(bytes) => bytes,
+        Err(error) => {
+            status.state = CodexInstructionsFileState::Unreadable;
+            status.error = Some(error.to_string());
+            return status;
+        }
+    };
+
+    status.readable = true;
+    status.sha256 = Some(format!("{:x}", Sha256::digest(&bytes)));
+    match std::str::from_utf8(&bytes) {
+        Ok(content) if content.trim().is_empty() => {
+            status.state = CodexInstructionsFileState::Empty;
+        }
+        Ok(_) => {
+            status.state = CodexInstructionsFileState::Valid;
+        }
+        Err(error) => {
+            status.state = CodexInstructionsFileState::Invalid;
+            status.error = Some(format!(
+                "Model instructions file is not valid UTF-8: {error}"
+            ));
+        }
+    }
+
+    status
+}
+
+#[tauri::command]
+pub async fn inspect_codex_instructions_file(
+    configuredPath: String,
+) -> Result<CodexInstructionsFileStatus, String> {
+    let config_dir = codex_config::get_codex_config_dir();
+    tauri::async_runtime::spawn_blocking(move || {
+        inspect_codex_instructions_file_at(&configuredPath, &config_dir)
+    })
+    .await
+    .map_err(|error| format!("Failed to inspect Codex model instructions file: {error}"))
 }
 
 #[tauri::command]
@@ -393,7 +551,11 @@ pub async fn set_common_config_snippet(
 
 #[cfg(test)]
 mod tests {
-    use super::validate_common_config_snippet;
+    use super::{
+        inspect_codex_instructions_file_at, validate_common_config_snippet,
+        CodexInstructionsFileState,
+    };
+    use std::path::PathBuf;
 
     #[test]
     fn validate_common_config_snippet_accepts_comment_only_codex_snippet() {
@@ -409,6 +571,55 @@ mod tests {
             err.contains("TOML") || err.contains("toml") || err.contains("格式"),
             "expected TOML validation error, got {err}"
         );
+    }
+
+    #[test]
+    fn inspect_codex_instructions_file_resolves_relative_valid_file() {
+        let temp = tempfile::tempdir().expect("create temp directory");
+        std::fs::write(
+            temp.path().join("instructions.md"),
+            "Use concise answers.\n",
+        )
+        .expect("write instructions file");
+
+        let status = inspect_codex_instructions_file_at("./instructions.md", temp.path());
+
+        assert_eq!(status.state, CodexInstructionsFileState::Valid);
+        assert!(status.exists);
+        assert!(status.is_file);
+        assert!(status.readable);
+        assert_eq!(status.size_bytes, Some(20));
+        assert_eq!(status.sha256.as_deref().map(str::len), Some(64));
+        assert_eq!(
+            PathBuf::from(status.resolved_path),
+            temp.path().join("instructions.md")
+        );
+    }
+
+    #[test]
+    fn inspect_codex_instructions_file_distinguishes_invalid_states() {
+        let temp = tempfile::tempdir().expect("create temp directory");
+        std::fs::create_dir(temp.path().join("directory")).expect("create directory");
+        std::fs::write(temp.path().join("empty.md"), "  \n")
+            .expect("write empty instructions file");
+        std::fs::write(temp.path().join("invalid.md"), [0xff, 0xfe])
+            .expect("write invalid instructions file");
+
+        let missing = inspect_codex_instructions_file_at("missing.md", temp.path());
+        let not_file = inspect_codex_instructions_file_at("directory", temp.path());
+        let empty = inspect_codex_instructions_file_at("empty.md", temp.path());
+        let invalid = inspect_codex_instructions_file_at("invalid.md", temp.path());
+
+        assert_eq!(missing.state, CodexInstructionsFileState::Missing);
+        assert!(!missing.exists);
+        assert_eq!(not_file.state, CodexInstructionsFileState::NotFile);
+        assert!(not_file.exists);
+        assert!(!not_file.is_file);
+        assert_eq!(empty.state, CodexInstructionsFileState::Empty);
+        assert!(empty.readable);
+        assert_eq!(invalid.state, CodexInstructionsFileState::Invalid);
+        assert!(invalid.readable);
+        assert!(invalid.error.is_some());
     }
 }
 

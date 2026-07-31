@@ -38,6 +38,12 @@ pub fn import_prompt_from_deeplink(
     let app_type = AppType::from_str(app_str)
         .map_err(|_| AppError::InvalidInput(format!("Invalid app type: {app_str}")))?;
 
+    if request.append_content.is_some() && !matches!(app_type, AppType::Claude) {
+        return Err(AppError::InvalidInput(
+            "'appendContent' is only supported for Claude prompts".to_string(),
+        ));
+    }
+
     // Decode content
     let content_b64 = request
         .content
@@ -47,6 +53,16 @@ pub fn import_prompt_from_deeplink(
     let content = decode_base64_param("content", content_b64)?;
     let content = String::from_utf8(content)
         .map_err(|e| AppError::InvalidInput(format!("Invalid UTF-8 in content: {e}")))?;
+
+    let append_content = request
+        .append_content
+        .as_deref()
+        .map(|encoded| {
+            let decoded = decode_base64_param("appendContent", encoded)?;
+            String::from_utf8(decoded)
+                .map_err(|e| AppError::InvalidInput(format!("Invalid UTF-8 in appendContent: {e}")))
+        })
+        .transpose()?;
 
     // Generate ID
     let timestamp = chrono::Utc::now().timestamp_millis();
@@ -66,13 +82,15 @@ pub fn import_prompt_from_deeplink(
         name: name.clone(),
         content,
         description: request.description,
+        append_content,
+        managed_import: false,
         enabled: false, // Always start as disabled, will be enabled later if needed
         created_at: Some(timestamp),
         updated_at: Some(timestamp),
     };
 
-    // Save using PromptService
-    PromptService::upsert_prompt(state, app_type.clone(), &id, prompt)?;
+    // A disabled import is data only and must not rewrite the current live files.
+    state.db.save_prompt(app_type.as_str(), &prompt)?;
 
     // If enabled flag is set, enable this prompt (which will disable others)
     if should_enable {

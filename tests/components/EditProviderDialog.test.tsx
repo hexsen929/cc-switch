@@ -108,6 +108,10 @@ describe("EditProviderDialog", () => {
         },
       ],
     };
+    const dbModelInstructionsFiles = [
+      "./instruction_default.md",
+      "./instruction_5.6.md",
+    ];
     const provider: Provider = {
       id: "deepseek",
       name: "DeepSeek",
@@ -118,6 +122,7 @@ describe("EditProviderDialog", () => {
         },
         config: 'model_provider = "custom"\nmodel = "deepseek-v4-flash"\n',
         modelCatalog: dbModelCatalog,
+        modelInstructionsFiles: dbModelInstructionsFiles,
       },
     };
     const liveSettings = {
@@ -147,6 +152,7 @@ describe("EditProviderDialog", () => {
       ).toEqual({
         ...liveSettings,
         modelCatalog: dbModelCatalog,
+        modelInstructionsFiles: dbModelInstructionsFiles,
       });
     });
 
@@ -156,6 +162,7 @@ describe("EditProviderDialog", () => {
     expect(handleSubmit.mock.calls[0][0].provider.settingsConfig).toEqual({
       ...liveSettings,
       modelCatalog: dbModelCatalog,
+      modelInstructionsFiles: dbModelInstructionsFiles,
     });
   });
 

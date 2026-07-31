@@ -361,7 +361,7 @@ pub struct PromptRoot {
 
 use crate::config::{copy_file, get_app_config_dir, get_app_config_path, write_json_file};
 use crate::error::AppError;
-use crate::prompt_files::prompt_file_path;
+use crate::prompt_files::{append_prompt_file_path, prompt_file_path, read_live_prompt_content};
 use crate::provider::ProviderManager;
 
 /// 应用类型
@@ -789,25 +789,37 @@ impl MultiAppConfig {
     /// - Ok(false) 表示未导入（文件不存在、内容为空或读取失败）
     fn auto_import_prompt_if_exists(config: &mut Self, app: AppType) -> Result<bool, AppError> {
         let file_path = prompt_file_path(&app)?;
-
-        // 检查文件是否存在
-        if !file_path.exists() {
-            log::debug!("提示词文件不存在，跳过自动导入: {file_path:?}");
-            return Ok(false);
-        }
-
-        // 读取文件内容
-        let content = match std::fs::read_to_string(&file_path) {
-            Ok(c) => c,
-            Err(e) => {
-                log::warn!("读取提示词文件失败: {file_path:?}, 错误: {e}");
-                return Ok(false); // 失败时不中断，继续处理其他应用
+        let content = match read_live_prompt_content(&app) {
+            Ok(Some(content)) => content,
+            Ok(None) => String::new(),
+            Err(error) => {
+                log::warn!("读取提示词文件失败: {file_path:?}, 错误: {error}");
+                return Ok(false);
             }
         };
 
-        // 检查内容是否为空
-        if content.trim().is_empty() {
-            log::debug!("提示词文件内容为空，跳过导入: {file_path:?}");
+        let append_content = if let Some(append_path) = append_prompt_file_path(&app)? {
+            if append_path.exists() {
+                match std::fs::read_to_string(&append_path) {
+                    Ok(content) => Some(content),
+                    Err(e) => {
+                        log::warn!("读取追加提示词文件失败: {append_path:?}, 错误: {e}");
+                        return Ok(false);
+                    }
+                }
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+
+        if content.trim().is_empty()
+            && append_content
+                .as_deref()
+                .map_or(true, |value| value.trim().is_empty())
+        {
+            log::debug!("提示词文件不存在或内容为空，跳过导入: {file_path:?}");
             return Ok(false);
         }
 
@@ -831,6 +843,8 @@ impl MultiAppConfig {
             ),
             content,
             description: Some("Automatically imported on first launch".to_string()),
+            append_content,
+            managed_import: false,
             enabled: true, // 自动启用
             created_at: Some(timestamp),
             updated_at: Some(timestamp),

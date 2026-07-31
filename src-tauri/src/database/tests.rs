@@ -232,6 +232,8 @@ fn schema_migration_adds_missing_columns_for_providers() {
         ("provider_endpoints", "added_at"),
         ("mcp_servers", "enabled_gemini"),
         ("prompts", "updated_at"),
+        ("prompts", "append_content"),
+        ("prompts", "managed_import"),
         ("skills", "installed_at"),
         ("skill_repos", "enabled"),
     ] {

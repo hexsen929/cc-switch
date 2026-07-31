@@ -953,16 +953,15 @@ fn restore_live_settings_for_provider_backfill(
         }
     }
 
-    // `modelCatalog` is a cc-switch–private field whose SSOT is the DB. Live's
-    // `config.toml` only carries a lossy projection (`model_catalog_json` →
-    // generated catalog file) that proxy takeover/restore cycles and Codex.app
-    // config rewrites can drop, so `read_live_settings` may reconstruct it as
-    // absent. Never let a switch-away backfill from Live erase the stored
-    // mapping: prefer the DB provider's `modelCatalog`, falling back to whatever
-    // Live reconstructed only when the DB has none.
-    if let Some(stored_catalog) = provider.settings_config.get("modelCatalog") {
-        if let Some(obj) = settings.as_object_mut() {
-            obj.insert("modelCatalog".to_string(), stored_catalog.clone());
+    // These are CC Switch-private fields whose SSOT is the provider row. Live
+    // config contains at most a lossy catalog projection and never contains the
+    // saved instructions-file list, so switch-away backfill must overlay the DB
+    // values instead of erasing them.
+    if let Some(obj) = settings.as_object_mut() {
+        for field in ["modelCatalog", "modelInstructionsFiles"] {
+            if let Some(stored_value) = provider.settings_config.get(field) {
+                obj.insert(field.to_string(), stored_value.clone());
+            }
         }
     }
 
@@ -2783,6 +2782,32 @@ base_url = "https://a.example/v1"
             result.get("modelCatalog"),
             provider.settings_config.get("modelCatalog"),
             "switch-away backfill must keep the DB-stored modelCatalog when Live has none"
+        );
+    }
+
+    #[test]
+    fn codex_switch_backfill_preserves_saved_model_instruction_files() {
+        let provider = Provider::with_id(
+            "custom".to_string(),
+            "Custom".to_string(),
+            json!({
+                "auth": {},
+                "config": "model_provider = \"custom\"\nmodel_instructions_file = \"./active.md\"\n",
+                "modelInstructionsFiles": ["./default.md", "./active.md"]
+            }),
+            None,
+        );
+        let live_settings = json!({
+            "auth": {},
+            "config": "model_provider = \"custom\"\nmodel_instructions_file = \"./active.md\"\n"
+        });
+
+        let result =
+            restore_live_settings_for_provider_backfill(&AppType::Codex, &provider, live_settings);
+
+        assert_eq!(
+            result.get("modelInstructionsFiles"),
+            provider.settings_config.get("modelInstructionsFiles")
         );
     }
 

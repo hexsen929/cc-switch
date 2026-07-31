@@ -83,6 +83,9 @@ pub struct DeepLinkImportRequest {
     /// Base64 encoded Markdown content
     #[serde(skip_serializing_if = "Option::is_none")]
     pub content: Option<String>,
+    /// Base64 encoded system-prompt content appended by Claude Code
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub append_content: Option<String>,
     /// Prompt description
     #[serde(skip_serializing_if = "Option::is_none")]
     pub description: Option<String>,

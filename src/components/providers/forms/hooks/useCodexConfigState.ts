@@ -3,14 +3,19 @@ import {
   extractCodexBaseUrl,
   extractCodexExperimentalBearerToken,
   extractCodexModelName,
+  extractCodexTopLevelString,
+  normalizeCodexModelInstructionsFiles,
+  removeCodexTopLevelField,
   setCodexBaseUrl as setCodexBaseUrlInConfig,
   setCodexModelName as setCodexModelNameInConfig,
+  setCodexTopLevelString,
   updateCodexExperimentalBearerToken,
 } from "@/utils/providerConfigUtils";
 import { normalizeTomlText } from "@/utils/textNormalization";
 import type { CodexCatalogModel } from "@/types";
 
 const PROXY_MANAGED_PLACEHOLDER = "PROXY_MANAGED";
+const MODEL_INSTRUCTIONS_FIELD = "model_instructions_file";
 
 const isProxyManagedPlaceholder = (value: unknown): boolean =>
   typeof value === "string" && value.trim() === PROXY_MANAGED_PLACEHOLDER;
@@ -93,6 +98,13 @@ function catalogModelsEqual(
   });
 }
 
+function stringArraysEqual(left: string[], right: string[]): boolean {
+  return (
+    left.length === right.length &&
+    left.every((item, index) => item === right[index])
+  );
+}
+
 interface UseCodexConfigStateProps {
   initialData?: {
     settingsConfig?: Record<string, unknown>;
@@ -125,6 +137,12 @@ export function useCodexConfigState({ initialData }: UseCodexConfigStateProps) {
   const [codexCatalogModels, setCodexCatalogModels] = useState<
     CodexCatalogModel[]
   >([]);
+  const [codexModelInstructionsEnabled, setCodexModelInstructionsEnabled] =
+    useState(false);
+  const [codexModelInstructionsFile, setCodexModelInstructionsFile] =
+    useState("");
+  const [codexModelInstructionsFiles, setCodexModelInstructionsFilesState] =
+    useState<string[]>([]);
   const [codexAuthError, setCodexAuthError] = useState("");
 
   const isUpdatingCodexBaseUrlRef = useRef(false);
@@ -147,6 +165,25 @@ export function useCodexConfigState({ initialData }: UseCodexConfigStateProps) {
           : "";
       setCodexConfigState(configStr);
 
+      const activeInstructionsFile =
+        extractCodexTopLevelString(
+          configStr,
+          MODEL_INSTRUCTIONS_FIELD,
+        )?.trim() || "";
+      const savedInstructionsFiles = normalizeCodexModelInstructionsFiles(
+        (config as any).modelInstructionsFiles,
+        activeInstructionsFile,
+      );
+      setCodexModelInstructionsEnabled(Boolean(activeInstructionsFile));
+      setCodexModelInstructionsFile(
+        activeInstructionsFile || savedInstructionsFiles[0] || "",
+      );
+      setCodexModelInstructionsFilesState((current) =>
+        stringArraysEqual(current, savedInstructionsFiles)
+          ? current
+          : savedInstructionsFiles,
+      );
+
       const modelCatalog = (config as any).modelCatalog;
       const nextCatalogModels = normalizeCatalogModels(modelCatalog?.models);
       setCodexCatalogModels((current) =>
@@ -164,6 +201,30 @@ export function useCodexConfigState({ initialData }: UseCodexConfigStateProps) {
       setCodexApiKey(pickCodexApiKey(auth, configStr));
     }
   }, [initialData]);
+
+  // Keep the dedicated control synchronized when config.toml is edited by hand.
+  // Removing the TOML line disables application but intentionally retains the
+  // last selected path so the user can turn it back on with one switch.
+  useEffect(() => {
+    const activeInstructionsFile =
+      extractCodexTopLevelString(
+        codexConfig,
+        MODEL_INSTRUCTIONS_FIELD,
+      )?.trim() || "";
+    setCodexModelInstructionsEnabled(Boolean(activeInstructionsFile));
+    if (activeInstructionsFile) {
+      setCodexModelInstructionsFile((current) =>
+        current === activeInstructionsFile ? current : activeInstructionsFile,
+      );
+      setCodexModelInstructionsFilesState((current) => {
+        const next = normalizeCodexModelInstructionsFiles(
+          current,
+          activeInstructionsFile,
+        );
+        return stringArraysEqual(current, next) ? current : next;
+      });
+    }
+  }, [codexConfig]);
 
   // 与 TOML 配置保持基础 URL 同步
   useEffect(() => {
@@ -295,6 +356,35 @@ export function useCodexConfigState({ initialData }: UseCodexConfigStateProps) {
     [setCodexConfig],
   );
 
+  const handleCodexModelInstructionsActiveFileChange = useCallback(
+    (value: string | null) => {
+      const path = value?.trim() || "";
+      setCodexModelInstructionsEnabled(Boolean(path));
+      if (path) setCodexModelInstructionsFile(path);
+
+      setCodexConfig((prev) =>
+        path
+          ? setCodexTopLevelString(prev, MODEL_INSTRUCTIONS_FIELD, path)
+          : removeCodexTopLevelField(prev, MODEL_INSTRUCTIONS_FIELD),
+      );
+
+      if (path) {
+        setCodexModelInstructionsFilesState((current) => {
+          const next = normalizeCodexModelInstructionsFiles(current, path);
+          return stringArraysEqual(current, next) ? current : next;
+        });
+      }
+    },
+    [setCodexConfig],
+  );
+
+  const setCodexModelInstructionsFiles = useCallback((files: string[]) => {
+    setCodexModelInstructionsFilesState((current) => {
+      const next = normalizeCodexModelInstructionsFiles(files);
+      return stringArraysEqual(current, next) ? current : next;
+    });
+  }, []);
+
   // 处理 config 变化（同步 Base URL）
   const handleCodexConfigChange = useCallback(
     (value: string) => {
@@ -318,11 +408,25 @@ export function useCodexConfigState({ initialData }: UseCodexConfigStateProps) {
       auth: Record<string, unknown>,
       config: string,
       modelCatalogModels: CodexCatalogModel[] = [],
+      modelInstructionsFiles: unknown = [],
     ) => {
       const authString = JSON.stringify(auth, null, 2);
       setCodexAuth(authString);
       setCodexConfig(config);
       setCodexCatalogModels(normalizeCatalogModels(modelCatalogModels));
+
+      const activeInstructionsFile =
+        extractCodexTopLevelString(config, MODEL_INSTRUCTIONS_FIELD)?.trim() ||
+        "";
+      const savedInstructionsFiles = normalizeCodexModelInstructionsFiles(
+        modelInstructionsFiles,
+        activeInstructionsFile,
+      );
+      setCodexModelInstructionsEnabled(Boolean(activeInstructionsFile));
+      setCodexModelInstructionsFile(
+        activeInstructionsFile || savedInstructionsFiles[0] || "",
+      );
+      setCodexModelInstructionsFilesState(savedInstructionsFiles);
 
       const baseUrl = extractCodexBaseUrl(config);
       setCodexBaseUrl(baseUrl || "");
@@ -339,13 +443,18 @@ export function useCodexConfigState({ initialData }: UseCodexConfigStateProps) {
     codexBaseUrl,
     codexModel,
     codexCatalogModels,
+    codexModelInstructionsEnabled,
+    codexModelInstructionsFile,
+    codexModelInstructionsFiles,
     codexAuthError,
     setCodexAuth,
     setCodexConfig,
     setCodexCatalogModels,
+    setCodexModelInstructionsFiles,
     handleCodexApiKeyChange,
     handleCodexBaseUrlChange,
     handleCodexModelChange,
+    handleCodexModelInstructionsActiveFileChange,
     handleCodexConfigChange,
     resetCodexConfig,
     getCodexAuthApiKey,

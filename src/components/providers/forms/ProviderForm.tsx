@@ -65,6 +65,8 @@ import {
   extractCodexWireApi,
   setCodexWireApi,
   extractCodexModelName,
+  extractCodexTopLevelString,
+  normalizeCodexModelInstructionsFiles,
   setCodexModelName as setCodexModelNameInConfig,
 } from "@/utils/providerConfigUtils";
 import { isNonNegativeDecimalString } from "@/types/usage";
@@ -588,13 +590,18 @@ function ProviderFormFull({
     codexBaseUrl,
     codexModel,
     codexCatalogModels,
+    codexModelInstructionsEnabled,
+    codexModelInstructionsFile,
+    codexModelInstructionsFiles,
     codexAuthError,
     setCodexAuth,
     setCodexConfig,
     setCodexCatalogModels,
+    setCodexModelInstructionsFiles,
     handleCodexApiKeyChange,
     handleCodexBaseUrlChange,
     handleCodexModelChange,
+    handleCodexModelInstructionsActiveFileChange,
     handleCodexConfigChange: originalHandleCodexConfigChange,
     resetCodexConfig,
   } = useCodexConfigState({ initialData });
@@ -1400,6 +1407,15 @@ function ProviderFormFull({
           category !== "official"
             ? normalizeCodexCatalogModelsForSave(codexCatalogModels)
             : [];
+        const activeModelInstructionsFile = extractCodexTopLevelString(
+          normalizedCodexConfig,
+          "model_instructions_file",
+        );
+        const normalizedModelInstructionsFiles =
+          normalizeCodexModelInstructionsFiles(
+            codexModelInstructionsFiles,
+            activeModelInstructionsFile,
+          );
         // The default-model field writes the top-level `model` into the TOML
         // as the user types; only when it was left empty fall back to the
         // first catalog row so "fill mapping only" keeps its old behavior.
@@ -1419,9 +1435,13 @@ function ProviderFormFull({
           auth: unknown;
           config: string;
           modelCatalog?: { models: CodexCatalogModel[] };
+          modelInstructionsFiles?: string[];
         };
         if (normalizedCatalogModels.length > 0) {
           configObj.modelCatalog = { models: normalizedCatalogModels };
+        }
+        if (normalizedModelInstructionsFiles.length > 0) {
+          configObj.modelInstructionsFiles = normalizedModelInstructionsFiles;
         }
         settingsConfig = JSON.stringify(configObj);
       } catch (err) {
@@ -2339,6 +2359,13 @@ function ProviderFormFull({
               onAutoSelectChange={setEndpointAutoSelect}
               codexModel={codexModel}
               onModelChange={handleCodexModelChange}
+              modelInstructionsEnabled={codexModelInstructionsEnabled}
+              modelInstructionsFile={codexModelInstructionsFile}
+              modelInstructionsFiles={codexModelInstructionsFiles}
+              onModelInstructionsActiveFileChange={
+                handleCodexModelInstructionsActiveFileChange
+              }
+              onModelInstructionsFilesChange={setCodexModelInstructionsFiles}
               apiFormat={localCodexApiFormat}
               onApiFormatChange={handleCodexApiFormatChange}
               toolCallBridge={toolCallBridge}

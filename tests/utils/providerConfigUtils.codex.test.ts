@@ -5,12 +5,15 @@ import {
   extractCodexModelName,
   getApiKeyFromConfig,
   extractCodexTopLevelInt,
+  extractCodexTopLevelString,
   isCodexGoalModeEnabled,
+  normalizeCodexModelInstructionsFiles,
   removeCodexTopLevelField,
   setCodexBaseUrl,
   setCodexGoalMode,
   setCodexModelName,
   setCodexTopLevelInt,
+  setCodexTopLevelString,
   updateCodexExperimentalBearerToken,
 } from "@/utils/providerConfigUtils";
 
@@ -71,9 +74,9 @@ describe("Codex TOML utils", () => {
       "",
       "[model_providers.custom]",
       'name = "custom"',
-      "base_url = \"https://su'us.codes/v1\"",
+      'base_url = "https://su\'us.codes/v1"',
       'wire_api = "responses"',
-      'requires_openai_auth = true',
+      "requires_openai_auth = true",
       "",
     ].join("\n");
 
@@ -94,7 +97,7 @@ describe("Codex TOML utils", () => {
       'base_url = "https://old.example/v1"',
       'base_url = "https://older.example/v1"',
       'wire_api = "responses"',
-      'requires_openai_auth = true',
+      "requires_openai_auth = true",
       "",
     ].join("\n");
 
@@ -259,6 +262,53 @@ describe("Codex TOML utils", () => {
       extractCodexTopLevelInt(removed, "model_context_window"),
     ).toBeUndefined();
     expect(removed).toContain("[model_providers.custom]");
+  });
+
+  it("reads, writes, escapes, and removes model_instructions_file", () => {
+    const input = [
+      'model_provider = "custom"',
+      "model_instructions_file = './old instructions.md'",
+      "",
+      "[model_providers.custom]",
+      'model_instructions_file = "provider-table-value.md"',
+      "",
+    ].join("\n");
+
+    expect(extractCodexTopLevelString(input, "model_instructions_file")).toBe(
+      "./old instructions.md",
+    );
+
+    const updated = setCodexTopLevelString(
+      input,
+      "model_instructions_file",
+      './instruction "5.6".md',
+    );
+    expect(updated).toContain(
+      'model_instructions_file = "./instruction \\"5.6\\".md"',
+    );
+    expect(extractCodexTopLevelString(updated, "model_instructions_file")).toBe(
+      './instruction "5.6".md',
+    );
+
+    const removed = removeCodexTopLevelField(
+      updated,
+      "model_instructions_file",
+    );
+    expect(
+      extractCodexTopLevelString(removed, "model_instructions_file"),
+    ).toBeUndefined();
+    expect(removed).toContain(
+      'model_instructions_file = "provider-table-value.md"',
+    );
+  });
+
+  it("normalizes saved instruction paths without dropping the active file", () => {
+    expect(
+      normalizeCodexModelInstructionsFiles(
+        [" ./a.md ", "./a.md", null, "bad\npath", "./b.md"],
+        "./active.md",
+      ),
+    ).toEqual(["./a.md", "./b.md", "./active.md"]);
   });
 
   it("adds Goal mode under the top-level features table", () => {

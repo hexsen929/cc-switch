@@ -7,6 +7,7 @@ import { useTauriEvent } from "@/hooks/useTauriEvent";
 import PromptListItem from "./PromptListItem";
 import PromptFormPanel from "./PromptFormPanel";
 import { ConfirmDialog } from "../ConfirmDialog";
+import { ShellWrapperCard } from "./ShellWrapperCard";
 
 interface PromptPanelProps {
   open: boolean;
@@ -109,6 +110,12 @@ const PromptPanel = React.forwardRef<PromptPanelHandle, PromptPanelProps>(
               : t("prompts.noneEnabled")}
           </div>
         </div>
+
+        {appId === "claude" && (
+          <div className="mb-4 flex-shrink-0">
+            <ShellWrapperCard appType={appId} />
+          </div>
+        )}
 
         <div className="flex-1 overflow-y-auto pb-16">
           {loading ? (

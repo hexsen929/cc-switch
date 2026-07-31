@@ -1302,6 +1302,7 @@ pub fn run() {
             commands::get_config_status,
             commands::get_claude_code_config_path,
             commands::get_config_dir,
+            commands::inspect_codex_instructions_file,
             commands::open_config_folder,
             commands::pick_directory,
             commands::open_external,
@@ -1628,6 +1629,11 @@ pub fn run() {
             commands::enter_lightweight_mode,
             commands::exit_lightweight_mode,
             commands::is_lightweight_mode,
+            // Shell wrapper management
+            commands::check_shell_wrapper_status,
+            commands::install_shell_wrapper,
+            commands::uninstall_shell_wrapper,
+            commands::get_shell_wrapper_instructions,
         ]);
 
     let app = builder

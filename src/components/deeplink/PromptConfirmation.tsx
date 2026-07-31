@@ -1,5 +1,6 @@
 import { useMemo } from "react";
 import { useTranslation } from "react-i18next";
+import { AlertTriangle } from "lucide-react";
 import { DeepLinkImportRequest } from "../../lib/api/deeplink";
 import { decodeBase64Utf8 } from "../../lib/utils/base64";
 
@@ -14,6 +15,11 @@ export function PromptConfirmation({
     if (!request.content) return "";
     return decodeBase64Utf8(request.content);
   }, [request.content]);
+
+  const decodedAppendContent = useMemo(() => {
+    if (request.appendContent === undefined) return null;
+    return decodeBase64Utf8(request.appendContent);
+  }, [request.appendContent]);
 
   return (
     <div className="space-y-4">
@@ -52,9 +58,21 @@ export function PromptConfirmation({
         </pre>
       </div>
 
+      {decodedAppendContent !== null && (
+        <div>
+          <label className="block text-sm font-medium text-muted-foreground">
+            {t("deeplink.prompt.appendContentPreview")}
+          </label>
+          <pre className="mt-1 max-h-48 overflow-auto rounded border bg-muted/50 p-2 text-xs whitespace-pre-wrap">
+            {decodedAppendContent.substring(0, 500)}
+            {decodedAppendContent.length > 500 && "..."}
+          </pre>
+        </div>
+      )}
+
       {request.enabled && (
         <div className="text-yellow-600 dark:text-yellow-500 text-sm flex items-center gap-2">
-          <span>⚠️</span>
+          <AlertTriangle className="h-4 w-4 shrink-0" />
           <span>{t("deeplink.prompt.enabledWarning")}</span>
         </div>
       )}

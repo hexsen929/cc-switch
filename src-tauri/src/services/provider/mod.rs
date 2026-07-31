@@ -1399,6 +1399,7 @@ GEMINI_TIMEOUT_MS=30000
         let config_toml = r#"model_provider = "azure"
 model = "gpt-4"
 wire_api = "chat"
+model_instructions_file = "./azure-instructions.md"
 disable_response_storage = true
 experimental_bearer_token = "sk-live-secret"
 model_catalog_json = "cc-switch-model-catalog.json"
@@ -1450,6 +1451,10 @@ command = "legacy-cmd"
         assert!(
             !extracted.contains("wire_api"),
             "should strip top-level wire_api from the shared snippet, got: {extracted}"
+        );
+        assert!(
+            !extracted.contains("model_instructions_file"),
+            "should strip provider instruction files from the shared snippet, got: {extracted}"
         );
         // 注入产物不得进共享片段（bearer token 泄漏为密钥级问题）
         assert!(
@@ -4755,6 +4760,9 @@ impl ProviderService {
         // update_codex_toml_field / 前端 setCodexWireApi 都会把它落在顶层，
         // 进了片段会改写其它供应商的协议选择（chat vs responses）。
         root.remove("wire_api");
+        // Instruction files are selected per provider in the Codex form. They
+        // must not be promoted into the shared snippet and applied elsewhere.
+        root.remove("model_instructions_file");
 
         // Remove entire model_providers table (provider-specific configuration)
         root.remove("model_providers");

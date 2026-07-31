@@ -99,9 +99,7 @@ export function useUpdateGlobalProxyConfig() {
       const detail =
         extractErrorMessage(error) ||
         t("common.unknown", { defaultValue: "未知错误" });
-      toast.error(
-        t("proxy.settings.toast.saveFailed", { error: detail }),
-      );
+      toast.error(t("proxy.settings.toast.saveFailed", { error: detail }));
     },
   });
 }
@@ -145,9 +143,7 @@ export function useUpdateAppProxyConfig() {
       const detail =
         extractErrorMessage(error) ||
         t("common.unknown", { defaultValue: "未知错误" });
-      toast.error(
-        t("proxy.settings.toast.saveFailed", { error: detail }),
-      );
+      toast.error(t("proxy.settings.toast.saveFailed", { error: detail }));
     },
   });
 }
@@ -182,9 +178,7 @@ export function useSetClaudeModelRoutingSettings() {
       const detail =
         extractErrorMessage(error) ||
         t("common.unknown", { defaultValue: "未知错误" });
-      toast.error(
-        t("proxy.settings.toast.saveFailed", { error: detail }),
-      );
+      toast.error(t("proxy.settings.toast.saveFailed", { error: detail }));
     },
   });
 }
@@ -215,9 +209,7 @@ export function useUpsertClaudeModelRoutePolicy() {
       const detail =
         extractErrorMessage(error) ||
         t("common.unknown", { defaultValue: "未知错误" });
-      toast.error(
-        t("proxy.settings.toast.saveFailed", { error: detail }),
-      );
+      toast.error(t("proxy.settings.toast.saveFailed", { error: detail }));
     },
   });
 }

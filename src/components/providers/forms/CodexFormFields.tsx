@@ -36,6 +36,7 @@ import {
 } from "@/lib/api/model-fetch";
 import { CustomUserAgentField } from "./CustomUserAgentField";
 import { LocalProxyRequestOverridesField } from "./LocalProxyRequestOverridesField";
+import { CodexInstructionsFileField } from "./CodexInstructionsFileField";
 import { cn } from "@/lib/utils";
 import type {
   ClaudeApiKeyField,
@@ -84,12 +85,19 @@ interface CodexFormFieldsProps {
   codexModel?: string;
   onModelChange?: (model: string) => void;
 
+  // config.toml top-level model_instructions_file + provider-local saved paths
+  modelInstructionsEnabled?: boolean;
+  modelInstructionsFile?: string;
+  modelInstructionsFiles?: string[];
+  onModelInstructionsActiveFileChange?: (path: string | null) => void;
+  onModelInstructionsFilesChange?: (files: string[]) => void;
+
   // API Format
   // Note: wire_api is always "responses" for Codex; apiFormat controls proxy-layer conversion
   apiFormat: CodexApiFormat;
   onApiFormatChange: (format: CodexApiFormat) => void;
-  toolCallBridge: boolean;
-  onToolCallBridgeChange: (value: boolean) => void;
+  toolCallBridge?: boolean;
+  onToolCallBridgeChange?: (value: boolean) => void;
   // Auth field for the Anthropic Messages upstream (only used when apiFormat === "anthropic")
   anthropicAuthField: ClaudeApiKeyField;
   onAnthropicAuthFieldChange: (value: ClaudeApiKeyField) => void;
@@ -191,9 +199,14 @@ export function CodexFormFields({
   onAutoSelectChange,
   codexModel = "",
   onModelChange,
+  modelInstructionsEnabled = false,
+  modelInstructionsFile = "",
+  modelInstructionsFiles = [],
+  onModelInstructionsActiveFileChange,
+  onModelInstructionsFilesChange,
   apiFormat,
   onApiFormatChange,
-  toolCallBridge,
+  toolCallBridge = false,
   onToolCallBridgeChange,
   anthropicAuthField,
   onAnthropicAuthFieldChange,
@@ -619,6 +632,18 @@ export function CodexFormFields({
         </div>
       )}
 
+      {appId === "codex" &&
+        onModelInstructionsActiveFileChange &&
+        onModelInstructionsFilesChange && (
+          <CodexInstructionsFileField
+            enabled={modelInstructionsEnabled}
+            path={modelInstructionsFile}
+            savedFiles={modelInstructionsFiles}
+            onActiveFileChange={onModelInstructionsActiveFileChange}
+            onSavedFilesChange={onModelInstructionsFilesChange}
+          />
+        )}
+
       {/* 高级选项 —— 上游格式/模型映射/思考能力/自定义 UA；预设供应商通常无需展开 */}
       {category !== "official" && (
         <Collapsible
@@ -801,7 +826,7 @@ export function CodexFormFields({
               </div>
             )}
 
-            {isChatFormat && (
+            {appId === "codex" && isChatFormat && onToolCallBridgeChange && (
               <div className="flex items-start justify-between gap-4 border-t border-border-default pt-3">
                 <div className="space-y-1">
                   <FormLabel htmlFor="codexToolCallBridge">

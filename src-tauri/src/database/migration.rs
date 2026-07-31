@@ -162,8 +162,9 @@ impl Database {
             for (id, prompt) in prompts_map {
                 tx.execute(
                         "INSERT OR REPLACE INTO prompts (
-                            id, app_type, name, content, description, enabled, created_at, updated_at
-                        ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+                            id, app_type, name, content, description, enabled, created_at, updated_at,
+                            append_content, managed_import
+                        ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
                         params![
                             id,
                             app_type,
@@ -173,6 +174,8 @@ impl Database {
                             prompt.enabled,
                             prompt.created_at,
                             prompt.updated_at,
+                            prompt.append_content,
+                            prompt.managed_import,
                         ],
                     )
                     .map_err(|e| AppError::Database(format!("Migrate prompt failed: {e}")))?;

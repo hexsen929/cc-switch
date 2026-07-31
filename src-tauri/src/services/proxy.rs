@@ -7127,6 +7127,8 @@ command = "echo"
                 name: "Global Prompt".to_string(),
                 content: "global prompt".to_string(),
                 description: None,
+                append_content: None,
+                managed_import: false,
                 enabled: true,
                 created_at: Some(1),
                 updated_at: Some(1),
@@ -7140,6 +7142,8 @@ command = "echo"
                 name: "Provider Prompt".to_string(),
                 content: "provider prompt".to_string(),
                 description: None,
+                append_content: None,
+                managed_import: false,
                 enabled: false,
                 created_at: Some(2),
                 updated_at: Some(2),
@@ -8982,20 +8986,25 @@ wire_api = "responses"
             .expect("backup exists");
         let stored: Value =
             serde_json::from_str(&backup.original_config).expect("parse backup json");
+        let stored_auth = stored
+            .get("auth")
+            .expect("backup should retain the Codex auth object");
         assert_eq!(
-            stored
-                .get("auth")
-                .and_then(|auth| auth.get("OPENAI_API_KEY"))
+            stored_auth.get("auth_mode").and_then(Value::as_str),
+            Some("chatgpt"),
+            "missing backup must retain the existing ChatGPT login mode"
+        );
+        assert_eq!(
+            stored_auth
+                .get("tokens")
+                .and_then(|tokens| tokens.get("id_token"))
                 .and_then(Value::as_str),
-            Some("current-key"),
-            "missing backup should be rebuilt from current provider auth"
+            Some("stale-chatgpt-token"),
+            "missing backup must retain the existing ChatGPT OAuth tokens"
         );
         assert!(
-            stored
-                .get("auth")
-                .and_then(|auth| auth.get("tokens"))
-                .is_none(),
-            "stale ChatGPT auth fields from the taken-over live config must not enter backup"
+            stored_auth.get("OPENAI_API_KEY").is_none(),
+            "the provider key must not replace the preserved ChatGPT auth or become a proxy placeholder"
         );
 
         let backup_config = stored
@@ -9017,6 +9026,15 @@ wire_api = "responses"
                 .and_then(|v| v.as_str()),
             Some("https://current.example/v1"),
             "backup should restore the current third-party endpoint, not the local proxy"
+        );
+        assert_eq!(
+            parsed_backup
+                .get("model_providers")
+                .and_then(|v| v.get("current"))
+                .and_then(|v| v.get("experimental_bearer_token"))
+                .and_then(|v| v.as_str()),
+            Some("current-key"),
+            "the current provider key must be stored in config.toml while ChatGPT OAuth stays in auth.json"
         );
         assert!(
             !backup_config.contains("127.0.0.1"),

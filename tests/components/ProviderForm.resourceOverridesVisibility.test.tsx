@@ -2,9 +2,14 @@ import { render, screen } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 import { ProviderForm } from "@/components/providers/forms/ProviderForm";
 
-vi.mock("@tanstack/react-query", () => ({
-  useQuery: () => ({ data: [], isLoading: false }),
-}));
+vi.mock("@tanstack/react-query", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@tanstack/react-query")>();
+  return {
+    ...actual,
+    useQuery: () => ({ data: [], isLoading: false }),
+    useQueryClient: () => ({ invalidateQueries: vi.fn() }),
+  };
+});
 
 vi.mock("@/lib/api", () => ({
   providersApi: {
@@ -14,6 +19,10 @@ vi.mock("@/lib/api", () => ({
 
 vi.mock("@/hooks/useOpenClaw", () => ({
   useOpenClawLiveProviderIds: () => ({ data: [], isLoading: false }),
+}));
+
+vi.mock("@/hooks/useHermes", () => ({
+  useHermesLiveProviderIds: () => ({ data: [], isLoading: false }),
 }));
 
 vi.mock("@/components/ui/form", () => ({
@@ -239,8 +248,32 @@ vi.mock("@/components/providers/forms/hooks", () => ({
     handleOpenclawUserAgentChange: vi.fn(),
     resetOpenclawState: vi.fn(),
   }),
+  useHermesFormState: () => ({
+    hermesProviderKey: "test-provider",
+    setHermesProviderKey: vi.fn(),
+    hermesBaseUrl: "",
+    handleHermesBaseUrlChange: vi.fn(),
+    hermesApiKey: "",
+    handleHermesApiKeyChange: vi.fn(),
+    hermesApiMode: "openai-chat",
+    handleHermesApiModeChange: vi.fn(),
+    hermesModels: [],
+    handleHermesModelsChange: vi.fn(),
+    hermesRateLimitDelay: "",
+    handleHermesRateLimitDelayChange: vi.fn(),
+    resetHermesState: vi.fn(),
+  }),
   useCopilotAuth: () => ({
     isAuthenticated: false,
+    accounts: [],
+  }),
+  useCodexOauth: () => ({
+    isAuthenticated: false,
+    accounts: [],
+  }),
+  useXaiOauth: () => ({
+    isAuthenticated: false,
+    accounts: [],
   }),
 }));
 
