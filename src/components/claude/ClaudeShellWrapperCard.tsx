@@ -9,17 +9,13 @@ import {
   installShellWrapper,
   type WrapperStatus,
   uninstallShellWrapper,
-} from "@/lib/api/shellWrapper";
-
-interface ShellWrapperCardProps {
-  appType: string;
-}
+} from "@/lib/api/claudeShellWrapper";
 
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
-export function ShellWrapperCard({ appType }: ShellWrapperCardProps) {
+export function ClaudeShellWrapperCard() {
   const { t } = useTranslation();
   const [status, setStatus] = useState<WrapperStatus | null>(null);
   const [loading, setLoading] = useState(true);
@@ -29,27 +25,24 @@ export function ShellWrapperCard({ appType }: ShellWrapperCardProps) {
   const [copied, setCopied] = useState(false);
 
   const checkStatus = useCallback(async () => {
-    if (appType !== "claude") return;
-
     try {
       setLoading(true);
       setStatus(await checkShellWrapperStatus());
     } catch (error) {
       toast.error(
-        t("prompts.shellWrapperStatusFailed", {
+        t("claudeAppendInstructions.shellWrapperStatusFailed", {
+          defaultValue: "无法检查 Shell 集成：{{error}}",
           error: errorMessage(error),
         }),
       );
     } finally {
       setLoading(false);
     }
-  }, [appType, t]);
+  }, [t]);
 
   useEffect(() => {
     void checkStatus();
   }, [checkStatus]);
-
-  if (appType !== "claude") return null;
 
   const handleInstall = async () => {
     const upgrading = status?.needsUpgrade ?? false;
@@ -59,16 +52,22 @@ export function ShellWrapperCard({ appType }: ShellWrapperCardProps) {
       toast.success(
         t(
           upgrading
-            ? "prompts.shellWrapperUpgradeSuccess"
-            : "prompts.shellWrapperInstallSuccess",
-          { path: configPath },
+            ? "claudeAppendInstructions.shellWrapperUpgradeSuccess"
+            : "claudeAppendInstructions.shellWrapperInstallSuccess",
+          {
+            defaultValue: upgrading
+              ? "Shell 集成已在 {{path}} 完成升级，重启终端后生效。"
+              : "Shell 集成已安装到 {{path}}，重启终端后生效。",
+            path: configPath,
+          },
         ),
         { closeButton: true },
       );
       await checkStatus();
     } catch (error) {
       toast.error(
-        t("prompts.shellWrapperInstallFailed", {
+        t("claudeAppendInstructions.shellWrapperInstallFailed", {
+          defaultValue: "无法安装 Shell 集成：{{error}}",
           error: errorMessage(error),
         }),
       );
@@ -78,19 +77,30 @@ export function ShellWrapperCard({ appType }: ShellWrapperCardProps) {
   };
 
   const handleUninstall = async () => {
-    if (!window.confirm(t("prompts.shellWrapperUninstallConfirm"))) return;
+    if (
+      !window.confirm(
+        t("claudeAppendInstructions.shellWrapperUninstallConfirm", {
+          defaultValue: "确定卸载 Claude Shell 集成吗？",
+        }),
+      )
+    )
+      return;
 
     try {
       setInstalling(true);
       const configPath = await uninstallShellWrapper();
       toast.success(
-        t("prompts.shellWrapperUninstallSuccess", { path: configPath }),
+        t("claudeAppendInstructions.shellWrapperUninstallSuccess", {
+          defaultValue: "Shell 集成已从 {{path}} 移除，重启终端后生效。",
+          path: configPath,
+        }),
         { closeButton: true },
       );
       await checkStatus();
     } catch (error) {
       toast.error(
-        t("prompts.shellWrapperUninstallFailed", {
+        t("claudeAppendInstructions.shellWrapperUninstallFailed", {
+          defaultValue: "无法卸载 Shell 集成：{{error}}",
           error: errorMessage(error),
         }),
       );
@@ -105,7 +115,8 @@ export function ShellWrapperCard({ appType }: ShellWrapperCardProps) {
         setInstructions(await getShellWrapperInstructions());
       } catch (error) {
         toast.error(
-          t("prompts.shellWrapperInstructionsFailed", {
+          t("claudeAppendInstructions.shellWrapperInstructionsFailed", {
+            defaultValue: "无法加载手动配置：{{error}}",
             error: errorMessage(error),
           }),
         );
@@ -122,7 +133,8 @@ export function ShellWrapperCard({ appType }: ShellWrapperCardProps) {
       window.setTimeout(() => setCopied(false), 2000);
     } catch (error) {
       toast.error(
-        t("prompts.shellWrapperCopyFailed", {
+        t("claudeAppendInstructions.shellWrapperCopyFailed", {
+          defaultValue: "无法复制配置：{{error}}",
           error: errorMessage(error),
         }),
       );
@@ -135,7 +147,9 @@ export function ShellWrapperCard({ appType }: ShellWrapperCardProps) {
         <div className="flex items-center gap-2">
           <Terminal className="h-4 w-4 animate-pulse text-muted-foreground" />
           <span className="text-sm text-muted-foreground">
-            {t("prompts.shellWrapperChecking")}
+            {t("claudeAppendInstructions.shellWrapperChecking", {
+              defaultValue: "正在检查 Shell 集成...",
+            })}
           </span>
         </div>
       </div>
@@ -148,7 +162,9 @@ export function ShellWrapperCard({ appType }: ShellWrapperCardProps) {
         <div className="flex min-w-0 items-center gap-2">
           <Terminal className="h-4 w-4 shrink-0 text-muted-foreground" />
           <span className="truncate text-sm font-medium text-foreground">
-            {t("prompts.shellWrapperTitle")}
+            {t("claudeAppendInstructions.shellWrapperTitle", {
+              defaultValue: "Claude Shell 集成",
+            })}
           </span>
           {status?.shellType && (
             <span className="shrink-0 text-xs text-muted-foreground">
@@ -161,28 +177,36 @@ export function ShellWrapperCard({ appType }: ShellWrapperCardProps) {
           <div className="flex shrink-0 items-center gap-1.5 text-amber-600 dark:text-amber-400">
             <AlertCircle className="h-4 w-4" />
             <span className="text-xs font-medium">
-              {t("prompts.shellWrapperConflict")}
+              {t("claudeAppendInstructions.shellWrapperConflict", {
+                defaultValue: "检测到外部 Wrapper",
+              })}
             </span>
           </div>
         ) : status?.needsUpgrade ? (
           <div className="flex shrink-0 items-center gap-1.5 text-amber-600 dark:text-amber-400">
             <AlertCircle className="h-4 w-4" />
             <span className="text-xs font-medium">
-              {t("prompts.shellWrapperNeedsUpgrade")}
+              {t("claudeAppendInstructions.shellWrapperNeedsUpgrade", {
+                defaultValue: "需要升级",
+              })}
             </span>
           </div>
         ) : status?.installed ? (
           <div className="flex shrink-0 items-center gap-1.5 text-green-600 dark:text-green-400">
             <CheckCircle2 className="h-4 w-4" />
             <span className="text-xs font-medium">
-              {t("prompts.shellWrapperInstalled")}
+              {t("claudeAppendInstructions.shellWrapperInstalled", {
+                defaultValue: "已安装",
+              })}
             </span>
           </div>
         ) : (
           <div className="flex shrink-0 items-center gap-1.5 text-amber-600 dark:text-amber-400">
             <AlertCircle className="h-4 w-4" />
             <span className="text-xs font-medium">
-              {t("prompts.shellWrapperNotInstalled")}
+              {t("claudeAppendInstructions.shellWrapperNotInstalled", {
+                defaultValue: "未安装",
+              })}
             </span>
           </div>
         )}
@@ -190,12 +214,24 @@ export function ShellWrapperCard({ appType }: ShellWrapperCardProps) {
 
       <p className="text-xs leading-relaxed text-muted-foreground">
         {status?.conflictingWrapper
-          ? t("prompts.shellWrapperConflictHint")
+          ? t("claudeAppendInstructions.shellWrapperConflictHint", {
+              defaultValue:
+                "claude-keysmith Wrapper 已在管理 Claude Code，CC Switch 不会覆盖它的运行时指令配置。",
+            })
           : status?.needsUpgrade
-            ? t("prompts.shellWrapperNeedsUpgradeHint")
+            ? t("claudeAppendInstructions.shellWrapperNeedsUpgradeHint", {
+                defaultValue:
+                  "升级旧版 CC Switch Wrapper，避免重复或过时的启动行为。",
+              })
             : status?.installed
-              ? t("prompts.shellWrapperInstalledHint")
-              : t("prompts.shellWrapperNotInstalledHint")}
+              ? t("claudeAppendInstructions.shellWrapperInstalledHint", {
+                  defaultValue:
+                    "从终端启动 Claude Code 时会加载当前启用的追加指令文件。",
+                })
+              : t("claudeAppendInstructions.shellWrapperNotInstalledHint", {
+                  defaultValue:
+                    "安装 Shell 集成后，Claude Code 启动时会应用当前启用的追加指令。",
+                })}
       </p>
 
       <div className="flex flex-wrap items-center gap-2">
@@ -209,11 +245,19 @@ export function ShellWrapperCard({ appType }: ShellWrapperCardProps) {
             >
               {installing
                 ? status?.needsUpgrade
-                  ? t("prompts.shellWrapperUpdating")
-                  : t("prompts.shellWrapperInstalling")
+                  ? t("claudeAppendInstructions.shellWrapperUpdating", {
+                      defaultValue: "升级中...",
+                    })
+                  : t("claudeAppendInstructions.shellWrapperInstalling", {
+                      defaultValue: "安装中...",
+                    })
                 : status?.needsUpgrade
-                  ? t("prompts.shellWrapperUpgrade")
-                  : t("prompts.shellWrapperInstall")}
+                  ? t("claudeAppendInstructions.shellWrapperUpgrade", {
+                      defaultValue: "升级",
+                    })
+                  : t("claudeAppendInstructions.shellWrapperInstall", {
+                      defaultValue: "安装",
+                    })}
             </Button>
           )}
 
@@ -227,8 +271,12 @@ export function ShellWrapperCard({ appType }: ShellWrapperCardProps) {
             className="text-red-600 hover:text-red-600 dark:text-red-400"
           >
             {installing
-              ? t("prompts.shellWrapperProcessing")
-              : t("prompts.shellWrapperUninstall")}
+              ? t("claudeAppendInstructions.shellWrapperProcessing", {
+                  defaultValue: "处理中...",
+                })
+              : t("claudeAppendInstructions.shellWrapperUninstall", {
+                  defaultValue: "卸载",
+                })}
           </Button>
         )}
 
@@ -239,8 +287,12 @@ export function ShellWrapperCard({ appType }: ShellWrapperCardProps) {
           onClick={handleShowInstructions}
         >
           {showInstructions
-            ? t("prompts.shellWrapperHideInstructions")
-            : t("prompts.shellWrapperShowInstructions")}
+            ? t("claudeAppendInstructions.shellWrapperHideInstructions", {
+                defaultValue: "隐藏配置",
+              })
+            : t("claudeAppendInstructions.shellWrapperShowInstructions", {
+                defaultValue: "查看配置",
+              })}
         </Button>
       </div>
 
@@ -248,7 +300,9 @@ export function ShellWrapperCard({ appType }: ShellWrapperCardProps) {
         <div className="space-y-2 border-t border-border-default pt-3">
           <div className="flex items-center justify-between gap-3">
             <span className="text-xs font-medium text-foreground">
-              {t("prompts.shellWrapperInstructions")}
+              {t("claudeAppendInstructions.shellWrapperInstructions", {
+                defaultValue: "手动配置",
+              })}
             </span>
             <Button
               type="button"
@@ -261,7 +315,11 @@ export function ShellWrapperCard({ appType }: ShellWrapperCardProps) {
               ) : (
                 <Copy className="mr-1 h-3 w-3" />
               )}
-              {copied ? t("prompts.shellWrapperCopied") : t("common.copy")}
+              {copied
+                ? t("claudeAppendInstructions.shellWrapperCopied", {
+                    defaultValue: "已复制",
+                  })
+                : t("common.copy")}
             </Button>
           </div>
           <pre className="max-h-64 overflow-auto rounded bg-gray-950 p-3 text-xs text-gray-100">
@@ -272,7 +330,10 @@ export function ShellWrapperCard({ appType }: ShellWrapperCardProps) {
 
       {status?.configFile && (
         <div className="break-all text-xs text-muted-foreground">
-          {t("prompts.shellWrapperConfigFile")}: {status.configFile}
+          {t("claudeAppendInstructions.shellWrapperConfigFile", {
+            defaultValue: "配置文件",
+          })}
+          : {status.configFile}
         </div>
       )}
     </div>

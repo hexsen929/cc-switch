@@ -6,7 +6,8 @@ use super::prompt::import_prompt_from_deeplink;
 use super::provider::parse_and_merge_config;
 use super::utils::{infer_homepage_from_endpoint, validate_url};
 use super::DeepLinkImportRequest;
-use crate::prompt_files::{append_prompt_file_path, prompt_file_path};
+use crate::claude_append_instructions::runtime_projection_path;
+use crate::prompt_files::prompt_file_path;
 use crate::AppType;
 use crate::{store::AppState, Database};
 use base64::prelude::*;
@@ -855,9 +856,7 @@ fn test_import_prompt_allows_space_in_base64_content() {
 fn test_disabled_claude_prompt_import_does_not_rewrite_live_files() {
     let _test_home = TestHomeGuard::new();
     let main_path = prompt_file_path(&AppType::Claude).expect("resolve main prompt path");
-    let append_path = append_prompt_file_path(&AppType::Claude)
-        .expect("resolve append prompt path")
-        .expect("Claude append path");
+    let append_path = runtime_projection_path();
     fs::create_dir_all(main_path.parent().expect("main prompt parent"))
         .expect("create Claude config directory");
     fs::create_dir_all(append_path.parent().expect("append prompt parent"))
@@ -879,7 +878,16 @@ fn test_disabled_claude_prompt_import_does_not_rewrite_live_files() {
     let prompt = prompts.get(&prompt_id).expect("prompt saved");
 
     assert!(!prompt.enabled);
-    assert_eq!(prompt.append_content.as_deref(), Some("imported append"));
+    let append_config = crate::claude_append_instructions::get_config(&state.db)
+        .expect("get append instructions config");
+    assert_eq!(append_config.files.len(), 1);
+    assert_eq!(append_config.active_file, None);
+    let imported_append_path = crate::config::get_claude_config_dir()
+        .join(append_config.files[0].trim_start_matches("./"));
+    assert_eq!(
+        fs::read_to_string(imported_append_path).unwrap(),
+        "imported append"
+    );
     assert_eq!(fs::read_to_string(main_path).unwrap(), "existing main");
     assert_eq!(fs::read_to_string(append_path).unwrap(), "existing append");
 }

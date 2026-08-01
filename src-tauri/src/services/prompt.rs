@@ -6,9 +6,9 @@ use crate::config::write_text_file;
 use crate::error::AppError;
 use crate::prompt::Prompt;
 use crate::prompt_files::{
-    append_prompt_file_path, claude_managed_prompt_file_path,
-    claude_managed_prompt_path_from_target, ensure_claude_managed_import, prompt_file_path,
-    read_live_prompt_content, remove_claude_managed_import,
+    claude_managed_prompt_file_path, claude_managed_prompt_path_from_target,
+    ensure_claude_managed_import, prompt_file_path, read_live_prompt_content,
+    remove_claude_managed_import,
 };
 use crate::provider::{Provider, ProviderPromptOverrideMode};
 use crate::store::AppState;
@@ -29,20 +29,6 @@ fn read_optional_text_file(path: &Path) -> Result<Option<String>, AppError> {
     std::fs::read_to_string(path)
         .map(Some)
         .map_err(|e| AppError::io(path, e))
-}
-
-fn read_append_prompt_content(app: &AppType) -> Result<Option<String>, AppError> {
-    let Some(path) = append_prompt_file_path(app)? else {
-        return Ok(None);
-    };
-    read_optional_text_file(&path)
-}
-
-fn should_backfill_append_content(
-    stored_content: Option<&str>,
-    live_content: Option<&str>,
-) -> bool {
-    live_content.is_some_and(|content| stored_content.is_some() || !content.trim().is_empty())
 }
 
 fn is_direct_prompt_owned_memory(
@@ -97,25 +83,6 @@ impl PromptService {
                 .as_ref()
                 .and_then(|prompt_id| prompts.get(prompt_id).cloned())
                 .or(global_enabled),
-        }
-    }
-
-    /// `None` means the append file is not managed yet and must be preserved.
-    /// `Some("")` explicitly disables the appended prompt for the active preset.
-    fn resolve_append_file_content(
-        prompts: &IndexMap<String, Prompt>,
-        effective_prompt: Option<&Prompt>,
-    ) -> Option<String> {
-        let append_is_managed = prompts
-            .values()
-            .any(|prompt| prompt.append_content.is_some());
-
-        match effective_prompt {
-            Some(prompt) => prompt
-                .append_content
-                .clone()
-                .or_else(|| append_is_managed.then(String::new)),
-            None => append_is_managed.then(String::new),
         }
     }
 
@@ -222,15 +189,6 @@ impl PromptService {
             }
         }
 
-        // 对于 Claude 应用，按显式管理状态同步 append-prompt 文件。
-        if let Some(append_path) = append_prompt_file_path(&app)? {
-            if let Some(append_content) =
-                Self::resolve_append_file_content(&prompts, effective_prompt.as_ref())
-            {
-                write_text_file(&append_path, &append_content)?;
-            }
-        }
-
         Ok(())
     }
 
@@ -258,8 +216,7 @@ impl PromptService {
         let saved_prompt_is_effective = previous_effective_id.as_deref() == Some(saved_id.as_str())
             || current_effective_id.as_deref() == Some(saved_id.as_str());
 
-        // Saving a disabled, non-effective preset must not claim ownership of
-        // or clear an existing append-prompt file.
+        // Saving a disabled, non-effective preset must not rewrite the live prompt file.
         if effective_prompt_changed || saved_prompt_is_effective {
             Self::sync_effective_prompt_to_file(state, app)?;
         }
@@ -284,15 +241,11 @@ impl PromptService {
     pub fn enable_prompt(state: &AppState, app: AppType, id: &str) -> Result<(), AppError> {
         // 回填当前 live 文件内容到实际生效的提示词，或创建备份。
         let live_content = read_live_prompt_content(&app)?;
-        let live_append_content = read_append_prompt_content(&app)?;
         let has_live_content = live_content
             .as_deref()
             .is_some_and(|content| !content.trim().is_empty());
-        let has_live_append = live_append_content
-            .as_deref()
-            .is_some_and(|content| !content.trim().is_empty());
 
-        if live_content.is_some() || live_append_content.is_some() {
+        if live_content.is_some() {
             let mut prompts = state.db.get_prompts(app.as_str())?;
             let current_provider = Self::get_current_provider_for_app(state, &app)?;
             let effective_prompt_id =
@@ -317,33 +270,16 @@ impl PromptService {
                     }
                 }
 
-                if matches!(&app, AppType::Claude) {
-                    if let Some(live_append) = live_append_content.as_ref() {
-                        if should_backfill_append_content(
-                            effective_prompt.append_content.as_deref(),
-                            Some(live_append),
-                        ) && effective_prompt.append_content.as_deref()
-                            != Some(live_append.as_str())
-                        {
-                            effective_prompt.append_content = Some(live_append.clone());
-                            changed = true;
-                        }
-                    }
-                }
-
                 if changed {
                     effective_prompt.updated_at = Some(get_unix_timestamp()?);
                     log::info!("回填 live 提示词内容到当前生效项: {effective_id}");
                     state.db.save_prompt(app.as_str(), effective_prompt)?;
                 }
-            } else if has_live_content || has_live_append {
+            } else if has_live_content {
                 let content = live_content.unwrap_or_default();
-                let append_content = live_append_content.filter(|value| !value.trim().is_empty());
-                let content_exists = prompts.values().any(|prompt| {
-                    prompt.content.trim() == content.trim()
-                        && prompt.append_content.as_deref().map(str::trim)
-                            == append_content.as_deref().map(str::trim)
-                });
+                let content_exists = prompts
+                    .values()
+                    .any(|prompt| prompt.content.trim() == content.trim());
 
                 if !content_exists {
                     let timestamp = get_unix_timestamp()?;
@@ -356,7 +292,6 @@ impl PromptService {
                         ),
                         content,
                         description: Some("自动备份的原始提示词".to_string()),
-                        append_content,
                         managed_import: false,
                         enabled: false,
                         created_at: Some(timestamp),
@@ -394,13 +329,7 @@ impl PromptService {
 
     pub fn import_from_file(state: &AppState, app: AppType) -> Result<String, AppError> {
         let content = read_live_prompt_content(&app)?.unwrap_or_default();
-        let append_content = read_append_prompt_content(&app)?;
-
-        if content.trim().is_empty()
-            && append_content
-                .as_deref()
-                .map_or(true, |value| value.trim().is_empty())
-        {
+        if content.trim().is_empty() {
             return Err(AppError::Message("提示词文件不存在".to_string()));
         }
         let timestamp = get_unix_timestamp()?;
@@ -414,7 +343,6 @@ impl PromptService {
             ),
             content,
             description: Some("从现有配置文件导入".to_string()),
-            append_content,
             managed_import: false,
             enabled: false,
             created_at: Some(timestamp),
@@ -444,13 +372,7 @@ impl PromptService {
 
         let file_path = prompt_file_path(&app)?;
         let content = read_live_prompt_content(&app)?.unwrap_or_default();
-        let append_content = read_append_prompt_content(&app)?;
-
-        if content.trim().is_empty()
-            && append_content
-                .as_deref()
-                .map_or(true, |value| value.trim().is_empty())
-        {
+        if content.trim().is_empty() {
             return Ok(0);
         }
 
@@ -467,7 +389,6 @@ impl PromptService {
             ),
             content,
             description: Some("Automatically imported on first launch".to_string()),
-            append_content,
             managed_import: false,
             enabled: true, // 首次导入时自动启用
             created_at: Some(timestamp),
@@ -485,14 +406,19 @@ impl PromptService {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::claude_append_instructions::{
+        runtime_projection_path, ClaudeAppendInstructionsConfig,
+    };
+    use crate::config::{get_claude_config_dir, write_text_file};
+    use crate::Database;
+    use std::sync::Arc;
 
-    fn prompt(id: &str, append_content: Option<&str>) -> Prompt {
+    fn prompt(id: &str) -> Prompt {
         Prompt {
             id: id.to_string(),
             name: id.to_string(),
             content: "main".to_string(),
             description: None,
-            append_content: append_content.map(str::to_string),
             managed_import: false,
             enabled: true,
             created_at: None,
@@ -501,54 +427,9 @@ mod tests {
     }
 
     #[test]
-    fn unmanaged_append_file_is_left_untouched() {
-        let mut prompts = IndexMap::new();
-        prompts.insert("legacy".to_string(), prompt("legacy", None));
-
-        assert_eq!(
-            PromptService::resolve_append_file_content(&prompts, prompts.get("legacy")),
-            None
-        );
-        assert_eq!(
-            PromptService::resolve_append_file_content(&prompts, None),
-            None
-        );
-    }
-
-    #[test]
-    fn managed_append_file_is_cleared_when_disabled() {
-        let mut prompts = IndexMap::new();
-        prompts.insert("active".to_string(), prompt("active", Some("extra")));
-        prompts.insert("plain".to_string(), prompt("plain", None));
-
-        assert_eq!(
-            PromptService::resolve_append_file_content(&prompts, prompts.get("active")),
-            Some("extra".to_string())
-        );
-        assert_eq!(
-            PromptService::resolve_append_file_content(&prompts, prompts.get("plain")),
-            Some(String::new())
-        );
-        assert_eq!(
-            PromptService::resolve_append_file_content(&prompts, None),
-            Some(String::new())
-        );
-    }
-
-    #[test]
-    fn missing_live_append_file_does_not_clear_saved_content() {
-        assert!(!should_backfill_append_content(Some("keep this"), None));
-        assert!(should_backfill_append_content(Some("keep this"), Some("")));
-        assert!(should_backfill_append_content(
-            None,
-            Some("external content")
-        ));
-    }
-
-    #[test]
     fn direct_prompt_content_is_moved_behind_managed_import() {
         let mut prompts = IndexMap::new();
-        prompts.insert("old".to_string(), prompt("old", None));
+        prompts.insert("old".to_string(), prompt("old"));
 
         assert!(is_direct_prompt_owned_memory(&prompts, "main", "next"));
         assert!(is_direct_prompt_owned_memory(&prompts, "next", "next"));
@@ -565,5 +446,64 @@ mod tests {
         old.managed_import = false;
         old.enabled = false;
         assert!(!is_direct_prompt_owned_memory(&prompts, "main", "next"));
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn ordinary_claude_prompt_changes_do_not_touch_append_instructions() {
+        let temp = tempfile::tempdir().expect("create isolated test home");
+        let previous_home = std::env::var_os("CC_SWITCH_TEST_HOME");
+        std::env::set_var("CC_SWITCH_TEST_HOME", temp.path());
+
+        let db = Arc::new(Database::memory().expect("create memory database"));
+        let state = AppState::new(db.clone());
+        let append_source = get_claude_config_dir().join("append-source.md");
+        write_text_file(&append_source, "append instructions\n").expect("write append source");
+        let append_config = ClaudeAppendInstructionsConfig {
+            files: vec!["./append-source.md".to_string()],
+            active_file: Some("./append-source.md".to_string()),
+        };
+        crate::claude_append_instructions::update_config(&db, append_config)
+            .expect("enable independent append instructions");
+        assert_eq!(
+            std::fs::read_to_string(runtime_projection_path()).expect("read initial projection"),
+            "append instructions\n"
+        );
+
+        let mut ordinary = prompt("ordinary");
+        ordinary.content = "ordinary CLAUDE.md prompt".to_string();
+        ordinary.enabled = false;
+        PromptService::upsert_prompt(&state, AppType::Claude, "ordinary", ordinary)
+            .expect("save ordinary prompt");
+        assert_eq!(
+            std::fs::read_to_string(runtime_projection_path()).expect("read projection after save"),
+            "append instructions\n"
+        );
+
+        PromptService::enable_prompt(&state, AppType::Claude, "ordinary")
+            .expect("enable ordinary prompt");
+        assert_eq!(
+            std::fs::read_to_string(runtime_projection_path())
+                .expect("read projection after enable"),
+            "append instructions\n"
+        );
+
+        let mut second = prompt("second");
+        second.enabled = false;
+        PromptService::upsert_prompt(&state, AppType::Claude, "second", second)
+            .expect("save second ordinary prompt");
+        PromptService::delete_prompt(&state, AppType::Claude, "second")
+            .expect("delete ordinary prompt");
+        assert_eq!(
+            std::fs::read_to_string(runtime_projection_path())
+                .expect("read projection after delete"),
+            "append instructions\n"
+        );
+
+        if let Some(previous_home) = previous_home {
+            std::env::set_var("CC_SWITCH_TEST_HOME", previous_home);
+        } else {
+            std::env::remove_var("CC_SWITCH_TEST_HOME");
+        }
     }
 }

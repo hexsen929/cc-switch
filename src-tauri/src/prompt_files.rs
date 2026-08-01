@@ -52,22 +52,6 @@ pub fn prompt_file_path(app: &AppType) -> Result<PathBuf, AppError> {
     Ok(base_dir.join(filename))
 }
 
-/// 返回 CC Switch 管理的 Claude Code append-prompt 文件路径
-/// (~/.claude/cc-switch/append-prompt.md)
-/// 仅对 Claude 应用有效，其他应用返回 None
-pub fn append_prompt_file_path(app: &AppType) -> Result<Option<PathBuf>, AppError> {
-    if !matches!(app, AppType::Claude) {
-        return Ok(None);
-    }
-
-    let base_dir = get_base_dir_with_fallback(get_claude_settings_path(), ".claude")?;
-    // Keep the generated prompt separate from third-party tools such as
-    // claude-keysmith. Their files may use the same CLI flag but must remain
-    // under their own ownership.
-    let cc_switch_dir = base_dir.join("cc-switch");
-    Ok(Some(cc_switch_dir.join("append-prompt.md")))
-}
-
 fn claude_config_dir() -> Result<PathBuf, AppError> {
     prompt_file_path(&AppType::Claude)?
         .parent()

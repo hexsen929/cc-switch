@@ -2,6 +2,7 @@
 
 mod auth;
 mod balance;
+mod claude_append_instructions;
 mod codex_oauth;
 mod coding_plan;
 mod config;
@@ -41,6 +42,7 @@ mod workspace;
 
 pub use auth::*;
 pub use balance::*;
+pub use claude_append_instructions::*;
 pub use codex_oauth::*;
 pub use coding_plan::*;
 pub use config::*;

@@ -25,6 +25,7 @@ import {
   Shield,
   Cpu,
   LayoutDashboard,
+  FileCog,
 } from "lucide-react";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import type { Provider, VisibleApps } from "@/types";
@@ -72,6 +73,9 @@ import { FailoverToggle } from "@/components/proxy/FailoverToggle";
 import UsageScriptModal from "@/components/UsageScriptModal";
 import UnifiedMcpPanel from "@/components/mcp/UnifiedMcpPanel";
 import PromptPanel from "@/components/prompts/PromptPanel";
+import ClaudeAppendInstructionsPanel, {
+  type ClaudeAppendInstructionsPanelHandle,
+} from "@/components/claude/ClaudeAppendInstructionsPanel";
 import {
   SkillsPage,
   getSkillsPageHeaderActions,
@@ -100,6 +104,7 @@ type View =
   | "providers"
   | "settings"
   | "prompts"
+  | "claudeAppendInstructions"
   | "skills"
   | "skillsDiscovery"
   | "mcp"
@@ -147,6 +152,7 @@ const VALID_VIEWS: View[] = [
   "providers",
   "settings",
   "prompts",
+  "claudeAppendInstructions",
   "skills",
   "skillsDiscovery",
   "mcp",
@@ -236,6 +242,12 @@ function App() {
     }
   }, [sharedFeatureApp, currentView]);
 
+  useEffect(() => {
+    if (currentView === "claudeAppendInstructions" && activeApp !== "claude") {
+      setCurrentView("providers");
+    }
+  }, [activeApp, currentView]);
+
   const [editingProvider, setEditingProvider] = useState<Provider | null>(null);
   const [usageProvider, setUsageProvider] = useState<Provider | null>(null);
   const [confirmAction, setConfirmAction] = useState<{
@@ -251,6 +263,8 @@ function App() {
   useUsageCacheBridge();
 
   const promptPanelRef = useRef<any>(null);
+  const claudeAppendInstructionsPanelRef =
+    useRef<ClaudeAppendInstructionsPanelHandle>(null);
   const mcpPanelRef = useRef<any>(null);
   const skillsPageRef = useRef<any>(null);
   const unifiedSkillsPanelRef = useRef<any>(null);
@@ -912,6 +926,13 @@ function App() {
               appId={sharedFeatureApp}
             />
           );
+        case "claudeAppendInstructions":
+          return (
+            <ClaudeAppendInstructionsPanel
+              ref={claudeAppendInstructionsPanelRef}
+              open={true}
+            />
+          );
         case "hermesMemory":
           return <HermesMemoryPanel />;
         case "skills":
@@ -1184,6 +1205,10 @@ function App() {
                     t("prompts.title", {
                       appName: t(`apps.${sharedFeatureApp}`),
                     })}
+                  {currentView === "claudeAppendInstructions" &&
+                    t("claudeAppendInstructions.title", {
+                      defaultValue: "Claude 追加指令文件",
+                    })}
                   {currentView === "skills" && t("skills.title")}
                   {currentView === "skillsDiscovery" && t("skills.title")}
                   {currentView === "mcp" && t("mcp.unifiedPanel.title")}
@@ -1304,6 +1329,21 @@ function App() {
                   >
                     <Plus className="w-4 h-4 mr-2" />
                     {t("prompts.add")}
+                  </Button>
+                )}
+                {currentView === "claudeAppendInstructions" && (
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    onClick={() =>
+                      claudeAppendInstructionsPanelRef.current?.openAdd()
+                    }
+                    className="hover:bg-black/5 dark:hover:bg-white/5"
+                  >
+                    <Plus className="w-4 h-4 mr-2" />
+                    {t("claudeAppendInstructions.add", {
+                      defaultValue: "新建文件",
+                    })}
                   </Button>
                 )}
                 {currentView === "mcp" && (
@@ -1542,6 +1582,21 @@ function App() {
                               >
                                 <Book className="w-4 h-4" />
                               </Button>
+                              {activeApp === "claude" && (
+                                <Button
+                                  variant="ghost"
+                                  size="sm"
+                                  onClick={() =>
+                                    setCurrentView("claudeAppendInstructions")
+                                  }
+                                  className="text-muted-foreground hover:text-foreground hover:bg-black/5 dark:hover:bg-white/5 w-8 px-2"
+                                  title={t("claudeAppendInstructions.manage", {
+                                    defaultValue: "Claude 追加指令",
+                                  })}
+                                >
+                                  <FileCog className="w-4 h-4" />
+                                </Button>
+                              )}
                               <Button
                                 variant="ghost"
                                 size="sm"

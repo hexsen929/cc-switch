@@ -82,19 +82,40 @@ pub fn import_prompt_from_deeplink(
         name: name.clone(),
         content,
         description: request.description,
-        append_content,
         managed_import: false,
         enabled: false, // Always start as disabled, will be enabled later if needed
         created_at: Some(timestamp),
         updated_at: Some(timestamp),
     };
 
-    // A disabled import is data only and must not rewrite the current live files.
+    // A disabled import is data only and must not rewrite the current live prompt file.
     state.db.save_prompt(app_type.as_str(), &prompt)?;
 
     // If enabled flag is set, enable this prompt (which will disable others)
     if should_enable {
-        PromptService::enable_prompt(state, app_type, &id)?;
+        if let Err(error) = PromptService::enable_prompt(state, app_type, &id) {
+            if let Err(delete_error) = state.db.delete_prompt(app_str, &id) {
+                log::error!("启用 Deep Link Prompt 失败后清理 Prompt 记录失败: {delete_error}");
+            }
+            return Err(error);
+        }
+    }
+
+    if let Some(append_content) = append_content {
+        if let Err(error) = crate::claude_append_instructions::import_legacy_content(
+            state.db.as_ref(),
+            &format!("deeplink-{id}"),
+            &append_content,
+            should_enable,
+        ) {
+            if let Err(delete_error) = state.db.delete_prompt(app_str, &id) {
+                log::error!("导入 Claude 追加指令失败后清理 Prompt 记录失败: {delete_error}");
+            }
+            return Err(error);
+        }
+    }
+
+    if should_enable {
         log::info!("Successfully imported and enabled prompt '{name}' for {app_str}");
     } else {
         log::info!("Successfully imported prompt '{name}' for {app_str} (disabled)");

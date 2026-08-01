@@ -775,6 +775,49 @@ fn dry_run_validates_schema_compatibility() {
 }
 
 #[test]
+fn json_migration_keeps_legacy_claude_append_data_out_of_prompt_objects() {
+    let value = json!({
+        "version": 2,
+        "prompts": {
+            "claude": {
+                "prompts": {
+                    "legacy": {
+                        "id": "legacy",
+                        "name": "Legacy",
+                        "content": "ordinary",
+                        "appendContent": "separate instructions",
+                        "enabled": true
+                    }
+                }
+            }
+        }
+    });
+    let legacy = crate::app_config::collect_legacy_claude_append_instructions(&value);
+    let config: MultiAppConfig = serde_json::from_value(value).expect("parse old config");
+    let db = Database::memory().expect("create memory db");
+
+    db.migrate_from_json_with_legacy_append(&config, &legacy)
+        .expect("migrate old config");
+
+    let prompt = db
+        .get_prompts("claude")
+        .expect("get prompts")
+        .shift_remove("legacy")
+        .expect("legacy prompt migrated");
+    let prompt_json = serde_json::to_value(prompt).expect("serialize prompt");
+    assert!(prompt_json.get("appendContent").is_none());
+    assert_eq!(
+        db.get_legacy_claude_append_contents()
+            .expect("get migration-only append data"),
+        vec![crate::database::dao::prompts::LegacyClaudeAppendContent {
+            prompt_id: "legacy".to_string(),
+            enabled: true,
+            content: "separate instructions".to_string(),
+        }]
+    );
+}
+
+#[test]
 fn schema_model_pricing_is_seeded_on_init() {
     let db = Database::memory().expect("create memory db");
 

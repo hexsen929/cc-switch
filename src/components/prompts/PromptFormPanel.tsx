@@ -39,10 +39,6 @@ const PromptFormPanel: React.FC<PromptFormPanelProps> = ({
   const [name, setName] = useState("");
   const [description, setDescription] = useState("");
   const [content, setContent] = useState("");
-  const [appendContent, setAppendContent] = useState("");
-  const [appendContentManaged, setAppendContentManaged] = useState(
-    initialData?.appendContent !== undefined || !initialData,
-  );
   const [managedImport, setManagedImport] = useState(
     Boolean(initialData?.managedImport),
   );
@@ -69,8 +65,6 @@ const PromptFormPanel: React.FC<PromptFormPanelProps> = ({
       setName(initialData.name);
       setDescription(initialData.description || "");
       setContent(initialData.content);
-      setAppendContent(initialData.appendContent || "");
-      setAppendContentManaged(initialData.appendContent !== undefined);
       setManagedImport(Boolean(initialData.managedImport));
     }
   }, [initialData]);
@@ -89,10 +83,6 @@ const PromptFormPanel: React.FC<PromptFormPanelProps> = ({
         name: name.trim(),
         description: description.trim() || undefined,
         content: content.trim(),
-        appendContent:
-          appId === "claude" && appendContentManaged
-            ? appendContent.trim()
-            : undefined,
         managedImport: appId === "claude" && managedImport,
         enabled: initialData?.enabled || false,
         createdAt: initialData?.createdAt || timestamp,
@@ -186,30 +176,6 @@ const PromptFormPanel: React.FC<PromptFormPanelProps> = ({
               checked={managedImport}
               onCheckedChange={setManagedImport}
               className="shrink-0"
-            />
-          </div>
-        )}
-
-        {appId === "claude" && (
-          <div>
-            <Label
-              htmlFor="appendContent"
-              className="block mb-2 text-foreground"
-            >
-              {t("prompts.appendContent")}
-            </Label>
-            <div className="text-sm text-muted-foreground mb-2">
-              {t("prompts.appendContentHint")}
-            </div>
-            <MarkdownEditor
-              value={appendContent}
-              onChange={(value) => {
-                setAppendContent(value);
-                setAppendContentManaged(true);
-              }}
-              placeholder={t("prompts.appendContentPlaceholder")}
-              darkMode={isDarkMode}
-              minHeight="167px"
             />
           </div>
         )}

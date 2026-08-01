@@ -60,7 +60,6 @@ fn prompt(id: &str, enabled: bool) -> Prompt {
         name: id.to_uppercase(),
         content: format!("# prompt {id}\n"),
         description: None,
-        append_content: None,
         managed_import: false,
         enabled,
         created_at: Some(1_000),

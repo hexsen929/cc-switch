@@ -1,6 +1,7 @@
 mod app_config;
 mod app_store;
 mod auto_launch;
+mod claude_append_instructions;
 mod claude_desktop_config;
 mod claude_mcp;
 mod claude_plugin;
@@ -46,7 +47,10 @@ pub use commands::open_provider_terminal;
 pub use commands::*;
 pub use config::{get_claude_mcp_path, get_claude_settings_path, read_json_file};
 pub use database::{Database, Profile};
-pub use deeplink::{import_provider_from_deeplink, parse_deeplink_url, DeepLinkImportRequest};
+pub use deeplink::{
+    import_prompt_from_deeplink, import_provider_from_deeplink, parse_deeplink_url,
+    DeepLinkImportRequest,
+};
 pub use error::AppError;
 pub use grok_config::get_grok_config_path;
 pub use mcp::{
@@ -502,8 +506,17 @@ pub fn run() {
                 loop {
                     match crate::app_config::MultiAppConfig::load() {
                         Ok(config) => {
+                            let legacy_append = std::fs::read_to_string(&json_path)
+                                .ok()
+                                .and_then(|content| serde_json::from_str(&content).ok())
+                                .map(|value| {
+                                    crate::app_config::collect_legacy_claude_append_instructions(
+                                        &value,
+                                    )
+                                })
+                                .unwrap_or_default();
                             log::info!("✓ 配置文件加载成功");
-                            break Some(config);
+                            break Some((config, legacy_append));
                         }
                         Err(e) => {
                             log::error!("加载旧配置文件失败: {e}");
@@ -591,10 +604,10 @@ pub fn run() {
             }
 
             // 如果有预加载的配置，执行迁移
-            if let Some(config) = migration_config {
+            if let Some((config, legacy_append)) = migration_config {
                 log::info!("开始执行数据迁移...");
 
-                match db.migrate_from_json(&config) {
+                match db.migrate_from_json_with_legacy_append(&config, &legacy_append) {
                     Ok(_) => {
                         log::info!("✓ 配置迁移成功");
                         // 标记迁移成功，供前端显示 Toast
@@ -958,6 +971,12 @@ pub fn run() {
                         Err(e) => log::warn!("✗ Failed to import prompt for {}: {e}", app.as_str()),
                     }
                 }
+            }
+
+            if let Err(error) = crate::claude_append_instructions::sync_runtime_projection_on_startup(
+                &app_state.db,
+            ) {
+                log::warn!("✗ Failed to migrate legacy Claude append instructions: {error}");
             }
 
             // 迁移旧的 app_config_dir 配置到 Store
@@ -1380,6 +1399,12 @@ pub fn run() {
             commands::enable_prompt,
             commands::import_prompt_from_file,
             commands::get_current_prompt_file_content,
+            commands::get_claude_append_instructions_config,
+            commands::set_claude_append_instructions_config,
+            commands::inspect_claude_append_instructions_file,
+            commands::read_claude_append_instructions_file,
+            commands::write_claude_append_instructions_file,
+            commands::delete_claude_append_instructions_file,
             // Profile management (项目配置方案)
             commands::list_profiles,
             commands::create_profile,

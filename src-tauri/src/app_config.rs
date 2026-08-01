@@ -4,6 +4,46 @@ use std::str::FromStr;
 
 use crate::services::skill::SkillStore;
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LegacyClaudeAppendInstruction {
+    pub prompt_id: String,
+    pub enabled: bool,
+    pub content: String,
+}
+
+pub(crate) fn collect_legacy_claude_append_instructions(
+    value: &serde_json::Value,
+) -> Vec<LegacyClaudeAppendInstruction> {
+    let Some(prompts) = value
+        .get("prompts")
+        .and_then(|root| root.get("claude"))
+        .and_then(|claude| claude.get("prompts"))
+        .and_then(serde_json::Value::as_object)
+    else {
+        return Vec::new();
+    };
+
+    prompts
+        .iter()
+        .filter_map(|(prompt_id, prompt)| {
+            let prompt = prompt.as_object()?;
+            let content = prompt
+                .get("appendContent")
+                .or_else(|| prompt.get("append_content"))?
+                .as_str()?
+                .to_string();
+            Some(LegacyClaudeAppendInstruction {
+                prompt_id: prompt_id.clone(),
+                enabled: prompt
+                    .get("enabled")
+                    .and_then(serde_json::Value::as_bool)
+                    .unwrap_or(false),
+                content,
+            })
+        })
+        .collect()
+}
+
 /// MCP 服务器应用状态（标记应用到哪些客户端）
 #[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
 pub struct McpApps {
@@ -361,7 +401,7 @@ pub struct PromptRoot {
 
 use crate::config::{copy_file, get_app_config_dir, get_app_config_path, write_json_file};
 use crate::error::AppError;
-use crate::prompt_files::{append_prompt_file_path, prompt_file_path, read_live_prompt_content};
+use crate::prompt_files::{prompt_file_path, read_live_prompt_content};
 use crate::provider::ProviderManager;
 
 /// 应用类型
@@ -798,27 +838,7 @@ impl MultiAppConfig {
             }
         };
 
-        let append_content = if let Some(append_path) = append_prompt_file_path(&app)? {
-            if append_path.exists() {
-                match std::fs::read_to_string(&append_path) {
-                    Ok(content) => Some(content),
-                    Err(e) => {
-                        log::warn!("读取追加提示词文件失败: {append_path:?}, 错误: {e}");
-                        return Ok(false);
-                    }
-                }
-            } else {
-                None
-            }
-        } else {
-            None
-        };
-
-        if content.trim().is_empty()
-            && append_content
-                .as_deref()
-                .map_or(true, |value| value.trim().is_empty())
-        {
+        if content.trim().is_empty() {
             log::debug!("提示词文件不存在或内容为空，跳过导入: {file_path:?}");
             return Ok(false);
         }
@@ -843,7 +863,6 @@ impl MultiAppConfig {
             ),
             content,
             description: Some("Automatically imported on first launch".to_string()),
-            append_content,
             managed_import: false,
             enabled: true, // 自动启用
             created_at: Some(timestamp),

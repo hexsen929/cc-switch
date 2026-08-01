@@ -1,6 +1,5 @@
-use crate::app_config::AppType;
+use crate::claude_append_instructions::runtime_projection_path;
 use crate::config::{atomic_write, get_home_dir};
-use crate::prompt_files::append_prompt_file_path;
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -103,9 +102,7 @@ fn get_shell_config_path() -> Result<(PathBuf, String), String> {
 }
 
 fn get_append_prompt_path() -> Result<PathBuf, String> {
-    append_prompt_file_path(&AppType::Claude)
-        .map_err(|error| error.to_string())?
-        .ok_or_else(|| "无法确定 Claude append-prompt 文件路径".to_string())
+    Ok(runtime_projection_path())
 }
 
 fn is_default_append_prompt_path(path: &Path) -> bool {

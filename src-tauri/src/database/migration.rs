@@ -10,12 +10,21 @@ use rusqlite::{params, Connection};
 impl Database {
     /// 从 MultiAppConfig 迁移数据到数据库
     pub fn migrate_from_json(&self, config: &MultiAppConfig) -> Result<(), AppError> {
+        self.migrate_from_json_with_legacy_append(config, &[])
+    }
+
+    /// Migrate the legacy Claude append field through its dedicated path.
+    pub fn migrate_from_json_with_legacy_append(
+        &self,
+        config: &MultiAppConfig,
+        legacy_append: &[crate::app_config::LegacyClaudeAppendInstruction],
+    ) -> Result<(), AppError> {
         let mut conn = lock_conn!(self.conn);
         let tx = conn
             .transaction()
             .map_err(|e| AppError::Database(e.to_string()))?;
 
-        Self::migrate_from_json_tx(&tx, config)?;
+        Self::migrate_from_json_tx(&tx, config, legacy_append)?;
 
         tx.commit()
             .map_err(|e| AppError::Database(format!("Commit migration failed: {e}")))?;
@@ -34,7 +43,7 @@ impl Database {
         let tx = conn
             .transaction()
             .map_err(|e| AppError::Database(e.to_string()))?;
-        Self::migrate_from_json_tx(&tx, config)?;
+        Self::migrate_from_json_tx(&tx, config, &[])?;
 
         // 显式 drop transaction 而不提交（内存数据库会被丢弃）
         drop(tx);
@@ -45,6 +54,7 @@ impl Database {
     fn migrate_from_json_tx(
         tx: &rusqlite::Transaction<'_>,
         config: &MultiAppConfig,
+        legacy_append: &[crate::app_config::LegacyClaudeAppendInstruction],
     ) -> Result<(), AppError> {
         // 1. 迁移 Providers
         Self::migrate_providers(tx, config)?;
@@ -53,7 +63,7 @@ impl Database {
         Self::migrate_mcp_servers(tx, config)?;
 
         // 3. 迁移 Prompts
-        Self::migrate_prompts(tx, config)?;
+        Self::migrate_prompts(tx, config, legacy_append)?;
 
         // 4. 迁移 Skills
         Self::migrate_skills(tx, config)?;
@@ -152,6 +162,7 @@ impl Database {
     fn migrate_prompts(
         tx: &rusqlite::Transaction<'_>,
         config: &MultiAppConfig,
+        legacy_append: &[crate::app_config::LegacyClaudeAppendInstruction],
     ) -> Result<(), AppError> {
         let migrate_app_prompts = |prompts_map: &std::collections::HashMap<
             String,
@@ -163,8 +174,8 @@ impl Database {
                 tx.execute(
                         "INSERT OR REPLACE INTO prompts (
                             id, app_type, name, content, description, enabled, created_at, updated_at,
-                            append_content, managed_import
-                        ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+                            managed_import
+                        ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
                         params![
                             id,
                             app_type,
@@ -174,7 +185,6 @@ impl Database {
                             prompt.enabled,
                             prompt.created_at,
                             prompt.updated_at,
-                            prompt.append_content,
                             prompt.managed_import,
                         ],
                     )
@@ -186,6 +196,20 @@ impl Database {
         migrate_app_prompts(&config.prompts.claude.prompts, "claude")?;
         migrate_app_prompts(&config.prompts.codex.prompts, "codex")?;
         migrate_app_prompts(&config.prompts.gemini.prompts, "gemini")?;
+
+        for legacy in legacy_append {
+            tx.execute(
+                "UPDATE prompts
+                 SET append_content = ?1
+                 WHERE app_type = 'claude' AND id = ?2",
+                params![legacy.content, legacy.prompt_id],
+            )
+            .map_err(|error| {
+                AppError::Database(format!(
+                    "Migrate legacy Claude append instructions failed: {error}"
+                ))
+            })?;
+        }
 
         Ok(())
     }
