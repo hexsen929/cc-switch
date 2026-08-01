@@ -1,10 +1,4 @@
-import React, {
-  useCallback,
-  useEffect,
-  useMemo,
-  useRef,
-  useState,
-} from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { open as openFile } from "@tauri-apps/plugin-dialog";
 import {
   CircleCheck,
@@ -13,6 +7,7 @@ import {
   FolderOpen,
   Loader2,
   Pencil,
+  Plus,
   Terminal,
   Trash2,
   TriangleAlert,
@@ -41,12 +36,9 @@ import {
 } from "@/lib/api/claudeAppendInstructions";
 import { ClaudeShellWrapperCard } from "@/components/claude/ClaudeShellWrapperCard";
 
-interface ClaudeAppendInstructionsPanelProps {
-  open: boolean;
-}
-
-export interface ClaudeAppendInstructionsPanelHandle {
-  openAdd: () => void;
+export interface ClaudeAppendInstructionsFileFieldProps {
+  config: ClaudeAppendInstructionsConfig;
+  onChange: (config: ClaudeAppendInstructionsConfig) => void;
 }
 
 interface FileInspection {
@@ -78,19 +70,11 @@ const fileName = (path: string): string => {
 const errorMessage = (error: unknown): string =>
   error instanceof Error ? error.message : String(error);
 
-export const ClaudeAppendInstructionsPanel = React.forwardRef<
-  ClaudeAppendInstructionsPanelHandle,
-  ClaudeAppendInstructionsPanelProps
->(function ClaudeAppendInstructionsPanel(
-  { open }: ClaudeAppendInstructionsPanelProps,
-  ref: React.ForwardedRef<ClaudeAppendInstructionsPanelHandle>,
-) {
+export function ClaudeAppendInstructionsFileField({
+  config,
+  onChange,
+}: ClaudeAppendInstructionsFileFieldProps) {
   const { t } = useTranslation();
-  const [config, setConfig] = useState<ClaudeAppendInstructionsConfig>({
-    files: [],
-    activeFile: null,
-  });
-  const [loading, setLoading] = useState(true);
   const [editorOpen, setEditorOpen] = useState(false);
   const [editingPath, setEditingPath] = useState<string | null>(null);
   const [draftPath, setDraftPath] = useState("");
@@ -98,7 +82,6 @@ export const ClaudeAppendInstructionsPanel = React.forwardRef<
   const [contentLoading, setContentLoading] = useState(false);
   const [contentLoadFailed, setContentLoadFailed] = useState(false);
   const [saving, setSaving] = useState(false);
-  const [updatingConfig, setUpdatingConfig] = useState(false);
   const [pendingDeletePath, setPendingDeletePath] = useState<string | null>(
     null,
   );
@@ -115,29 +98,6 @@ export const ClaudeAppendInstructionsPanel = React.forwardRef<
   const duplicatePath = normalizedFiles.some(
     (file) => file === normalizedDraftPath && file !== editingPath,
   );
-
-  const reload = useCallback(async () => {
-    setLoading(true);
-    try {
-      const next = normalizeConfig(
-        await claudeAppendInstructionsApi.getConfig(),
-      );
-      setConfig(next);
-    } catch (error) {
-      toast.error(
-        t("claudeAppendInstructions.loadFailed", {
-          defaultValue: "加载 Claude 追加指令失败：{{error}}",
-          error: errorMessage(error),
-        }),
-      );
-    } finally {
-      setLoading(false);
-    }
-  }, [t]);
-
-  useEffect(() => {
-    if (open) void reload();
-  }, [open, reload]);
 
   useEffect(() => {
     let cancelled = false;
@@ -188,10 +148,6 @@ export const ClaudeAppendInstructionsPanel = React.forwardRef<
     setContentLoadFailed(false);
     setEditorOpen(true);
   }, []);
-
-  React.useImperativeHandle(ref, () => ({ openAdd: openAddEditor }), [
-    openAddEditor,
-  ]);
 
   const loadEditorContent = useCallback(
     async (path: string) => {
@@ -271,11 +227,12 @@ export const ClaudeAppendInstructionsPanel = React.forwardRef<
         draftContent,
       );
       if (!editingPath) {
-        const next = await claudeAppendInstructionsApi.setConfig({
-          files: [...normalizedFiles, normalizedDraftPath],
-          activeFile,
-        });
-        setConfig(normalizeConfig(next));
+        onChange(
+          normalizeConfig({
+            files: [...normalizedFiles, normalizedDraftPath],
+            activeFile,
+          }),
+        );
       }
       setFileInspections((current) => ({
         ...current,
@@ -307,44 +264,21 @@ export const ClaudeAppendInstructionsPanel = React.forwardRef<
     editingPath,
     normalizedDraftPath,
     normalizedFiles,
+    onChange,
     saving,
     t,
   ]);
 
   const handleToggle = useCallback(
-    async (path: string, enabled: boolean) => {
-      if (updatingConfig) return;
-      setUpdatingConfig(true);
-      try {
-        const next = await claudeAppendInstructionsApi.setConfig({
+    (path: string, enabled: boolean) => {
+      onChange(
+        normalizeConfig({
           files: normalizedFiles,
           activeFile: enabled ? path : null,
-        });
-        setConfig(normalizeConfig(next));
-        toast.success(
-          t(
-            enabled
-              ? "claudeAppendInstructions.enableSuccess"
-              : "claudeAppendInstructions.disableSuccess",
-            {
-              defaultValue: enabled
-                ? "Claude 追加指令已启用"
-                : "Claude 追加指令已停用",
-            },
-          ),
-        );
-      } catch (error) {
-        toast.error(
-          t("claudeAppendInstructions.configFailed", {
-            defaultValue: "更新 Claude 追加指令状态失败：{{error}}",
-            error: errorMessage(error),
-          }),
-        );
-      } finally {
-        setUpdatingConfig(false);
-      }
+        }),
+      );
     },
-    [normalizedFiles, t, updatingConfig],
+    [normalizedFiles, onChange],
   );
 
   const handleConfirmRemove = useCallback(async () => {
@@ -354,10 +288,10 @@ export const ClaudeAppendInstructionsPanel = React.forwardRef<
     setDeletingPath(path);
     try {
       await claudeAppendInstructionsApi.remove(path);
-      setConfig((current) =>
+      onChange(
         normalizeConfig({
-          files: current.files.filter((file) => file !== path),
-          activeFile: current.activeFile === path ? null : current.activeFile,
+          files: normalizedFiles.filter((file) => file !== path),
+          activeFile: activeFile === path ? null : activeFile,
         }),
       );
       setFileInspections((current) => {
@@ -381,7 +315,16 @@ export const ClaudeAppendInstructionsPanel = React.forwardRef<
     } finally {
       setDeletingPath(null);
     }
-  }, [closeEditor, deletingPath, editingPath, pendingDeletePath, t]);
+  }, [
+    activeFile,
+    closeEditor,
+    deletingPath,
+    editingPath,
+    normalizedFiles,
+    onChange,
+    pendingDeletePath,
+    t,
+  ]);
 
   const stateLabel = useCallback(
     (state: ClaudeAppendInstructionsFileState) => {
@@ -410,204 +353,186 @@ export const ClaudeAppendInstructionsPanel = React.forwardRef<
     [t],
   );
 
-  if (!open) return null;
-
   return (
-    <div className="flex min-h-0 flex-1 flex-col px-6">
-      <div className="flex-shrink-0 space-y-3 py-4">
-        <div className="glass rounded-xl border border-white/10 px-6 py-4">
-          <div>
-            <div className="min-w-0">
-              <div className="flex items-center gap-2 text-sm font-medium text-foreground">
-                <Terminal className="h-4 w-4 text-muted-foreground" />
-                {t("claudeAppendInstructions.summaryTitle", {
-                  defaultValue: "Claude 运行时追加指令",
-                })}
-              </div>
-              <p className="mt-1 text-xs leading-relaxed text-muted-foreground">
-                {t("claudeAppendInstructions.summaryHint", {
-                  defaultValue:
-                    "独立管理 --append-system-prompt-file；不会修改普通 CLAUDE.md 提示词预设。",
-                })}
-              </p>
-            </div>
-          </div>
-          <div className="mt-3 text-xs text-muted-foreground">
-            {t("claudeAppendInstructions.count", {
-              defaultValue: "共 {{count}} 个文件",
-              count: normalizedFiles.length,
+    <div className="space-y-3 border-t border-border-default pt-3">
+      <div className="flex items-start justify-between gap-3">
+        <div className="min-w-0 space-y-1">
+          <div className="flex items-center gap-2 text-sm font-medium text-foreground">
+            <Terminal className="h-4 w-4 shrink-0 text-muted-foreground" />
+            {t("claudeAppendInstructions.summaryTitle", {
+              defaultValue: "Claude 运行时追加指令",
             })}
-            {" · "}
-            {activeFile
-              ? t("claudeAppendInstructions.enabledName", {
-                  defaultValue: "已启用：{{name}}",
-                  name: fileName(activeFile),
-                })
-              : t("claudeAppendInstructions.noneEnabled", {
-                  defaultValue: "未启用任何文件",
-                })}
           </div>
+          <p className="text-xs leading-relaxed text-muted-foreground">
+            {t("claudeAppendInstructions.summaryHint", {
+              defaultValue:
+                "每个 Claude 供应商独立管理 --append-system-prompt-file；保存供应商后应用，不会修改普通 CLAUDE.md 提示词预设。",
+            })}
+          </p>
         </div>
+        <Button
+          type="button"
+          variant="outline"
+          size="sm"
+          className="shrink-0 gap-1.5"
+          onClick={openAddEditor}
+        >
+          <Plus className="h-4 w-4" />
+          {t("claudeAppendInstructions.add", {
+            defaultValue: "新建文件",
+          })}
+        </Button>
       </div>
 
-      <div className="flex-1 overflow-y-auto pb-16">
-        {loading ? (
-          <div className="py-12 text-center text-muted-foreground">
-            {t("claudeAppendInstructions.loading", {
-              defaultValue: "加载中...",
+      <div className="rounded-md border border-border-default bg-muted/30 px-3 py-2 text-xs text-muted-foreground">
+        {t("claudeAppendInstructions.count", {
+          defaultValue: "共 {{count}} 个文件",
+          count: normalizedFiles.length,
+        })}
+        {" · "}
+        {activeFile
+          ? t("claudeAppendInstructions.enabledName", {
+              defaultValue: "已启用：{{name}}",
+              name: fileName(activeFile),
+            })
+          : t("claudeAppendInstructions.noneEnabled", {
+              defaultValue: "未启用任何文件",
             })}
-          </div>
-        ) : normalizedFiles.length === 0 ? (
-          <div className="py-12 text-center">
-            <div className="mx-auto mb-4 flex h-16 w-16 items-center justify-center rounded-full bg-muted">
-              <FileText size={24} className="text-muted-foreground" />
-            </div>
-            <h3 className="mb-2 text-lg font-medium text-foreground">
-              {t("claudeAppendInstructions.empty", {
-                defaultValue: "暂无 Claude 追加指令文件",
-              })}
-            </h3>
-            <p className="text-sm text-muted-foreground">
-              {t("claudeAppendInstructions.emptyHint", {
-                defaultValue: "点击右上角新建文件，保存后再选择启用。",
-              })}
-            </p>
-          </div>
-        ) : (
-          <div className="space-y-3">
-            {normalizedFiles.map((file) => {
-              const inspection = fileInspections[file];
-              const status = inspection?.status;
-              const statusClass = status
-                ? status.state === "valid"
-                  ? "text-green-600 dark:text-green-400"
-                  : status.state === "missing" ||
-                      status.state === "notFile" ||
-                      status.state === "empty"
-                    ? "text-amber-600 dark:text-amber-400"
-                    : "text-destructive"
-                : inspection?.error
-                  ? "text-destructive"
-                  : "text-muted-foreground";
-              return (
-                <div
-                  key={file}
-                  className="flex min-h-16 items-center gap-3 rounded-md border border-border-default bg-muted/20 px-3 py-2.5"
-                >
-                  <Switch
-                    checked={file === activeFile}
-                    disabled={updatingConfig}
-                    onCheckedChange={(checked) =>
-                      void handleToggle(file, checked)
-                    }
-                    aria-label={t("claudeAppendInstructions.toggle", {
-                      defaultValue: "启用或停用 {{name}}",
-                      name: fileName(file),
-                    })}
-                  />
-                  <FileText className="h-4 w-4 shrink-0 text-muted-foreground" />
-                  <div className="min-w-0 flex-1">
-                    <div
-                      className="truncate text-sm font-medium"
-                      title={fileName(file)}
-                    >
-                      {fileName(file)}
-                    </div>
-                    <div
-                      className="truncate text-xs text-muted-foreground"
-                      title={file}
-                    >
-                      {file}
-                    </div>
-                    <div
-                      className={`mt-0.5 flex min-h-4 items-center gap-1 text-xs ${statusClass}`}
-                      title={
-                        status
-                          ? [
-                              status.resolvedPath,
-                              status.sha256
-                                ? `SHA-256: ${status.sha256}`
-                                : null,
-                              status.error,
-                            ]
-                              .filter(Boolean)
-                              .join("\n")
-                          : inspection?.error
-                      }
-                    >
-                      {inspection?.loading ? (
-                        <>
-                          <Loader2 className="h-3 w-3 animate-spin" />
-                          <span>
-                            {t("claudeAppendInstructions.stateChecking", {
-                              defaultValue: "正在检查文件",
-                            })}
-                          </span>
-                        </>
-                      ) : inspection?.error ? (
-                        <>
-                          <CircleX className="h-3 w-3" />
-                          <span>
-                            {t("claudeAppendInstructions.stateCheckFailed", {
-                              defaultValue: "文件检查失败",
-                            })}
-                          </span>
-                        </>
-                      ) : status ? (
-                        <>
-                          {status.state === "valid" ? (
-                            <CircleCheck className="h-3 w-3" />
-                          ) : (
-                            <TriangleAlert className="h-3 w-3" />
-                          )}
-                          <span>
-                            {status.sizeBytes === null
-                              ? stateLabel(status.state)
-                              : `${stateLabel(status.state)} · ${status.sizeBytes.toLocaleString()} B`}
-                          </span>
-                        </>
-                      ) : null}
-                    </div>
+      </div>
+
+      {normalizedFiles.length === 0 ? (
+        <div className="flex min-h-20 items-center justify-center rounded-md border border-dashed border-border-default px-4 text-center text-sm text-muted-foreground">
+          {t("claudeAppendInstructions.empty", {
+            defaultValue: "暂无 Claude 追加指令文件",
+          })}
+        </div>
+      ) : (
+        <div className="space-y-3">
+          {normalizedFiles.map((file) => {
+            const inspection = fileInspections[file];
+            const status = inspection?.status;
+            const statusClass = status
+              ? status.state === "valid"
+                ? "text-green-600 dark:text-green-400"
+                : status.state === "missing" ||
+                    status.state === "notFile" ||
+                    status.state === "empty"
+                  ? "text-amber-600 dark:text-amber-400"
+                  : "text-destructive"
+              : inspection?.error
+                ? "text-destructive"
+                : "text-muted-foreground";
+            return (
+              <div
+                key={file}
+                className="flex min-h-16 items-center gap-3 rounded-md border border-border-default bg-muted/20 px-3 py-2.5"
+              >
+                <Switch
+                  checked={file === activeFile}
+                  onCheckedChange={(checked) => handleToggle(file, checked)}
+                  aria-label={t("claudeAppendInstructions.toggle", {
+                    defaultValue: "启用或停用 {{name}}",
+                    name: fileName(file),
+                  })}
+                />
+                <FileText className="h-4 w-4 shrink-0 text-muted-foreground" />
+                <div className="min-w-0 flex-1">
+                  <div
+                    className="truncate text-sm font-medium"
+                    title={fileName(file)}
+                  >
+                    {fileName(file)}
                   </div>
-                  <Button
-                    type="button"
-                    variant="ghost"
-                    size="icon"
-                    className="h-8 w-8 shrink-0"
-                    onClick={() => openEditEditor(file)}
-                    title={t("claudeAppendInstructions.edit", {
-                      defaultValue: "编辑文件",
-                    })}
+                  <div
+                    className="truncate text-xs text-muted-foreground"
+                    title={file}
                   >
-                    <Pencil className="h-4 w-4" />
-                  </Button>
-                  <Button
-                    type="button"
-                    variant="ghost"
-                    size="icon"
-                    className="h-8 w-8 shrink-0 text-muted-foreground hover:text-destructive"
-                    onClick={() => setPendingDeletePath(file)}
-                    disabled={deletingPath !== null}
-                    title={t("claudeAppendInstructions.remove", {
-                      defaultValue: "删除文件",
-                    })}
+                    {file}
+                  </div>
+                  <div
+                    className={`mt-0.5 flex min-h-4 items-center gap-1 text-xs ${statusClass}`}
+                    title={
+                      status
+                        ? [
+                            status.resolvedPath,
+                            status.sha256 ? `SHA-256: ${status.sha256}` : null,
+                            status.error,
+                          ]
+                            .filter(Boolean)
+                            .join("\n")
+                        : inspection?.error
+                    }
                   >
-                    {deletingPath === file ? (
-                      <Loader2 className="h-4 w-4 animate-spin" />
-                    ) : (
-                      <Trash2 className="h-4 w-4" />
-                    )}
-                  </Button>
+                    {inspection?.loading ? (
+                      <>
+                        <Loader2 className="h-3 w-3 animate-spin" />
+                        <span>
+                          {t("claudeAppendInstructions.stateChecking", {
+                            defaultValue: "正在检查文件",
+                          })}
+                        </span>
+                      </>
+                    ) : inspection?.error ? (
+                      <>
+                        <CircleX className="h-3 w-3" />
+                        <span>
+                          {t("claudeAppendInstructions.stateCheckFailed", {
+                            defaultValue: "文件检查失败",
+                          })}
+                        </span>
+                      </>
+                    ) : status ? (
+                      <>
+                        {status.state === "valid" ? (
+                          <CircleCheck className="h-3 w-3" />
+                        ) : (
+                          <TriangleAlert className="h-3 w-3" />
+                        )}
+                        <span>
+                          {status.sizeBytes === null
+                            ? stateLabel(status.state)
+                            : `${stateLabel(status.state)} · ${status.sizeBytes.toLocaleString()} B`}
+                        </span>
+                      </>
+                    ) : null}
+                  </div>
                 </div>
-              );
-            })}
-          </div>
-        )}
-
-        <div className="mt-6">
-          <ClaudeShellWrapperCard />
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="icon"
+                  className="h-8 w-8 shrink-0"
+                  onClick={() => openEditEditor(file)}
+                  title={t("claudeAppendInstructions.edit", {
+                    defaultValue: "编辑文件",
+                  })}
+                >
+                  <Pencil className="h-4 w-4" />
+                </Button>
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="icon"
+                  className="h-8 w-8 shrink-0 text-muted-foreground hover:text-destructive"
+                  onClick={() => setPendingDeletePath(file)}
+                  disabled={deletingPath !== null}
+                  title={t("claudeAppendInstructions.remove", {
+                    defaultValue: "删除文件",
+                  })}
+                >
+                  {deletingPath === file ? (
+                    <Loader2 className="h-4 w-4 animate-spin" />
+                  ) : (
+                    <Trash2 className="h-4 w-4" />
+                  )}
+                </Button>
+              </div>
+            );
+          })}
         </div>
-      </div>
+      )}
+
+      <ClaudeShellWrapperCard />
 
       <Dialog
         open={editorOpen}
@@ -755,7 +680,7 @@ export const ClaudeAppendInstructionsPanel = React.forwardRef<
         })}
         message={t("claudeAppendInstructions.deleteConfirm", {
           defaultValue:
-            "将永久删除磁盘上的文件 {{path}}，并停用它。此操作无法撤销。",
+            "将永久删除磁盘上的文件 {{path}}，并从此供应商的列表中移除。此操作无法撤销。",
           path: pendingDeletePath ?? "",
         })}
         confirmText={t("claudeAppendInstructions.deleteButton", {
@@ -766,8 +691,6 @@ export const ClaudeAppendInstructionsPanel = React.forwardRef<
       />
     </div>
   );
-});
+}
 
-ClaudeAppendInstructionsPanel.displayName = "ClaudeAppendInstructionsPanel";
-
-export default ClaudeAppendInstructionsPanel;
+export default ClaudeAppendInstructionsFileField;

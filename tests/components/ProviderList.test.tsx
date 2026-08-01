@@ -7,7 +7,6 @@ import { ProviderList } from "@/components/providers/ProviderList";
 
 const useDragSortMock = vi.fn();
 const useSortableMock = vi.fn();
-const providerCardRenderSpy = vi.fn();
 
 vi.mock("@/hooks/useDragSort", () => ({
   useDragSort: (...args: unknown[]) => useDragSortMock(...args),
@@ -15,7 +14,6 @@ vi.mock("@/hooks/useDragSort", () => ({
 
 vi.mock("@/components/providers/ProviderCard", () => ({
   ProviderCard: (props: any) => {
-    providerCardRenderSpy(props);
     const {
       provider,
       onSwitch,
@@ -123,7 +121,6 @@ function renderWithQueryClient(ui: ReactElement) {
 beforeEach(() => {
   useDragSortMock.mockReset();
   useSortableMock.mockReset();
-  providerCardRenderSpy.mockClear();
 
   useSortableMock.mockImplementation(({ id }: { id: string }) => ({
     setNodeRef: vi.fn(),
@@ -224,25 +221,24 @@ describe("ProviderList Component", () => {
       />,
     );
 
-    // Verify sort order
-    expect(providerCardRenderSpy).toHaveBeenCalledTimes(2);
-    expect(providerCardRenderSpy.mock.calls[0][0].provider.id).toBe("b");
-    expect(providerCardRenderSpy.mock.calls[1][0].provider.id).toBe("a");
+    // Verify the committed DOM order rather than React render counts.
+    expect(
+      screen
+        .getAllByTestId(/^provider-card-/)
+        .map((card) => card.getAttribute("data-testid")),
+    ).toEqual([
+      "provider-card-__claude_route_mode_virtual__",
+      "provider-card-b",
+      "provider-card-a",
+    ]);
 
     // Verify current provider marker
-    expect(providerCardRenderSpy.mock.calls[0][0].isCurrent).toBe(true);
+    expect(screen.getByTestId("is-current-b")).toHaveTextContent("current");
+    expect(screen.getByTestId("is-current-a")).toHaveTextContent("inactive");
 
     // Drag attributes from useSortable
-    expect(
-      providerCardRenderSpy.mock.calls[0][0].dragHandleProps?.attributes[
-      "data-dnd-id"
-      ],
-    ).toBe("b");
-    expect(
-      providerCardRenderSpy.mock.calls[1][0].dragHandleProps?.attributes[
-      "data-dnd-id"
-      ],
-    ).toBe("a");
+    expect(screen.getByTestId("drag-attr-b")).toHaveTextContent("b");
+    expect(screen.getByTestId("drag-attr-a")).toHaveTextContent("a");
 
     // Trigger action buttons
     fireEvent.click(screen.getByTestId("switch-b"));

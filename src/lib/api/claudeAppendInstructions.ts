@@ -1,4 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
+import type { ClaudeAppendInstructionsConfig } from "@/types";
+
+export type { ClaudeAppendInstructionsConfig } from "@/types";
 
 export type ClaudeAppendInstructionsFileState =
   | "valid"
@@ -7,11 +10,6 @@ export type ClaudeAppendInstructionsFileState =
   | "unreadable"
   | "empty"
   | "invalid";
-
-export interface ClaudeAppendInstructionsConfig {
-  files: string[];
-  activeFile?: string | null;
-}
 
 export interface ClaudeAppendInstructionsFileStatus {
   configuredPath: string;

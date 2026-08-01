@@ -191,6 +191,11 @@ export interface LocalProxyRequestOverrides {
   body?: Record<string, unknown>;
 }
 
+export interface ClaudeAppendInstructionsConfig {
+  files: string[];
+  activeFile?: string | null;
+}
+
 // 供应商元数据（字段名与后端一致，保持 snake_case）
 export interface ProviderMeta {
   // 自定义端点：以 URL 为键，值为端点信息
@@ -259,6 +264,8 @@ export interface ProviderMeta {
   githubAccountId?: string;
   // Provider 级 MCP / Skill / Prompt 覆盖
   resourceOverrides?: ProviderResourceOverrides;
+  // Claude Code 启动时附加的供应商专属指令文件
+  claudeAppendInstructions?: ClaudeAppendInstructionsConfig;
 }
 
 // Skill 同步方式

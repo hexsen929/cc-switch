@@ -475,6 +475,16 @@ impl LocalProxyRequestOverrides {
     }
 }
 
+/// Claude Code 供应商专属追加指令文件配置。
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ClaudeAppendInstructionsConfig {
+    #[serde(default)]
+    pub files: Vec<String>,
+    #[serde(default)]
+    pub active_file: Option<String>,
+}
+
 /// 供应商元数据
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct ProviderMeta {
@@ -612,6 +622,12 @@ pub struct ProviderMeta {
     /// Provider 级 MCP / Skill / Prompt 覆盖
     #[serde(rename = "resourceOverrides", skip_serializing_if = "Option::is_none")]
     pub resource_overrides: Option<ProviderResourceOverrides>,
+    /// Claude Code 启动时附加的供应商专属指令文件。
+    #[serde(
+        rename = "claudeAppendInstructions",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub claude_append_instructions: Option<ClaudeAppendInstructionsConfig>,
 }
 
 /// 解析 Provider 级自定义 User-Agent 字符串（单一真理来源）。
@@ -1066,8 +1082,9 @@ pub struct OpenCodeModelLimit {
 #[cfg(test)]
 mod tests {
     use super::{
-        ClaudeModelConfig, CodexModelConfig, GeminiModelConfig, LocalProxyRequestOverrides,
-        OpenCodeProviderConfig, Provider, ProviderManager, ProviderMeta, UniversalProvider,
+        ClaudeAppendInstructionsConfig, ClaudeModelConfig, CodexModelConfig, GeminiModelConfig,
+        LocalProxyRequestOverrides, OpenCodeProviderConfig, Provider, ProviderManager,
+        ProviderMeta, UniversalProvider,
     };
     use serde_json::json;
     use std::collections::HashMap;
@@ -1120,6 +1137,27 @@ mod tests {
     fn provider_meta_omits_max_output_tokens_when_none() {
         let value = serde_json::to_value(ProviderMeta::default()).expect("serialize ProviderMeta");
         assert!(value.get("maxOutputTokens").is_none());
+    }
+
+    #[test]
+    fn provider_meta_roundtrips_claude_append_instructions() {
+        let meta = ProviderMeta {
+            claude_append_instructions: Some(ClaudeAppendInstructionsConfig {
+                files: vec!["./a.md".to_string(), "./b.md".to_string()],
+                active_file: Some("./b.md".to_string()),
+            }),
+            ..ProviderMeta::default()
+        };
+
+        let value = serde_json::to_value(&meta).expect("serialize ProviderMeta");
+        assert_eq!(value["claudeAppendInstructions"]["activeFile"], "./b.md");
+
+        let decoded: ProviderMeta =
+            serde_json::from_value(value).expect("deserialize ProviderMeta");
+        assert_eq!(
+            decoded.claude_append_instructions,
+            meta.claude_append_instructions
+        );
     }
 
     #[test]

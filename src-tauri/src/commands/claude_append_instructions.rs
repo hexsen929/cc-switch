@@ -66,7 +66,7 @@ pub async fn delete_claude_append_instructions_file(
 ) -> Result<bool, String> {
     let db = state.db.clone();
     tauri::async_runtime::spawn_blocking(move || {
-        claude_append_instructions::delete_file(db.as_ref(), &configuredPath)
+        claude_append_instructions::delete_file_only(db.as_ref(), &configuredPath)
     })
     .await
     .map_err(|error| format!("Failed to delete Claude append instructions file: {error}"))?

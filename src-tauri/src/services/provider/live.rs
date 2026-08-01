@@ -1519,6 +1519,8 @@ pub fn sync_current_to_live(state: &AppState) -> Result<(), AppError> {
         }
     }
 
+    crate::claude_append_instructions::sync_current_provider_projection(&state.db)?;
+
     // MCP sync（best-effort 逐应用投影，内部已聚合失败）。错误暂存到
     // Skill/Prompt 同步之后再返回：MCP 的失败不该跳过其他资源同步，但
     // 调用方（配置导入 / 云同步恢复）需要知道结果不完整。
@@ -1805,6 +1807,9 @@ pub fn import_default_config(state: &AppState, app_type: AppType) -> Result<bool
         .db
         .set_current_provider(app_type.as_str(), &provider.id)?;
     crate::settings::set_current_provider(&app_type, Some(provider.id.as_str()))?;
+    if matches!(app_type, AppType::Claude) {
+        crate::claude_append_instructions::sync_current_provider_projection(&state.db)?;
+    }
 
     // 初次导入已有配置时随手补出官方入口，对齐其它应用"首启动 = 导入 default
     // + 播种官方条目"的观感。grokbuild 种子晚于 `official_providers_seeded`

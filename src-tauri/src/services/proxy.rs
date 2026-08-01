@@ -3395,7 +3395,26 @@ impl ProxyService {
         provider_id: &str,
     ) -> Result<HotSwitchOutcome, String> {
         let _guard = self.switch_locks.lock_for_app(app_type).await;
-        self.hot_switch_provider_inner(app_type, provider_id).await
+        let outcome = self
+            .hot_switch_provider_inner(app_type, provider_id)
+            .await?;
+
+        // ProviderService performs the full provider-bound resource sync after
+        // calling the inner method. Direct proxy/failover callers only pass
+        // through this public method, so keep Claude's append-file projection
+        // aligned here as well. A missing source clears the stale projection;
+        // it must not block an otherwise successful failover.
+        if app_type == AppType::Claude.as_str() {
+            if let Err(error) =
+                crate::claude_append_instructions::sync_current_provider_projection(&self.db)
+            {
+                log::warn!(
+                    "Claude 热切换后同步 append instructions 投影失败（已清除旧投影）: {error}"
+                );
+            }
+        }
+
+        Ok(outcome)
     }
 
     /// Unified-history mode intentionally uses the shared `custom` provider
@@ -4493,8 +4512,8 @@ mod tests {
     use crate::app_config::{InstalledSkill, McpApps, McpServer, SkillApps};
     use crate::prompt::Prompt;
     use crate::provider::{
-        ProviderMeta, ProviderPromptOverrideMode, ProviderPromptOverrides,
-        ProviderResourceOverrides, ProviderSkillOverrides,
+        ClaudeAppendInstructionsConfig, ProviderMeta, ProviderPromptOverrideMode,
+        ProviderPromptOverrides, ProviderResourceOverrides, ProviderSkillOverrides,
     };
     use crate::services::skill::SkillService;
     use serial_test::serial;
@@ -8007,7 +8026,7 @@ base_url = "https://old.example/v1"
             }),
             None,
         );
-        let provider_b = Provider::with_id(
+        let mut provider_b = Provider::with_id(
             "b".to_string(),
             "B".to_string(),
             json!({
@@ -8017,6 +8036,18 @@ base_url = "https://old.example/v1"
             }),
             None,
         );
+        provider_b.meta = Some(ProviderMeta {
+            claude_append_instructions: Some(ClaudeAppendInstructionsConfig {
+                files: vec!["./provider-b.md".to_string()],
+                active_file: Some("./provider-b.md".to_string()),
+            }),
+            ..ProviderMeta::default()
+        });
+        crate::config::write_text_file(
+            &crate::config::get_claude_config_dir().join("provider-b.md"),
+            "provider b append instructions\n",
+        )
+        .expect("write provider b append instructions");
         db.save_provider("claude", &provider_a)
             .expect("save provider a");
         db.save_provider("claude", &provider_b)
@@ -8033,6 +8064,13 @@ base_url = "https://old.example/v1"
             .switch_proxy_target("claude", "b")
             .await
             .expect("switch proxy target");
+
+        assert_eq!(
+            std::fs::read_to_string(crate::claude_append_instructions::runtime_projection_path(),)
+                .expect("read append instructions projection"),
+            "provider b append instructions\n",
+            "direct proxy hot-switch should refresh provider-scoped append instructions",
+        );
 
         // 断言：本地 settings 的 current provider 已同步
         assert_eq!(

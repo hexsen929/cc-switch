@@ -35,6 +35,15 @@ vi.mock("@/components/providers/forms/CodexOAuthSection", () => ({
   CodexOAuthSection: () => <div data-testid="codex-oauth-section" />,
 }));
 
+vi.mock(
+  "@/components/providers/forms/ClaudeAppendInstructionsFileField",
+  () => ({
+    ClaudeAppendInstructionsFileField: () => (
+      <div data-testid="claude-append-instructions-field" />
+    ),
+  }),
+);
+
 type ClaudeFormFieldsProps = ComponentProps<typeof ClaudeFormFields>;
 
 const FormShell = ({ children }: PropsWithChildren) => {
@@ -102,6 +111,8 @@ const renderCopilotForm = (overrides: Partial<ClaudeFormFieldsProps> = {}) => {
     onLocalProxyHeadersOverrideChange: vi.fn(),
     localProxyBodyOverride: "",
     onLocalProxyBodyOverrideChange: vi.fn(),
+    appendInstructions: { files: [], activeFile: null },
+    onAppendInstructionsChange: vi.fn(),
     ...overrides,
   };
 

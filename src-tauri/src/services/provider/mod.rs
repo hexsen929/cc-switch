@@ -132,6 +132,9 @@ fn sync_provider_bound_resources(
     app_type: &AppType,
     include_mcp: bool,
 ) -> Result<(), AppError> {
+    if matches!(app_type, AppType::Claude) {
+        crate::claude_append_instructions::sync_current_provider_projection(&state.db)?;
+    }
     if include_mcp {
         // 按当前 app 的“全局 MCP + 当前 provider 覆盖”重建目标段。
         // 不从旧 live config 继承 MCP，避免切供应商时把上一个 provider 的 MCP 泄漏过来。
@@ -158,11 +161,12 @@ mod tests {
     use crate::claude_desktop_config::PROFILE_ID;
     use crate::config::{get_claude_settings_path, read_json_file, write_json_file};
     use crate::database::Database;
+    use crate::provider::{
+        ClaudeAppendInstructionsConfig, ProviderMcpOverrides, ProviderMeta,
+        ProviderResourceOverrides, UsageScript,
+    };
     #[cfg(any(target_os = "macos", windows))]
     use crate::provider::{ClaudeDesktopMode, ClaudeDesktopModelRoute};
-    use crate::provider::{
-        ProviderMcpOverrides, ProviderMeta, ProviderResourceOverrides, UsageScript,
-    };
     use crate::proxy::types::ProxyConfig;
     use crate::store::AppState;
     use serde_json::json;
@@ -861,6 +865,61 @@ mod tests {
             None,
         );
         db.save_provider("gemini", &unrelated).expect("save c");
+    }
+
+    #[test]
+    #[serial]
+    fn updating_current_claude_provider_refreshes_append_instructions_projection() {
+        let _home = TempHome::new();
+        crate::settings::reload_settings().expect("reload settings");
+
+        let db = Arc::new(Database::memory().expect("init db"));
+        let state = AppState::new(db.clone());
+        crate::config::write_text_file(
+            &crate::config::get_claude_config_dir().join("provider-a.md"),
+            "provider a\n",
+        )
+        .expect("write provider a instructions");
+        crate::config::write_text_file(
+            &crate::config::get_claude_config_dir().join("provider-b.md"),
+            "provider b\n",
+        )
+        .expect("write provider b instructions");
+
+        let mut original =
+            Provider::with_id("p1".into(), "Claude A".into(), json!({ "env": {} }), None);
+        original.meta = Some(ProviderMeta {
+            claude_append_instructions: Some(ClaudeAppendInstructionsConfig {
+                files: vec!["./provider-a.md".to_string()],
+                active_file: Some("./provider-a.md".to_string()),
+            }),
+            ..ProviderMeta::default()
+        });
+        db.save_provider(AppType::Claude.as_str(), &original)
+            .expect("save original provider");
+        db.set_current_provider(AppType::Claude.as_str(), "p1")
+            .expect("set current provider");
+        crate::settings::set_current_provider(&AppType::Claude, Some("p1"))
+            .expect("set local current provider");
+        crate::claude_append_instructions::sync_current_provider_projection(&db)
+            .expect("seed projection");
+
+        let mut updated = original.clone();
+        updated.meta = Some(ProviderMeta {
+            claude_append_instructions: Some(ClaudeAppendInstructionsConfig {
+                files: vec!["./provider-b.md".to_string()],
+                active_file: Some("./provider-b.md".to_string()),
+            }),
+            ..ProviderMeta::default()
+        });
+        ProviderService::update(&state, AppType::Claude, None, updated)
+            .expect("update current provider");
+
+        assert_eq!(
+            std::fs::read_to_string(crate::claude_append_instructions::runtime_projection_path(),)
+                .expect("read updated projection"),
+            "provider b\n"
+        );
     }
 
     #[tokio::test]
@@ -4294,7 +4353,14 @@ impl ProviderService {
         let current_id =
             match crate::settings::get_effective_current_provider(&state.db, &app_type)? {
                 Some(id) => id,
-                None => return Ok(()),
+                None => {
+                    if matches!(app_type, AppType::Claude) {
+                        crate::claude_append_instructions::sync_current_provider_projection(
+                            &state.db,
+                        )?;
+                    }
+                    return Ok(());
+                }
             };
 
         let providers = state.db.get_all_providers(app_type.as_str())?;

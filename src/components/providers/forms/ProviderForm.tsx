@@ -15,6 +15,7 @@ import {
 import { providersApi, settingsApi, type AppId } from "@/lib/api";
 import { useDarkMode } from "@/hooks/useDarkMode";
 import type {
+  ClaudeAppendInstructionsConfig,
   ProviderCategory,
   ProviderMeta,
   ProviderResourceOverrides,
@@ -184,6 +185,21 @@ export const normalizeCodexCatalogModelsForSave = (
   return normalized;
 };
 
+export const normalizeClaudeAppendInstructionsForSave = (
+  config?: ClaudeAppendInstructionsConfig,
+): ClaudeAppendInstructionsConfig => {
+  const activeFile = config?.activeFile?.trim() || "";
+  const files = normalizeCodexModelInstructionsFiles(
+    config?.files ?? [],
+    activeFile,
+  );
+
+  return {
+    files,
+    activeFile: activeFile && files.includes(activeFile) ? activeFile : null,
+  };
+};
+
 const normalizeCodexChatReasoningForSave = (
   value?: CodexChatReasoning,
 ): CodexChatReasoning | undefined => {
@@ -327,6 +343,12 @@ function ProviderFormFull({
     useState<ProviderResourceOverrides>(
       () => initialData?.meta?.resourceOverrides ?? {},
     );
+  const [claudeAppendInstructions, setClaudeAppendInstructions] =
+    useState<ClaudeAppendInstructionsConfig>(() =>
+      normalizeClaudeAppendInstructionsForSave(
+        initialData?.meta?.claudeAppendInstructions,
+      ),
+    );
   const [toolCallBridge, setToolCallBridge] = useState<boolean>(
     () => initialData?.meta?.toolCallBridge ?? false,
   );
@@ -367,6 +389,11 @@ function ProviderFormFull({
       supportsFullUrl ? (initialData?.meta?.isFullUrl ?? false) : false,
     );
     setResourceOverrides(initialData?.meta?.resourceOverrides ?? {});
+    setClaudeAppendInstructions(
+      normalizeClaudeAppendInstructionsForSave(
+        initialData?.meta?.claudeAppendInstructions,
+      ),
+    );
     setToolCallBridge(initialData?.meta?.toolCallBridge ?? false);
     setPricingConfig({
       enabled:
@@ -1577,6 +1604,8 @@ function ProviderFormFull({
 
     const baseMeta: ProviderMeta | undefined =
       payload.meta ?? (initialData?.meta ? { ...initialData.meta } : undefined);
+    const normalizedClaudeAppendInstructions =
+      normalizeClaudeAppendInstructionsForSave(claudeAppendInstructions);
 
     // 确定 providerType（新建时从预设获取，编辑时从现有数据获取）
     const providerType = presetProviderType || initialData?.meta?.providerType;
@@ -1648,6 +1677,12 @@ function ProviderFormFull({
           ? pricingConfig.pricingModelSource
           : undefined,
       resourceOverrides: normalizeProviderResourceOverrides(resourceOverrides),
+      claudeAppendInstructions:
+        appId === "claude" &&
+        (normalizedClaudeAppendInstructions.files.length > 0 ||
+          normalizedClaudeAppendInstructions.activeFile)
+          ? normalizedClaudeAppendInstructions
+          : undefined,
       toolCallBridge:
         category !== "official" &&
         ((appId === "claude" && localApiFormat === "openai_chat") ||
@@ -2325,6 +2360,8 @@ function ProviderFormFull({
               onLocalProxyHeadersOverrideChange={setLocalProxyHeadersOverride}
               localProxyBodyOverride={localProxyBodyOverride}
               onLocalProxyBodyOverrideChange={setLocalProxyBodyOverride}
+              appendInstructions={claudeAppendInstructions}
+              onAppendInstructionsChange={setClaudeAppendInstructions}
             />
           )}
 

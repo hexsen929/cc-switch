@@ -52,7 +52,9 @@ import {
 } from "@/lib/api/model-fetch";
 import { CustomUserAgentField } from "./CustomUserAgentField";
 import { LocalProxyRequestOverridesField } from "./LocalProxyRequestOverridesField";
+import { ClaudeAppendInstructionsFileField } from "./ClaudeAppendInstructionsFileField";
 import type {
+  ClaudeAppendInstructionsConfig,
   ProviderCategory,
   ClaudeApiFormat,
   ClaudeApiKeyField,
@@ -164,6 +166,10 @@ interface ClaudeFormFieldsProps {
   onLocalProxyHeadersOverrideChange: (value: string) => void;
   localProxyBodyOverride: string;
   onLocalProxyBodyOverrideChange: (value: string) => void;
+
+  // Provider-scoped Claude Code --append-system-prompt-file configuration.
+  appendInstructions: ClaudeAppendInstructionsConfig;
+  onAppendInstructionsChange: (config: ClaudeAppendInstructionsConfig) => void;
 }
 
 export function ClaudeFormFields({
@@ -231,6 +237,8 @@ export function ClaudeFormFields({
   onLocalProxyHeadersOverrideChange,
   localProxyBodyOverride,
   onLocalProxyBodyOverrideChange,
+  appendInstructions,
+  onAppendInstructionsChange,
 }: ClaudeFormFieldsProps) {
   const { t } = useTranslation();
   const hasRequestOverrides = Boolean(
@@ -803,6 +811,11 @@ export function ClaudeFormFields({
           onCustomEndpointsChange={onCustomEndpointsChange}
         />
       )}
+
+      <ClaudeAppendInstructionsFileField
+        config={appendInstructions}
+        onChange={onAppendInstructionsChange}
+      />
 
       {shouldShowModelSelector && (
         <Collapsible open={advancedExpanded} onOpenChange={setAdvancedExpanded}>
