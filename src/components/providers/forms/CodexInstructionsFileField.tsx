@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { open } from "@tauri-apps/plugin-dialog";
 import {
   CircleCheck,
@@ -14,6 +14,7 @@ import {
 import { useTranslation } from "react-i18next";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
+import { ConfirmDialog } from "@/components/ConfirmDialog";
 import {
   Dialog,
   DialogContent,
@@ -25,6 +26,7 @@ import {
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
+import { Textarea } from "@/components/ui/textarea";
 import {
   codexInstructionsApi,
   type CodexInstructionsFileState,
@@ -51,6 +53,9 @@ const instructionFileName = (path: string): string => {
   return normalized.split("/").pop() || path;
 };
 
+const errorMessage = (error: unknown): string =>
+  error instanceof Error ? error.message : String(error);
+
 export function CodexInstructionsFileField({
   enabled,
   path,
@@ -62,6 +67,15 @@ export function CodexInstructionsFileField({
   const [editorOpen, setEditorOpen] = useState(false);
   const [editingPath, setEditingPath] = useState<string | null>(null);
   const [draftPath, setDraftPath] = useState("");
+  const [draftContent, setDraftContent] = useState("");
+  const [contentLoading, setContentLoading] = useState(false);
+  const [contentLoadFailed, setContentLoadFailed] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [pendingDeletePath, setPendingDeletePath] = useState<string | null>(
+    null,
+  );
+  const [deletingPath, setDeletingPath] = useState<string | null>(null);
+  const editorLoadSequenceRef = useRef(0);
   const [fileInspections, setFileInspections] = useState<
     Record<string, FileInspection>
   >({});
@@ -142,22 +156,63 @@ export function CodexInstructionsFileField({
   );
 
   const closeEditor = useCallback(() => {
+    editorLoadSequenceRef.current += 1;
     setEditorOpen(false);
     setEditingPath(null);
     setDraftPath("");
+    setDraftContent("");
+    setContentLoading(false);
+    setContentLoadFailed(false);
   }, []);
 
   const openAddEditor = useCallback(() => {
+    editorLoadSequenceRef.current += 1;
     setEditingPath(null);
     setDraftPath("");
+    setDraftContent("");
+    setContentLoading(false);
+    setContentLoadFailed(false);
     setEditorOpen(true);
   }, []);
 
-  const openEditEditor = useCallback((file: string) => {
-    setEditingPath(file);
-    setDraftPath(file);
-    setEditorOpen(true);
-  }, []);
+  const loadEditorContent = useCallback(
+    async (file: string) => {
+      const sequence = ++editorLoadSequenceRef.current;
+      setContentLoading(true);
+      setContentLoadFailed(false);
+      try {
+        const content = await codexInstructionsApi.read(file);
+        if (sequence !== editorLoadSequenceRef.current) return;
+        setDraftContent(content ?? "");
+      } catch (error) {
+        if (sequence !== editorLoadSequenceRef.current) return;
+        setDraftContent("");
+        setContentLoadFailed(true);
+        toast.error(
+          t("codexConfig.instructionsFileReadFailed", {
+            defaultValue: "无法读取模型指令文件：{{error}}",
+            error: errorMessage(error),
+          }),
+        );
+      } finally {
+        if (sequence === editorLoadSequenceRef.current) {
+          setContentLoading(false);
+        }
+      }
+    },
+    [t],
+  );
+
+  const openEditEditor = useCallback(
+    (file: string) => {
+      setEditingPath(file);
+      setDraftPath(file);
+      setDraftContent("");
+      setEditorOpen(true);
+      void loadEditorContent(file);
+    },
+    [loadEditorContent],
+  );
 
   const handleBrowse = useCallback(async () => {
     try {
@@ -172,7 +227,10 @@ export function CodexInstructionsFileField({
         ],
       });
       const selectedPath = Array.isArray(selected) ? selected[0] : selected;
-      if (selectedPath) setDraftPath(selectedPath);
+      if (selectedPath) {
+        setDraftPath(selectedPath);
+        await loadEditorContent(selectedPath);
+      }
     } catch (error) {
       toast.error(
         t("codexConfig.instructionsFileBrowseFailed", {
@@ -181,45 +239,115 @@ export function CodexInstructionsFileField({
         }),
       );
     }
-  }, [t]);
+  }, [loadEditorContent, t]);
 
-  const handleSave = useCallback(() => {
-    if (!normalizedDraftPath || duplicatePath) return;
-
-    const nextFiles = editingPath
-      ? normalizeCodexModelInstructionsFiles(
-          normalizedFiles.map((file) =>
-            file === editingPath ? normalizedDraftPath : file,
-          ),
-        )
-      : normalizeCodexModelInstructionsFiles(
-          normalizedFiles,
-          normalizedDraftPath,
-        );
-    onSavedFilesChange(nextFiles);
-
-    if (editingPath && editingPath === activePath) {
-      onActiveFileChange(normalizedDraftPath);
+  const handleSave = useCallback(async () => {
+    if (
+      !normalizedDraftPath ||
+      duplicatePath ||
+      contentLoading ||
+      contentLoadFailed ||
+      saving
+    ) {
+      return;
     }
-    closeEditor();
+
+    setSaving(true);
+    try {
+      const status = await codexInstructionsApi.write(
+        normalizedDraftPath,
+        draftContent,
+      );
+      if (!editingPath) {
+        onSavedFilesChange(
+          normalizeCodexModelInstructionsFiles(
+            normalizedFiles,
+            normalizedDraftPath,
+          ),
+        );
+      }
+      setFileInspections((current) => {
+        return {
+          ...current,
+          [normalizedDraftPath]: { loading: false, status },
+        };
+      });
+      toast.success(
+        t("codexConfig.instructionsFileSaveSuccess", {
+          defaultValue: "模型指令文件已保存",
+        }),
+      );
+      closeEditor();
+    } catch (error) {
+      toast.error(
+        t("codexConfig.instructionsFileSaveFailed", {
+          defaultValue: "保存模型指令文件失败：{{error}}",
+          error: errorMessage(error),
+        }),
+      );
+    } finally {
+      setSaving(false);
+    }
   }, [
-    activePath,
     closeEditor,
+    contentLoadFailed,
+    contentLoading,
+    draftContent,
     duplicatePath,
     editingPath,
     normalizedDraftPath,
     normalizedFiles,
-    onActiveFileChange,
     onSavedFilesChange,
+    saving,
+    t,
   ]);
 
-  const handleRemove = useCallback(
-    (file: string) => {
+  const handleRemove = useCallback((file: string) => {
+    setPendingDeletePath(file);
+  }, []);
+
+  const handleConfirmRemove = useCallback(async () => {
+    const file = pendingDeletePath;
+    if (!file || deletingPath) return;
+
+    setPendingDeletePath(null);
+    setDeletingPath(file);
+    try {
+      await codexInstructionsApi.remove(file);
       if (file === activePath) onActiveFileChange(null);
       onSavedFilesChange(normalizedFiles.filter((item) => item !== file));
-    },
-    [activePath, normalizedFiles, onActiveFileChange, onSavedFilesChange],
-  );
+      setFileInspections((current) => {
+        const next = { ...current };
+        delete next[file];
+        return next;
+      });
+      if (editingPath === file) closeEditor();
+      toast.success(
+        t("codexConfig.instructionsFileDeleteSuccess", {
+          defaultValue: "模型指令文件已删除",
+        }),
+      );
+    } catch (error) {
+      toast.error(
+        t("codexConfig.instructionsFileDeleteFailed", {
+          defaultValue: "删除模型指令文件失败：{{error}}",
+          error: errorMessage(error),
+        }),
+      );
+    } finally {
+      setDeletingPath(null);
+    }
+  }, [
+    activePath,
+    closeEditor,
+    deletingPath,
+    editingPath,
+    normalizedFiles,
+    onActiveFileChange,
+    onSavedFilesChange,
+    pendingDeletePath,
+    t,
+  ]);
 
   const activeFileName = activePath ? instructionFileName(activePath) : "";
 
@@ -248,7 +376,7 @@ export function CodexInstructionsFileField({
         >
           <Plus className="h-4 w-4" />
           {t("codexConfig.instructionsFileAdd", {
-            defaultValue: "添加文件",
+            defaultValue: "新建文件",
           })}
         </Button>
       </div>
@@ -378,7 +506,7 @@ export function CodexInstructionsFileField({
                   className="h-8 w-8 shrink-0"
                   onClick={() => openEditEditor(file)}
                   title={t("codexConfig.instructionsFileEdit", {
-                    defaultValue: "编辑文件路径",
+                    defaultValue: "编辑文件",
                   })}
                 >
                   <Pencil className="h-4 w-4" />
@@ -389,11 +517,16 @@ export function CodexInstructionsFileField({
                   size="icon"
                   className="h-8 w-8 shrink-0 text-muted-foreground hover:text-destructive"
                   onClick={() => handleRemove(file)}
+                  disabled={deletingPath !== null}
                   title={t("codexConfig.instructionsFileRemove", {
-                    defaultValue: "从列表移除",
+                    defaultValue: "删除文件",
                   })}
                 >
-                  <Trash2 className="h-4 w-4" />
+                  {deletingPath === file ? (
+                    <Loader2 className="h-4 w-4 animate-spin" />
+                  ) : (
+                    <Trash2 className="h-4 w-4" />
+                  )}
                 </Button>
               </div>
             );
@@ -404,10 +537,10 @@ export function CodexInstructionsFileField({
       <Dialog
         open={editorOpen}
         onOpenChange={(open) => {
-          if (!open) closeEditor();
+          if (!open && !saving) closeEditor();
         }}
       >
-        <DialogContent className="max-w-lg" zIndex="top">
+        <DialogContent className="max-w-3xl" zIndex="top">
           <DialogHeader>
             <DialogTitle>
               {editingPath
@@ -415,75 +548,149 @@ export function CodexInstructionsFileField({
                     defaultValue: "编辑模型指令文件",
                   })
                 : t("codexConfig.instructionsFileAddTitle", {
-                    defaultValue: "添加模型指令文件",
+                    defaultValue: "新建模型指令文件",
                   })}
             </DialogTitle>
             <DialogDescription>
               {t("codexConfig.instructionsFileDialogHint", {
                 defaultValue:
-                  "支持 .md 或 .txt 文件；相对路径以包含 config.toml 的目录为基准。",
+                  "直接创建或编辑 .md/.txt 文件；相对路径以包含 config.toml 的目录为基准。",
               })}
             </DialogDescription>
           </DialogHeader>
 
-          <div className="space-y-2 px-6 py-5">
-            <Label htmlFor="codex-model-instructions-file-path">
-              {t("codexConfig.instructionsFilePath", {
-                defaultValue: "文件路径",
-              })}
-            </Label>
-            <div className="flex gap-1.5">
-              <Input
-                id="codex-model-instructions-file-path"
-                value={draftPath}
-                onChange={(event) => setDraftPath(event.target.value)}
-                onKeyDown={(event) => {
-                  if (event.key === "Enter") {
-                    event.preventDefault();
-                    handleSave();
-                  }
-                }}
-                placeholder={t("codexConfig.instructionsFilePlaceholder", {
-                  defaultValue: "./instruction_5.6.md 或绝对路径",
+          <div className="space-y-4 overflow-y-auto px-6 py-5">
+            <div className="space-y-2">
+              <Label htmlFor="codex-model-instructions-file-path">
+                {t("codexConfig.instructionsFilePath", {
+                  defaultValue: "文件路径",
                 })}
-                autoFocus
-              />
-              <Button
-                type="button"
-                variant="outline"
-                size="icon"
-                className="shrink-0"
-                onClick={handleBrowse}
-                title={t("codexConfig.instructionsFileBrowse", {
-                  defaultValue: "选择 Markdown 或文本文件",
-                })}
-              >
-                <FolderOpen className="h-4 w-4" />
-              </Button>
+              </Label>
+              <div className="flex gap-1.5">
+                <Input
+                  id="codex-model-instructions-file-path"
+                  value={draftPath}
+                  onChange={(event) => {
+                    setDraftPath(event.target.value);
+                    setContentLoadFailed(false);
+                  }}
+                  placeholder={t("codexConfig.instructionsFilePlaceholder", {
+                    defaultValue: "./instruction_5.6.md 或绝对路径",
+                  })}
+                  autoFocus={!editingPath}
+                  disabled={Boolean(editingPath) || saving}
+                />
+                {!editingPath && (
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="icon"
+                    className="shrink-0"
+                    onClick={handleBrowse}
+                    disabled={saving}
+                    title={t("codexConfig.instructionsFileBrowse", {
+                      defaultValue: "选择 Markdown 或文本文件",
+                    })}
+                  >
+                    <FolderOpen className="h-4 w-4" />
+                  </Button>
+                )}
+              </div>
+              {duplicatePath && (
+                <p className="text-xs text-destructive">
+                  {t("codexConfig.instructionsFileDuplicate", {
+                    defaultValue: "该文件已在列表中",
+                  })}
+                </p>
+              )}
             </div>
-            {duplicatePath && (
-              <p className="text-xs text-destructive">
-                {t("codexConfig.instructionsFileDuplicate", {
-                  defaultValue: "该文件已在列表中",
+
+            <div className="space-y-2">
+              <Label htmlFor="codex-model-instructions-file-content">
+                {t("codexConfig.instructionsFileContent", {
+                  defaultValue: "文件内容",
                 })}
-              </p>
-            )}
+              </Label>
+              <div className="relative">
+                <Textarea
+                  id="codex-model-instructions-file-content"
+                  value={draftContent}
+                  onChange={(event) => setDraftContent(event.target.value)}
+                  placeholder={t(
+                    "codexConfig.instructionsFileContentPlaceholder",
+                    {
+                      defaultValue: "输入供 Codex 使用的模型指令...",
+                    },
+                  )}
+                  className="min-h-72 max-h-[45vh] resize-y font-mono text-xs leading-5"
+                  autoFocus={Boolean(editingPath)}
+                  disabled={contentLoading || saving}
+                />
+                {contentLoading && (
+                  <div className="absolute inset-0 flex items-center justify-center rounded-md bg-background/80 text-sm text-muted-foreground">
+                    <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                    {t("codexConfig.instructionsFileLoadingContent", {
+                      defaultValue: "正在读取文件...",
+                    })}
+                  </div>
+                )}
+              </div>
+              {contentLoadFailed && (
+                <p className="text-xs text-destructive">
+                  {t("codexConfig.instructionsFileReadRetry", {
+                    defaultValue:
+                      "文件读取失败，无法安全保存。请关闭后重试或检查文件权限。",
+                  })}
+                </p>
+              )}
+            </div>
           </div>
 
           <DialogFooter>
-            <Button type="button" variant="outline" onClick={closeEditor}>
+            <Button
+              type="button"
+              variant="outline"
+              onClick={closeEditor}
+              disabled={saving}
+            >
               {t("common.cancel", { defaultValue: "取消" })}
             </Button>
             <Button
               type="button"
-              onClick={handleSave}
-              disabled={!normalizedDraftPath || duplicatePath}
+              onClick={() => void handleSave()}
+              disabled={
+                !normalizedDraftPath ||
+                duplicatePath ||
+                contentLoading ||
+                contentLoadFailed ||
+                saving
+              }
             >
-              {t("common.save", { defaultValue: "保存" })}
+              {saving
+                ? t("common.saving", { defaultValue: "保存中..." })
+                : t("common.save", { defaultValue: "保存" })}
             </Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      <ConfirmDialog
+        isOpen={pendingDeletePath !== null}
+        zIndex="top"
+        title={t("codexConfig.instructionsFileDeleteTitle", {
+          defaultValue: "删除模型指令文件",
+        })}
+        message={t("codexConfig.instructionsFileDeleteConfirm", {
+          defaultValue:
+            "将永久删除磁盘上的文件 {{path}}，并从当前供应商列表中移除。此操作无法撤销。",
+          path: pendingDeletePath ?? "",
+        })}
+        confirmText={t("codexConfig.instructionsFileDeleteConfirmButton", {
+          defaultValue: "删除文件",
+        })}
+        onConfirm={() => void handleConfirmRemove()}
+        onCancel={() => setPendingDeletePath(null)}
+      />
     </div>
   );
 }

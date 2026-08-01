@@ -1,4 +1,10 @@
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import {
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+  within,
+} from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { CodexInstructionsFileField } from "@/components/providers/forms/CodexInstructionsFileField";
 
@@ -8,6 +14,9 @@ const dialogMocks = vi.hoisted(() => ({
 
 const instructionsApiMocks = vi.hoisted(() => ({
   inspect: vi.fn(),
+  read: vi.fn(),
+  write: vi.fn(),
+  remove: vi.fn(),
 }));
 
 vi.mock("@tauri-apps/plugin-dialog", () => ({
@@ -17,12 +26,32 @@ vi.mock("@tauri-apps/plugin-dialog", () => ({
 vi.mock("@/lib/api/codexInstructions", () => ({
   codexInstructionsApi: {
     inspect: instructionsApiMocks.inspect,
+    read: instructionsApiMocks.read,
+    write: instructionsApiMocks.write,
+    remove: instructionsApiMocks.remove,
   },
 }));
 
-const addButtonName = /添加文件|新增檔案|Add file|ファイルを追加/;
+const addButtonName = /新建文件|新建檔案|New file|新規ファイル/;
 const saveButtonName = /保存|儲存|Save/;
 const pathLabel = /文件路径|檔案路徑|File path|ファイルパス/;
+const contentLabel = /文件内容|檔案內容|File content|ファイル内容/;
+const editButtonName = /编辑文件|編輯檔案|Edit file|ファイルを編集/;
+const deleteButtonName = /删除文件|刪除檔案|Delete file|ファイルを削除/;
+
+const fileStatus = (configuredPath: string, content = "content") => ({
+  configuredPath,
+  resolvedPath: `/Users/test/.codex/${configuredPath.replace(/^\.\//, "")}`,
+  state: content.trim() ? "valid" : "empty",
+  exists: true,
+  isFile: true,
+  isSymlink: false,
+  readable: true,
+  sizeBytes: content.length,
+  modifiedAt: 123,
+  sha256: "a".repeat(64),
+  error: null,
+});
 
 describe("CodexInstructionsFileField", () => {
   beforeEach(() => {
@@ -31,6 +60,15 @@ describe("CodexInstructionsFileField", () => {
     instructionsApiMocks.inspect.mockImplementation(
       () => new Promise(() => undefined),
     );
+    instructionsApiMocks.read.mockReset();
+    instructionsApiMocks.read.mockResolvedValue("");
+    instructionsApiMocks.write.mockReset();
+    instructionsApiMocks.write.mockImplementation(
+      async (configuredPath: string, content: string) =>
+        fileStatus(configuredPath, content),
+    );
+    instructionsApiMocks.remove.mockReset();
+    instructionsApiMocks.remove.mockResolvedValue(true);
   });
 
   it("checks saved paths and shows the resolved file state", async () => {
@@ -107,7 +145,7 @@ describe("CodexInstructionsFileField", () => {
     expect(onSavedFilesChange).not.toHaveBeenCalled();
   });
 
-  it("adds a manually entered path without enabling it", () => {
+  it("creates a manually entered file without enabling it", async () => {
     const onActiveFileChange = vi.fn();
     const onSavedFilesChange = vi.fn();
     render(
@@ -124,17 +162,27 @@ describe("CodexInstructionsFileField", () => {
     fireEvent.change(screen.getByLabelText(pathLabel), {
       target: { value: "./instruction_5.6.md" },
     });
+    fireEvent.change(screen.getByLabelText(contentLabel), {
+      target: { value: "Use concise answers.\n" },
+    });
     fireEvent.click(screen.getByRole("button", { name: saveButtonName }));
 
-    expect(onSavedFilesChange).toHaveBeenCalledWith([
-      "./default.md",
-      "./instruction_5.6.md",
-    ]);
+    await waitFor(() => {
+      expect(instructionsApiMocks.write).toHaveBeenCalledWith(
+        "./instruction_5.6.md",
+        "Use concise answers.\n",
+      );
+      expect(onSavedFilesChange).toHaveBeenCalledWith([
+        "./default.md",
+        "./instruction_5.6.md",
+      ]);
+    });
     expect(onActiveFileChange).not.toHaveBeenCalled();
   });
 
   it("adds a file selected from the native dialog", async () => {
     dialogMocks.open.mockResolvedValue("/tmp/instruction_5.6.md");
+    instructionsApiMocks.read.mockResolvedValue("Selected instructions.\n");
     const onSavedFilesChange = vi.fn();
     render(
       <CodexInstructionsFileField
@@ -157,14 +205,24 @@ describe("CodexInstructionsFileField", () => {
       expect(screen.getByLabelText(pathLabel)).toHaveValue(
         "/tmp/instruction_5.6.md",
       );
+      expect(screen.getByLabelText(contentLabel)).toHaveValue(
+        "Selected instructions.\n",
+      );
     });
     fireEvent.click(screen.getByRole("button", { name: saveButtonName }));
-    expect(onSavedFilesChange).toHaveBeenCalledWith([
-      "/tmp/instruction_5.6.md",
-    ]);
+    await waitFor(() => {
+      expect(instructionsApiMocks.write).toHaveBeenCalledWith(
+        "/tmp/instruction_5.6.md",
+        "Selected instructions.\n",
+      );
+      expect(onSavedFilesChange).toHaveBeenCalledWith([
+        "/tmp/instruction_5.6.md",
+      ]);
+    });
   });
 
-  it("updates config when editing the active file", () => {
+  it("loads and updates the original content in place", async () => {
+    instructionsApiMocks.read.mockResolvedValue("Old instructions.\n");
     const onActiveFileChange = vi.fn();
     const onSavedFilesChange = vi.fn();
     render(
@@ -177,21 +235,56 @@ describe("CodexInstructionsFileField", () => {
       />,
     );
 
-    fireEvent.click(
-      screen.getAllByTitle(
-        /编辑文件路径|編輯檔案路徑|Edit file path|ファイルパスを編集/,
-      )[0],
-    );
-    fireEvent.change(screen.getByLabelText(pathLabel), {
-      target: { value: "./new.md" },
+    fireEvent.click(screen.getAllByTitle(editButtonName)[0]);
+    await waitFor(() => {
+      expect(instructionsApiMocks.read).toHaveBeenCalledWith("./old.md");
+      expect(screen.getByLabelText(contentLabel)).toHaveValue(
+        "Old instructions.\n",
+      );
+    });
+    expect(screen.getByLabelText(pathLabel)).toBeDisabled();
+    fireEvent.change(screen.getByLabelText(contentLabel), {
+      target: { value: "New instructions.\n" },
     });
     fireEvent.click(screen.getByRole("button", { name: saveButtonName }));
 
-    expect(onSavedFilesChange).toHaveBeenCalledWith(["./new.md", "./other.md"]);
-    expect(onActiveFileChange).toHaveBeenCalledWith("./new.md");
+    await waitFor(() => {
+      expect(instructionsApiMocks.write).toHaveBeenCalledWith(
+        "./old.md",
+        "New instructions.\n",
+      );
+    });
+    expect(onSavedFilesChange).not.toHaveBeenCalled();
+    expect(onActiveFileChange).not.toHaveBeenCalled();
   });
 
-  it("disables and removes the active file", () => {
+  it("does not overwrite an existing file when reading it fails", async () => {
+    instructionsApiMocks.read.mockRejectedValue(new Error("permission denied"));
+    render(
+      <CodexInstructionsFileField
+        enabled={false}
+        path=""
+        savedFiles={["./locked.md"]}
+        onActiveFileChange={vi.fn()}
+        onSavedFilesChange={vi.fn()}
+      />,
+    );
+
+    fireEvent.click(screen.getByTitle(editButtonName));
+    await waitFor(() => {
+      expect(instructionsApiMocks.read).toHaveBeenCalledWith("./locked.md");
+      expect(
+        screen.getByText(
+          /无法安全保存|無法安全儲存|cannot be saved safely|安全に保存できません/,
+        ),
+      ).toBeInTheDocument();
+    });
+
+    expect(screen.getByRole("button", { name: saveButtonName })).toBeDisabled();
+    expect(instructionsApiMocks.write).not.toHaveBeenCalled();
+  });
+
+  it("deletes the original file before disabling and removing it", async () => {
     const onActiveFileChange = vi.fn();
     const onSavedFilesChange = vi.fn();
     render(
@@ -204,12 +297,48 @@ describe("CodexInstructionsFileField", () => {
       />,
     );
 
+    fireEvent.click(screen.getAllByTitle(deleteButtonName)[0]);
+    expect(instructionsApiMocks.remove).not.toHaveBeenCalled();
+
+    const confirmDialog = screen.getByRole("dialog");
     fireEvent.click(
-      screen.getAllByTitle(
-        /从列表移除|從清單移除|Remove from list|一覧から削除/,
-      )[0],
+      within(confirmDialog).getByRole("button", { name: deleteButtonName }),
     );
-    expect(onActiveFileChange).toHaveBeenCalledWith(null);
-    expect(onSavedFilesChange).toHaveBeenCalledWith(["./other.md"]);
+
+    await waitFor(() => {
+      expect(instructionsApiMocks.remove).toHaveBeenCalledWith("./active.md");
+      expect(onActiveFileChange).toHaveBeenCalledWith(null);
+      expect(onSavedFilesChange).toHaveBeenCalledWith(["./other.md"]);
+    });
+  });
+
+  it("keeps the provider entry when deleting the original file fails", async () => {
+    instructionsApiMocks.remove.mockRejectedValue(
+      new Error("permission denied"),
+    );
+    const onActiveFileChange = vi.fn();
+    const onSavedFilesChange = vi.fn();
+    render(
+      <CodexInstructionsFileField
+        enabled={true}
+        path="./active.md"
+        savedFiles={["./active.md"]}
+        onActiveFileChange={onActiveFileChange}
+        onSavedFilesChange={onSavedFilesChange}
+      />,
+    );
+
+    fireEvent.click(screen.getByTitle(deleteButtonName));
+    fireEvent.click(
+      within(screen.getByRole("dialog")).getByRole("button", {
+        name: deleteButtonName,
+      }),
+    );
+
+    await waitFor(() => {
+      expect(instructionsApiMocks.remove).toHaveBeenCalledWith("./active.md");
+    });
+    expect(onActiveFileChange).not.toHaveBeenCalled();
+    expect(onSavedFilesChange).not.toHaveBeenCalled();
   });
 });

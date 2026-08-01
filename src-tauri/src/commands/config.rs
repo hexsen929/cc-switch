@@ -229,6 +229,124 @@ fn resolve_codex_instructions_path(configured_path: &str, config_dir: &Path) -> 
     resolved.components().collect()
 }
 
+fn validated_codex_instructions_path(
+    configured_path: &str,
+    config_dir: &Path,
+) -> Result<PathBuf, String> {
+    let configured_path = configured_path.trim();
+    if configured_path.is_empty() {
+        return Err("Model instructions file path is empty".to_string());
+    }
+
+    Ok(resolve_codex_instructions_path(configured_path, config_dir))
+}
+
+fn read_codex_instructions_file_at(
+    configured_path: &str,
+    config_dir: &Path,
+) -> Result<Option<String>, String> {
+    let resolved_path = validated_codex_instructions_path(configured_path, config_dir)?;
+    match std::fs::read_to_string(&resolved_path) {
+        Ok(content) => Ok(Some(content)),
+        Err(error) if error.kind() == ErrorKind::NotFound => Ok(None),
+        Err(error) => Err(format!(
+            "Failed to read Codex model instructions file {}: {error}",
+            resolved_path.display()
+        )),
+    }
+}
+
+fn write_codex_instructions_file_at(
+    configured_path: &str,
+    content: &str,
+    config_dir: &Path,
+) -> Result<CodexInstructionsFileStatus, String> {
+    let resolved_path = validated_codex_instructions_path(configured_path, config_dir)?;
+
+    match std::fs::symlink_metadata(&resolved_path) {
+        Ok(metadata) if metadata.file_type().is_symlink() => {
+            let target_path = std::fs::canonicalize(&resolved_path).map_err(|error| {
+                format!(
+                    "Failed to resolve Codex model instructions symlink {}: {error}",
+                    resolved_path.display()
+                )
+            })?;
+            let target_metadata = std::fs::metadata(&target_path).map_err(|error| {
+                format!(
+                    "Failed to inspect Codex model instructions symlink target {}: {error}",
+                    target_path.display()
+                )
+            })?;
+            if !target_metadata.is_file() {
+                return Err(format!(
+                    "Codex model instructions path is not a file: {}",
+                    resolved_path.display()
+                ));
+            }
+            crate::config::write_text_file(&target_path, content)
+                .map_err(|error| error.to_string())?;
+        }
+        Ok(metadata) if !metadata.is_file() => {
+            return Err(format!(
+                "Codex model instructions path is not a file: {}",
+                resolved_path.display()
+            ));
+        }
+        Ok(_) => {
+            crate::config::write_text_file(&resolved_path, content)
+                .map_err(|error| error.to_string())?;
+        }
+        Err(error) if error.kind() == ErrorKind::NotFound => {
+            crate::config::write_text_file(&resolved_path, content)
+                .map_err(|error| error.to_string())?;
+        }
+        Err(error) => {
+            return Err(format!(
+                "Failed to inspect Codex model instructions file {}: {error}",
+                resolved_path.display()
+            ));
+        }
+    }
+
+    Ok(inspect_codex_instructions_file_at(
+        configured_path,
+        config_dir,
+    ))
+}
+
+fn delete_codex_instructions_file_at(
+    configured_path: &str,
+    config_dir: &Path,
+) -> Result<bool, String> {
+    let resolved_path = validated_codex_instructions_path(configured_path, config_dir)?;
+    let metadata = match std::fs::symlink_metadata(&resolved_path) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == ErrorKind::NotFound => return Ok(false),
+        Err(error) => {
+            return Err(format!(
+                "Failed to inspect Codex model instructions file {}: {error}",
+                resolved_path.display()
+            ));
+        }
+    };
+
+    let file_type = metadata.file_type();
+    if !file_type.is_file() && !file_type.is_symlink() {
+        return Err(format!(
+            "Codex model instructions path is not a file: {}",
+            resolved_path.display()
+        ));
+    }
+
+    std::fs::remove_file(&resolved_path).map_err(|error| {
+        format!(
+            "Failed to delete Codex model instructions file {}: {error}",
+            resolved_path.display()
+        )
+    })?;
+    Ok(true)
+}
+
 fn set_file_access_error(status: &mut CodexInstructionsFileStatus, error: std::io::Error) {
     status.state = match error.kind() {
         ErrorKind::NotFound => CodexInstructionsFileState::Missing,
@@ -326,6 +444,41 @@ pub async fn inspect_codex_instructions_file(
     })
     .await
     .map_err(|error| format!("Failed to inspect Codex model instructions file: {error}"))
+}
+
+#[tauri::command]
+pub async fn read_codex_instructions_file(
+    configuredPath: String,
+) -> Result<Option<String>, String> {
+    let config_dir = codex_config::get_codex_config_dir();
+    tauri::async_runtime::spawn_blocking(move || {
+        read_codex_instructions_file_at(&configuredPath, &config_dir)
+    })
+    .await
+    .map_err(|error| format!("Failed to read Codex model instructions file: {error}"))?
+}
+
+#[tauri::command]
+pub async fn write_codex_instructions_file(
+    configuredPath: String,
+    content: String,
+) -> Result<CodexInstructionsFileStatus, String> {
+    let config_dir = codex_config::get_codex_config_dir();
+    tauri::async_runtime::spawn_blocking(move || {
+        write_codex_instructions_file_at(&configuredPath, &content, &config_dir)
+    })
+    .await
+    .map_err(|error| format!("Failed to write Codex model instructions file: {error}"))?
+}
+
+#[tauri::command]
+pub async fn delete_codex_instructions_file(configuredPath: String) -> Result<bool, String> {
+    let config_dir = codex_config::get_codex_config_dir();
+    tauri::async_runtime::spawn_blocking(move || {
+        delete_codex_instructions_file_at(&configuredPath, &config_dir)
+    })
+    .await
+    .map_err(|error| format!("Failed to delete Codex model instructions file: {error}"))?
 }
 
 #[tauri::command]
@@ -552,8 +705,9 @@ pub async fn set_common_config_snippet(
 #[cfg(test)]
 mod tests {
     use super::{
-        inspect_codex_instructions_file_at, validate_common_config_snippet,
-        CodexInstructionsFileState,
+        delete_codex_instructions_file_at, inspect_codex_instructions_file_at,
+        read_codex_instructions_file_at, validate_common_config_snippet,
+        write_codex_instructions_file_at, CodexInstructionsFileState,
     };
     use std::path::PathBuf;
 
@@ -620,6 +774,74 @@ mod tests {
         assert_eq!(invalid.state, CodexInstructionsFileState::Invalid);
         assert!(invalid.readable);
         assert!(invalid.error.is_some());
+    }
+
+    #[test]
+    fn codex_instructions_file_crud_uses_config_dir_for_relative_paths() {
+        let temp = tempfile::tempdir().expect("create temp directory");
+
+        assert_eq!(
+            read_codex_instructions_file_at("./nested/instructions.md", temp.path())
+                .expect("read missing file"),
+            None
+        );
+
+        let status = write_codex_instructions_file_at(
+            "./nested/instructions.md",
+            "Use concise answers.\n",
+            temp.path(),
+        )
+        .expect("write instructions file");
+        assert_eq!(status.state, CodexInstructionsFileState::Valid);
+        assert_eq!(
+            read_codex_instructions_file_at("./nested/instructions.md", temp.path())
+                .expect("read instructions file")
+                .as_deref(),
+            Some("Use concise answers.\n")
+        );
+
+        assert!(
+            delete_codex_instructions_file_at("./nested/instructions.md", temp.path())
+                .expect("delete instructions file")
+        );
+        assert!(
+            !delete_codex_instructions_file_at("./nested/instructions.md", temp.path())
+                .expect("delete missing instructions file")
+        );
+    }
+
+    #[test]
+    fn codex_instructions_file_write_and_delete_reject_directories() {
+        let temp = tempfile::tempdir().expect("create temp directory");
+        std::fs::create_dir(temp.path().join("directory")).expect("create directory");
+
+        assert!(write_codex_instructions_file_at("directory", "content", temp.path()).is_err());
+        assert!(delete_codex_instructions_file_at("directory", temp.path()).is_err());
+        assert!(temp.path().join("directory").is_dir());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn codex_instructions_symlink_edit_preserves_target_and_delete_removes_link_only() {
+        use std::os::unix::fs::symlink;
+
+        let temp = tempfile::tempdir().expect("create temp directory");
+        let target = temp.path().join("target.md");
+        let link = temp.path().join("instructions.md");
+        std::fs::write(&target, "old").expect("write target");
+        symlink(&target, &link).expect("create symlink");
+
+        write_codex_instructions_file_at("instructions.md", "new", temp.path())
+            .expect("write through symlink");
+        assert_eq!(std::fs::read_to_string(&target).unwrap(), "new");
+        assert!(link.is_symlink());
+
+        assert!(
+            delete_codex_instructions_file_at("instructions.md", temp.path())
+                .expect("delete symlink")
+        );
+        assert!(!link.exists());
+        assert_eq!(std::fs::read_to_string(&target).unwrap(), "new");
     }
 }
 
