@@ -976,7 +976,7 @@ pub fn run() {
             if let Err(error) = crate::claude_append_instructions::sync_runtime_projection_on_startup(
                 &app_state.db,
             ) {
-                log::warn!("✗ Failed to migrate legacy Claude append instructions: {error}");
+                log::warn!("✗ Failed to synchronize Claude runtime instructions: {error}");
             }
 
             // 迁移旧的 app_config_dir 配置到 Store
@@ -1405,6 +1405,12 @@ pub fn run() {
             commands::read_claude_append_instructions_file,
             commands::write_claude_append_instructions_file,
             commands::delete_claude_append_instructions_file,
+            commands::get_claude_system_instructions_config,
+            commands::set_claude_system_instructions_config,
+            commands::inspect_claude_system_instructions_file,
+            commands::read_claude_system_instructions_file,
+            commands::write_claude_system_instructions_file,
+            commands::delete_claude_system_instructions_file,
             // Profile management (项目配置方案)
             commands::list_profiles,
             commands::create_profile,

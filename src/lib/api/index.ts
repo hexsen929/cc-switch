@@ -6,6 +6,7 @@ export { mcpApi } from "./mcp";
 export { profilesApi } from "./profiles";
 export { promptsApi } from "./prompts";
 export { claudeAppendInstructionsApi } from "./claudeAppendInstructions";
+export { claudeSystemInstructionsApi } from "./claudeSystemInstructions";
 export { skillsApi } from "./skills";
 export { usageApi } from "./usage";
 export { subscriptionApi } from "./subscription";

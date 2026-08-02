@@ -3401,16 +3401,14 @@ impl ProxyService {
 
         // ProviderService performs the full provider-bound resource sync after
         // calling the inner method. Direct proxy/failover callers only pass
-        // through this public method, so keep Claude's append-file projection
-        // aligned here as well. A missing source clears the stale projection;
-        // it must not block an otherwise successful failover.
+        // through this public method, so keep Claude's runtime instruction
+        // projections aligned here as well. A missing source clears stale
+        // projections; it must not block an otherwise successful failover.
         if app_type == AppType::Claude.as_str() {
             if let Err(error) =
                 crate::claude_append_instructions::sync_current_provider_projection(&self.db)
             {
-                log::warn!(
-                    "Claude 热切换后同步 append instructions 投影失败（已清除旧投影）: {error}"
-                );
+                log::warn!("Claude 热切换后同步运行时指令投影失败（已清除旧投影）: {error}");
             }
         }
 

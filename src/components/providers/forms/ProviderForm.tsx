@@ -16,6 +16,7 @@ import { providersApi, settingsApi, type AppId } from "@/lib/api";
 import { useDarkMode } from "@/hooks/useDarkMode";
 import type {
   ClaudeAppendInstructionsConfig,
+  ClaudeSystemInstructionsConfig,
   ProviderCategory,
   ProviderMeta,
   ProviderResourceOverrides,
@@ -200,6 +201,13 @@ export const normalizeClaudeAppendInstructionsForSave = (
   };
 };
 
+const normalizeClaudeSystemInstructionsForSave = (
+  config?: ClaudeSystemInstructionsConfig,
+): ClaudeSystemInstructionsConfig => {
+  const normalized = normalizeClaudeAppendInstructionsForSave(config);
+  return normalized;
+};
+
 const normalizeCodexChatReasoningForSave = (
   value?: CodexChatReasoning,
 ): CodexChatReasoning | undefined => {
@@ -349,6 +357,12 @@ function ProviderFormFull({
         initialData?.meta?.claudeAppendInstructions,
       ),
     );
+  const [claudeSystemInstructions, setClaudeSystemInstructions] =
+    useState<ClaudeSystemInstructionsConfig>(() =>
+      normalizeClaudeSystemInstructionsForSave(
+        initialData?.meta?.claudeSystemInstructions,
+      ),
+    );
   const [toolCallBridge, setToolCallBridge] = useState<boolean>(
     () => initialData?.meta?.toolCallBridge ?? false,
   );
@@ -392,6 +406,11 @@ function ProviderFormFull({
     setClaudeAppendInstructions(
       normalizeClaudeAppendInstructionsForSave(
         initialData?.meta?.claudeAppendInstructions,
+      ),
+    );
+    setClaudeSystemInstructions(
+      normalizeClaudeSystemInstructionsForSave(
+        initialData?.meta?.claudeSystemInstructions,
       ),
     );
     setToolCallBridge(initialData?.meta?.toolCallBridge ?? false);
@@ -1606,6 +1625,8 @@ function ProviderFormFull({
       payload.meta ?? (initialData?.meta ? { ...initialData.meta } : undefined);
     const normalizedClaudeAppendInstructions =
       normalizeClaudeAppendInstructionsForSave(claudeAppendInstructions);
+    const normalizedClaudeSystemInstructions =
+      normalizeClaudeSystemInstructionsForSave(claudeSystemInstructions);
 
     // 确定 providerType（新建时从预设获取，编辑时从现有数据获取）
     const providerType = presetProviderType || initialData?.meta?.providerType;
@@ -1682,6 +1703,12 @@ function ProviderFormFull({
         (normalizedClaudeAppendInstructions.files.length > 0 ||
           normalizedClaudeAppendInstructions.activeFile)
           ? normalizedClaudeAppendInstructions
+          : undefined,
+      claudeSystemInstructions:
+        appId === "claude" &&
+        (normalizedClaudeSystemInstructions.files.length > 0 ||
+          normalizedClaudeSystemInstructions.activeFile)
+          ? normalizedClaudeSystemInstructions
           : undefined,
       toolCallBridge:
         category !== "official" &&
@@ -2360,6 +2387,8 @@ function ProviderFormFull({
               onLocalProxyHeadersOverrideChange={setLocalProxyHeadersOverride}
               localProxyBodyOverride={localProxyBodyOverride}
               onLocalProxyBodyOverrideChange={setLocalProxyBodyOverride}
+              systemInstructions={claudeSystemInstructions}
+              onSystemInstructionsChange={setClaudeSystemInstructions}
               appendInstructions={claudeAppendInstructions}
               onAppendInstructionsChange={setClaudeAppendInstructions}
             />

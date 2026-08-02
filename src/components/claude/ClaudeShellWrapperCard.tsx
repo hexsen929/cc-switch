@@ -226,11 +226,11 @@ export function ClaudeShellWrapperCard() {
             : status?.installed
               ? t("claudeAppendInstructions.shellWrapperInstalledHint", {
                   defaultValue:
-                    "从终端启动 Claude Code 时会加载当前启用的追加指令文件。",
+                    "从终端启动 Claude Code 时会加载当前供应商已启用的系统指令和追加指令文件。",
                 })
               : t("claudeAppendInstructions.shellWrapperNotInstalledHint", {
                   defaultValue:
-                    "安装 Shell 集成后，Claude Code 启动时会应用当前启用的追加指令。",
+                    "安装 Shell 集成后，Claude Code 启动时会应用当前供应商已启用的系统指令和追加指令。",
                 })}
       </p>
 

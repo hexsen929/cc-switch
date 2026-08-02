@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { open as openFile } from "@tauri-apps/plugin-dialog";
+import type { TOptions } from "i18next";
 import {
   CircleCheck,
   CircleX,
@@ -34,11 +35,42 @@ import {
   type ClaudeAppendInstructionsFileState,
   type ClaudeAppendInstructionsFileStatus,
 } from "@/lib/api/claudeAppendInstructions";
-import { ClaudeShellWrapperCard } from "@/components/claude/ClaudeShellWrapperCard";
+import { claudeSystemInstructionsApi } from "@/lib/api/claudeSystemInstructions";
+import type { ClaudeSystemInstructionsConfig } from "@/types";
 
 export interface ClaudeAppendInstructionsFileFieldProps {
   config: ClaudeAppendInstructionsConfig;
   onChange: (config: ClaudeAppendInstructionsConfig) => void;
+}
+
+export interface ClaudeSystemInstructionsFileFieldProps {
+  config: ClaudeSystemInstructionsConfig;
+  onChange: (config: ClaudeSystemInstructionsConfig) => void;
+}
+
+type ClaudeInstructionKind = "append" | "system";
+
+interface ClaudeInstructionFilesConfig {
+  files: string[];
+  activeFile?: string | null;
+}
+
+interface ClaudeInstructionFileApi {
+  inspect: (
+    configuredPath: string,
+  ) => Promise<ClaudeAppendInstructionsFileStatus>;
+  read: (configuredPath: string) => Promise<string | null>;
+  write: (
+    configuredPath: string,
+    content: string,
+  ) => Promise<ClaudeAppendInstructionsFileStatus>;
+  remove: (configuredPath: string) => Promise<boolean>;
+}
+
+interface ClaudeInstructionsFileFieldProps {
+  kind: ClaudeInstructionKind;
+  config: ClaudeInstructionFilesConfig;
+  onChange: (config: ClaudeInstructionFilesConfig) => void;
 }
 
 interface FileInspection {
@@ -48,8 +80,8 @@ interface FileInspection {
 }
 
 const normalizeConfig = (
-  config: ClaudeAppendInstructionsConfig,
-): ClaudeAppendInstructionsConfig => {
+  config: ClaudeInstructionFilesConfig,
+): ClaudeInstructionFilesConfig => {
   const files = Array.from(
     new Set(
       (config.files ?? [])
@@ -74,7 +106,53 @@ export function ClaudeAppendInstructionsFileField({
   config,
   onChange,
 }: ClaudeAppendInstructionsFileFieldProps) {
+  return (
+    <ClaudeInstructionsFileField
+      kind="append"
+      config={config}
+      onChange={onChange}
+    />
+  );
+}
+
+export function ClaudeSystemInstructionsFileField({
+  config,
+  onChange,
+}: ClaudeSystemInstructionsFileFieldProps) {
+  return (
+    <ClaudeInstructionsFileField
+      kind="system"
+      config={config}
+      onChange={onChange}
+    />
+  );
+}
+
+function ClaudeInstructionsFileField({
+  kind,
+  config,
+  onChange,
+}: ClaudeInstructionsFileFieldProps) {
   const { t } = useTranslation();
+  const isSystem = kind === "system";
+  const translationNamespace = isSystem
+    ? "claudeSystemInstructions"
+    : "claudeAppendInstructions";
+  const instructionLabel = isSystem ? "Claude 系统指令" : "Claude 追加指令";
+  const runtimeFlag = isSystem
+    ? "--system-prompt-file"
+    : "--append-system-prompt-file";
+  const defaultRelativePath = isSystem
+    ? "./cc-switch/system-instructions/default.md"
+    : "./cc-switch/append-instructions/default.md";
+  const instructionsApi: ClaudeInstructionFileApi = isSystem
+    ? claudeSystemInstructionsApi
+    : claudeAppendInstructionsApi;
+  const instructionT = useCallback(
+    (key: string, options: TOptions & { defaultValue: string }) =>
+      t(`${translationNamespace}.${key}`, options),
+    [t, translationNamespace],
+  );
   const [editorOpen, setEditorOpen] = useState(false);
   const [editingPath, setEditingPath] = useState<string | null>(null);
   const [draftPath, setDraftPath] = useState("");
@@ -107,7 +185,7 @@ export function ClaudeAppendInstructionsFileField({
       ),
     );
     for (const file of normalizedFiles) {
-      void claudeAppendInstructionsApi
+      void instructionsApi
         .inspect(file)
         .then((status) => {
           if (cancelled) return;
@@ -127,7 +205,7 @@ export function ClaudeAppendInstructionsFileField({
     return () => {
       cancelled = true;
     };
-  }, [normalizedFiles]);
+  }, [instructionsApi, normalizedFiles]);
 
   const closeEditor = useCallback(() => {
     editorLoadSequenceRef.current += 1;
@@ -155,7 +233,7 @@ export function ClaudeAppendInstructionsFileField({
       setContentLoading(true);
       setContentLoadFailed(false);
       try {
-        const content = await claudeAppendInstructionsApi.read(path);
+        const content = await instructionsApi.read(path);
         if (sequence !== editorLoadSequenceRef.current) return;
         setDraftContent(content ?? "");
       } catch (error) {
@@ -163,8 +241,8 @@ export function ClaudeAppendInstructionsFileField({
         setDraftContent("");
         setContentLoadFailed(true);
         toast.error(
-          t("claudeAppendInstructions.readFailed", {
-            defaultValue: "无法读取 Claude 追加指令文件：{{error}}",
+          instructionT("readFailed", {
+            defaultValue: `无法读取 ${instructionLabel}文件：{{error}}`,
             error: errorMessage(error),
           }),
         );
@@ -174,7 +252,7 @@ export function ClaudeAppendInstructionsFileField({
         }
       }
     },
-    [t],
+    [instructionLabel, instructionT, instructionsApi],
   );
 
   const openEditEditor = useCallback(
@@ -202,13 +280,13 @@ export function ClaudeAppendInstructionsFileField({
       }
     } catch (error) {
       toast.error(
-        t("claudeAppendInstructions.browseFailed", {
-          defaultValue: "无法选择 Claude 追加指令文件：{{error}}",
+        instructionT("browseFailed", {
+          defaultValue: `无法选择 ${instructionLabel}文件：{{error}}`,
           error: errorMessage(error),
         }),
       );
     }
-  }, [loadEditorContent, t]);
+  }, [instructionLabel, instructionT, loadEditorContent]);
 
   const handleSave = useCallback(async () => {
     if (
@@ -222,7 +300,7 @@ export function ClaudeAppendInstructionsFileField({
     }
     setSaving(true);
     try {
-      const status = await claudeAppendInstructionsApi.write(
+      const status = await instructionsApi.write(
         normalizedDraftPath,
         draftContent,
       );
@@ -239,15 +317,15 @@ export function ClaudeAppendInstructionsFileField({
         [normalizedDraftPath]: { loading: false, status },
       }));
       toast.success(
-        t("claudeAppendInstructions.saveSuccess", {
-          defaultValue: "Claude 追加指令文件已保存",
+        instructionT("saveSuccess", {
+          defaultValue: `${instructionLabel}文件已保存`,
         }),
       );
       closeEditor();
     } catch (error) {
       toast.error(
-        t("claudeAppendInstructions.saveFailed", {
-          defaultValue: "保存 Claude 追加指令文件失败：{{error}}",
+        instructionT("saveFailed", {
+          defaultValue: `保存${instructionLabel}文件失败：{{error}}`,
           error: errorMessage(error),
         }),
       );
@@ -266,7 +344,9 @@ export function ClaudeAppendInstructionsFileField({
     normalizedFiles,
     onChange,
     saving,
-    t,
+    instructionLabel,
+    instructionT,
+    instructionsApi,
   ]);
 
   const handleToggle = useCallback(
@@ -287,7 +367,7 @@ export function ClaudeAppendInstructionsFileField({
     setPendingDeletePath(null);
     setDeletingPath(path);
     try {
-      await claudeAppendInstructionsApi.remove(path);
+      await instructionsApi.remove(path);
       onChange(
         normalizeConfig({
           files: normalizedFiles.filter((file) => file !== path),
@@ -301,14 +381,14 @@ export function ClaudeAppendInstructionsFileField({
       });
       if (editingPath === path) closeEditor();
       toast.success(
-        t("claudeAppendInstructions.deleteSuccess", {
-          defaultValue: "Claude 追加指令文件已删除",
+        instructionT("deleteSuccess", {
+          defaultValue: `${instructionLabel}文件已删除`,
         }),
       );
     } catch (error) {
       toast.error(
-        t("claudeAppendInstructions.deleteFailed", {
-          defaultValue: "删除 Claude 追加指令文件失败：{{error}}",
+        instructionT("deleteFailed", {
+          defaultValue: `删除${instructionLabel}文件失败：{{error}}`,
           error: errorMessage(error),
         }),
       );
@@ -323,34 +403,36 @@ export function ClaudeAppendInstructionsFileField({
     normalizedFiles,
     onChange,
     pendingDeletePath,
-    t,
+    instructionLabel,
+    instructionT,
+    instructionsApi,
   ]);
 
   const stateLabel = useCallback(
     (state: ClaudeAppendInstructionsFileState) => {
       const labels: Record<ClaudeAppendInstructionsFileState, string> = {
-        valid: t("claudeAppendInstructions.stateValid", {
+        valid: instructionT("stateValid", {
           defaultValue: "文件可用",
         }),
-        missing: t("claudeAppendInstructions.stateMissing", {
+        missing: instructionT("stateMissing", {
           defaultValue: "文件不存在",
         }),
-        notFile: t("claudeAppendInstructions.stateNotFile", {
+        notFile: instructionT("stateNotFile", {
           defaultValue: "路径不是文件",
         }),
-        unreadable: t("claudeAppendInstructions.stateUnreadable", {
+        unreadable: instructionT("stateUnreadable", {
           defaultValue: "文件不可读",
         }),
-        empty: t("claudeAppendInstructions.stateEmpty", {
+        empty: instructionT("stateEmpty", {
           defaultValue: "文件内容为空",
         }),
-        invalid: t("claudeAppendInstructions.stateInvalid", {
+        invalid: instructionT("stateInvalid", {
           defaultValue: "文件内容无效",
         }),
       };
       return labels[state];
     },
-    [t],
+    [instructionT],
   );
 
   return (
@@ -359,14 +441,15 @@ export function ClaudeAppendInstructionsFileField({
         <div className="min-w-0 space-y-1">
           <div className="flex items-center gap-2 text-sm font-medium text-foreground">
             <Terminal className="h-4 w-4 shrink-0 text-muted-foreground" />
-            {t("claudeAppendInstructions.summaryTitle", {
-              defaultValue: "Claude 运行时追加指令",
+            {instructionT("summaryTitle", {
+              defaultValue: isSystem
+                ? "Claude 运行时系统指令"
+                : "Claude 运行时追加指令",
             })}
           </div>
           <p className="text-xs leading-relaxed text-muted-foreground">
-            {t("claudeAppendInstructions.summaryHint", {
-              defaultValue:
-                "每个 Claude 供应商独立管理 --append-system-prompt-file；保存供应商后应用，不会修改普通 CLAUDE.md 提示词预设。",
+            {instructionT("summaryHint", {
+              defaultValue: `每个 Claude 供应商独立管理 ${runtimeFlag}；保存供应商后应用，不会修改普通 CLAUDE.md 提示词预设。`,
             })}
           </p>
         </div>
@@ -378,32 +461,32 @@ export function ClaudeAppendInstructionsFileField({
           onClick={openAddEditor}
         >
           <Plus className="h-4 w-4" />
-          {t("claudeAppendInstructions.add", {
+          {instructionT("add", {
             defaultValue: "新建文件",
           })}
         </Button>
       </div>
 
       <div className="rounded-md border border-border-default bg-muted/30 px-3 py-2 text-xs text-muted-foreground">
-        {t("claudeAppendInstructions.count", {
+        {instructionT("count", {
           defaultValue: "共 {{count}} 个文件",
           count: normalizedFiles.length,
         })}
         {" · "}
         {activeFile
-          ? t("claudeAppendInstructions.enabledName", {
+          ? instructionT("enabledName", {
               defaultValue: "已启用：{{name}}",
               name: fileName(activeFile),
             })
-          : t("claudeAppendInstructions.noneEnabled", {
+          : instructionT("noneEnabled", {
               defaultValue: "未启用任何文件",
             })}
       </div>
 
       {normalizedFiles.length === 0 ? (
         <div className="flex min-h-20 items-center justify-center rounded-md border border-dashed border-border-default px-4 text-center text-sm text-muted-foreground">
-          {t("claudeAppendInstructions.empty", {
-            defaultValue: "暂无 Claude 追加指令文件",
+          {instructionT("empty", {
+            defaultValue: `暂无${instructionLabel}文件`,
           })}
         </div>
       ) : (
@@ -430,7 +513,7 @@ export function ClaudeAppendInstructionsFileField({
                 <Switch
                   checked={file === activeFile}
                   onCheckedChange={(checked) => handleToggle(file, checked)}
-                  aria-label={t("claudeAppendInstructions.toggle", {
+                  aria-label={instructionT("toggle", {
                     defaultValue: "启用或停用 {{name}}",
                     name: fileName(file),
                   })}
@@ -467,7 +550,7 @@ export function ClaudeAppendInstructionsFileField({
                       <>
                         <Loader2 className="h-3 w-3 animate-spin" />
                         <span>
-                          {t("claudeAppendInstructions.stateChecking", {
+                          {instructionT("stateChecking", {
                             defaultValue: "正在检查文件",
                           })}
                         </span>
@@ -476,7 +559,7 @@ export function ClaudeAppendInstructionsFileField({
                       <>
                         <CircleX className="h-3 w-3" />
                         <span>
-                          {t("claudeAppendInstructions.stateCheckFailed", {
+                          {instructionT("stateCheckFailed", {
                             defaultValue: "文件检查失败",
                           })}
                         </span>
@@ -503,7 +586,7 @@ export function ClaudeAppendInstructionsFileField({
                   size="icon"
                   className="h-8 w-8 shrink-0"
                   onClick={() => openEditEditor(file)}
-                  title={t("claudeAppendInstructions.edit", {
+                  title={instructionT("edit", {
                     defaultValue: "编辑文件",
                   })}
                 >
@@ -516,7 +599,7 @@ export function ClaudeAppendInstructionsFileField({
                   className="h-8 w-8 shrink-0 text-muted-foreground hover:text-destructive"
                   onClick={() => setPendingDeletePath(file)}
                   disabled={deletingPath !== null}
-                  title={t("claudeAppendInstructions.remove", {
+                  title={instructionT("remove", {
                     defaultValue: "删除文件",
                   })}
                 >
@@ -532,8 +615,6 @@ export function ClaudeAppendInstructionsFileField({
         </div>
       )}
 
-      <ClaudeShellWrapperCard />
-
       <Dialog
         open={editorOpen}
         onOpenChange={(nextOpen) => {
@@ -544,38 +625,36 @@ export function ClaudeAppendInstructionsFileField({
           <DialogHeader>
             <DialogTitle>
               {editingPath
-                ? t("claudeAppendInstructions.editTitle", {
-                    defaultValue: "编辑 Claude 追加指令文件",
+                ? instructionT("editTitle", {
+                    defaultValue: `编辑${instructionLabel}文件`,
                   })
-                : t("claudeAppendInstructions.addTitle", {
-                    defaultValue: "新建 Claude 追加指令文件",
+                : instructionT("addTitle", {
+                    defaultValue: `新建${instructionLabel}文件`,
                   })}
             </DialogTitle>
             <DialogDescription>
-              {t("claudeAppendInstructions.dialogHint", {
-                defaultValue:
-                  "文件内容会用于 Claude Code 的 --append-system-prompt-file；编辑时直接写回原文件。",
+              {instructionT("dialogHint", {
+                defaultValue: `文件内容会用于 Claude Code 的 ${runtimeFlag}；编辑时直接写回原文件。`,
               })}
             </DialogDescription>
           </DialogHeader>
           <div className="space-y-4 overflow-y-auto px-6 py-5">
             <div className="space-y-2">
-              <Label htmlFor="claude-append-instructions-path">
-                {t("claudeAppendInstructions.path", {
+              <Label htmlFor={`claude-${kind}-instructions-path`}>
+                {instructionT("path", {
                   defaultValue: "文件路径",
                 })}
               </Label>
               <div className="flex gap-1.5">
                 <Input
-                  id="claude-append-instructions-path"
+                  id={`claude-${kind}-instructions-path`}
                   value={draftPath}
                   onChange={(event) => {
                     setDraftPath(event.target.value);
                     setContentLoadFailed(false);
                   }}
-                  placeholder={t("claudeAppendInstructions.pathPlaceholder", {
-                    defaultValue:
-                      "./cc-switch/append-instructions/default.md 或绝对路径",
+                  placeholder={instructionT("pathPlaceholder", {
+                    defaultValue: `${defaultRelativePath} 或绝对路径`,
                   })}
                   autoFocus={!editingPath}
                   disabled={Boolean(editingPath) || saving}
@@ -588,7 +667,7 @@ export function ClaudeAppendInstructionsFileField({
                     className="shrink-0"
                     onClick={() => void handleBrowse()}
                     disabled={saving}
-                    title={t("claudeAppendInstructions.browse", {
+                    title={instructionT("browse", {
                       defaultValue: "选择 Markdown 或文本文件",
                     })}
                   >
@@ -598,29 +677,26 @@ export function ClaudeAppendInstructionsFileField({
               </div>
               {duplicatePath && (
                 <p className="text-xs text-destructive">
-                  {t("claudeAppendInstructions.duplicate", {
+                  {instructionT("duplicate", {
                     defaultValue: "该文件已在列表中",
                   })}
                 </p>
               )}
             </div>
             <div className="space-y-2">
-              <Label htmlFor="claude-append-instructions-content">
-                {t("claudeAppendInstructions.content", {
+              <Label htmlFor={`claude-${kind}-instructions-content`}>
+                {instructionT("content", {
                   defaultValue: "文件内容",
                 })}
               </Label>
               <div className="relative">
                 <Textarea
-                  id="claude-append-instructions-content"
+                  id={`claude-${kind}-instructions-content`}
                   value={draftContent}
                   onChange={(event) => setDraftContent(event.target.value)}
-                  placeholder={t(
-                    "claudeAppendInstructions.contentPlaceholder",
-                    {
-                      defaultValue: "输入要追加到 Claude Code 的运行时指令...",
-                    },
-                  )}
+                  placeholder={instructionT("contentPlaceholder", {
+                    defaultValue: `输入要通过 ${runtimeFlag} 加载的运行时指令...`,
+                  })}
                   className="min-h-72 max-h-[45vh] resize-y font-mono text-xs leading-5"
                   autoFocus={Boolean(editingPath)}
                   disabled={contentLoading || saving}
@@ -628,7 +704,7 @@ export function ClaudeAppendInstructionsFileField({
                 {contentLoading && (
                   <div className="absolute inset-0 flex items-center justify-center rounded-md bg-background/80 text-sm text-muted-foreground">
                     <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                    {t("claudeAppendInstructions.loadingContent", {
+                    {instructionT("loadingContent", {
                       defaultValue: "正在读取文件...",
                     })}
                   </div>
@@ -636,7 +712,7 @@ export function ClaudeAppendInstructionsFileField({
               </div>
               {contentLoadFailed && (
                 <p className="text-xs text-destructive">
-                  {t("claudeAppendInstructions.readRetry", {
+                  {instructionT("readRetry", {
                     defaultValue:
                       "文件读取失败，无法安全保存。请关闭后重试或检查文件权限。",
                   })}
@@ -675,15 +751,14 @@ export function ClaudeAppendInstructionsFileField({
       <ConfirmDialog
         isOpen={pendingDeletePath !== null}
         zIndex="top"
-        title={t("claudeAppendInstructions.deleteTitle", {
-          defaultValue: "删除 Claude 追加指令文件",
+        title={instructionT("deleteTitle", {
+          defaultValue: `删除${instructionLabel}文件`,
         })}
-        message={t("claudeAppendInstructions.deleteConfirm", {
-          defaultValue:
-            "将永久删除磁盘上的文件 {{path}}，并从此供应商的列表中移除。此操作无法撤销。",
+        message={instructionT("deleteConfirm", {
+          defaultValue: `将永久删除磁盘上的文件 {{path}}，并从此供应商的${instructionLabel}列表中移除。此操作无法撤销。`,
           path: pendingDeletePath ?? "",
         })}
-        confirmText={t("claudeAppendInstructions.deleteButton", {
+        confirmText={instructionT("deleteButton", {
           defaultValue: "删除文件",
         })}
         onConfirm={() => void handleConfirmRemove()}

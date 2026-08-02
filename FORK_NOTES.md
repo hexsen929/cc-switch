@@ -6,7 +6,7 @@
 
 ## 新增功能
 
-### OpenAI 兼容接口模型获取
+### 1. OpenAI 兼容接口模型获取
 
 允许用户在配置 Provider 时，通过填写 API 端点和密钥，直接获取该接口支持的模型列表，并在下拉框中选择。
 
@@ -22,7 +22,16 @@
 | `src/components/ui/model-suggest.tsx` | **新增文件**，前端模型选择 UI 组件 |
 | `src/components/providers/forms/ProviderForm.tsx` | 集成模型获取按钮和模型下拉选择 |
 
-### 更新地址
+### 2. Claude Provider 运行时指令文件
+
+每个 Claude Provider 可以独立维护并启用一个系统指令文件和一个追加指令文件。保存或切换 Provider 时，CC Switch 会将当前选择投影到 Claude 配置目录下的固定运行时文件：
+
+- `--system-prompt-file` -> `cc-switch/system-prompt.md`
+- `--append-system-prompt-file` -> `cc-switch/append-prompt.md`
+
+Shell 集成只在文件存在且非空、且用户未手动提供同类参数时加载这些文件。安装、升级和卸载均由 Provider 表单中的“Claude Shell 集成”卡片管理；不会修改 `settings.json` 或普通 `CLAUDE.md` 提示词预设。
+
+### 3. 更新地址
 
 `src-tauri/tauri.conf.json` 中的更新端点和签名公钥已替换为本仓库的配置。
 

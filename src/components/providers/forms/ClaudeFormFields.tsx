@@ -52,9 +52,14 @@ import {
 } from "@/lib/api/model-fetch";
 import { CustomUserAgentField } from "./CustomUserAgentField";
 import { LocalProxyRequestOverridesField } from "./LocalProxyRequestOverridesField";
-import { ClaudeAppendInstructionsFileField } from "./ClaudeAppendInstructionsFileField";
+import {
+  ClaudeAppendInstructionsFileField,
+  ClaudeSystemInstructionsFileField,
+} from "./ClaudeAppendInstructionsFileField";
+import { ClaudeShellWrapperCard } from "@/components/claude/ClaudeShellWrapperCard";
 import type {
   ClaudeAppendInstructionsConfig,
+  ClaudeSystemInstructionsConfig,
   ProviderCategory,
   ClaudeApiFormat,
   ClaudeApiKeyField,
@@ -167,7 +172,9 @@ interface ClaudeFormFieldsProps {
   localProxyBodyOverride: string;
   onLocalProxyBodyOverrideChange: (value: string) => void;
 
-  // Provider-scoped Claude Code --append-system-prompt-file configuration.
+  // Provider-scoped Claude Code runtime instruction file configuration.
+  systemInstructions: ClaudeSystemInstructionsConfig;
+  onSystemInstructionsChange: (config: ClaudeSystemInstructionsConfig) => void;
   appendInstructions: ClaudeAppendInstructionsConfig;
   onAppendInstructionsChange: (config: ClaudeAppendInstructionsConfig) => void;
 }
@@ -237,6 +244,8 @@ export function ClaudeFormFields({
   onLocalProxyHeadersOverrideChange,
   localProxyBodyOverride,
   onLocalProxyBodyOverrideChange,
+  systemInstructions,
+  onSystemInstructionsChange,
   appendInstructions,
   onAppendInstructionsChange,
 }: ClaudeFormFieldsProps) {
@@ -812,10 +821,17 @@ export function ClaudeFormFields({
         />
       )}
 
+      <ClaudeSystemInstructionsFileField
+        config={systemInstructions}
+        onChange={onSystemInstructionsChange}
+      />
+
       <ClaudeAppendInstructionsFileField
         config={appendInstructions}
         onChange={onAppendInstructionsChange}
       />
+
+      <ClaudeShellWrapperCard />
 
       {shouldShowModelSelector && (
         <Collapsible open={advancedExpanded} onOpenChange={setAdvancedExpanded}>

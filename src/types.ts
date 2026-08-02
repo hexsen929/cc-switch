@@ -196,6 +196,11 @@ export interface ClaudeAppendInstructionsConfig {
   activeFile?: string | null;
 }
 
+export interface ClaudeSystemInstructionsConfig {
+  files: string[];
+  activeFile?: string | null;
+}
+
 // 供应商元数据（字段名与后端一致，保持 snake_case）
 export interface ProviderMeta {
   // 自定义端点：以 URL 为键，值为端点信息
@@ -266,6 +271,8 @@ export interface ProviderMeta {
   resourceOverrides?: ProviderResourceOverrides;
   // Claude Code 启动时附加的供应商专属指令文件
   claudeAppendInstructions?: ClaudeAppendInstructionsConfig;
+  // Claude Code 启动时替换默认系统提示词的供应商专属指令文件
+  claudeSystemInstructions?: ClaudeSystemInstructionsConfig;
 }
 
 // Skill 同步方式

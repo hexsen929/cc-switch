@@ -1,4 +1,4 @@
-use crate::claude_append_instructions::runtime_projection_path;
+use crate::claude_append_instructions::{runtime_projection_path, system_runtime_projection_path};
 use crate::config::{atomic_write, get_home_dir};
 use serde::{Deserialize, Serialize};
 use std::fs;
@@ -105,11 +105,22 @@ fn get_append_prompt_path() -> Result<PathBuf, String> {
     Ok(runtime_projection_path())
 }
 
+fn get_system_prompt_path() -> Result<PathBuf, String> {
+    Ok(system_runtime_projection_path())
+}
+
 fn is_default_append_prompt_path(path: &Path) -> bool {
     path == get_home_dir()
         .join(".claude")
         .join("cc-switch")
         .join("append-prompt.md")
+}
+
+fn is_default_system_prompt_path(path: &Path) -> bool {
+    path == get_home_dir()
+        .join(".claude")
+        .join("cc-switch")
+        .join("system-prompt.md")
 }
 
 fn quote_posix(value: &str) -> String {
@@ -132,9 +143,25 @@ fn posix_append_path_expression(path: &Path) -> String {
     }
 }
 
+fn posix_system_path_expression(path: &Path) -> String {
+    if is_default_system_prompt_path(path) {
+        "\"$HOME/.claude/cc-switch/system-prompt.md\"".to_string()
+    } else {
+        quote_posix(&path.to_string_lossy())
+    }
+}
+
 fn fish_append_path_expression(path: &Path) -> String {
     if is_default_append_prompt_path(path) {
         "\"$HOME/.claude/cc-switch/append-prompt.md\"".to_string()
+    } else {
+        quote_fish(&path.to_string_lossy())
+    }
+}
+
+fn fish_system_path_expression(path: &Path) -> String {
+    if is_default_system_prompt_path(path) {
+        "\"$HOME/.claude/cc-switch/system-prompt.md\"".to_string()
     } else {
         quote_fish(&path.to_string_lossy())
     }
@@ -148,13 +175,24 @@ fn powershell_append_path_expression(path: &Path) -> String {
     }
 }
 
-fn generate_posix_wrapper(append_prompt_path: &Path) -> String {
-    let path_expression = posix_append_path_expression(append_prompt_path);
+fn powershell_system_path_expression(path: &Path) -> String {
+    if is_default_system_prompt_path(path) {
+        "Join-Path $HOME \".claude\\cc-switch\\system-prompt.md\"".to_string()
+    } else {
+        quote_powershell(&path.to_string_lossy())
+    }
+}
+
+fn generate_posix_wrapper(append_prompt_path: &Path, system_prompt_path: &Path) -> String {
+    let append_expr = posix_append_path_expression(append_prompt_path);
+    let system_expr = posix_system_path_expression(system_prompt_path);
     format!(
         r#"{WRAPPER_START}
 claude() {{
-    local append_prompt_file={path_expression}
+    local append_prompt_file={append_expr}
+    local system_prompt_file={system_expr}
     local has_append_prompt_arg=0
+    local has_system_prompt_arg=0
     local arg
     for arg in "$@"; do
         case "$arg" in
@@ -163,38 +201,58 @@ claude() {{
                 ;;
             --append-system-prompt|--append-system-prompt=*|--append-system-prompt-file|--append-system-prompt-file=*)
                 has_append_prompt_arg=1
-                break
+                ;;
+            --system-prompt|--system-prompt=*|--system-prompt-file|--system-prompt-file=*)
+                has_system_prompt_arg=1
                 ;;
         esac
     done
-    if [ -s "$append_prompt_file" ] && [ "$has_append_prompt_arg" -eq 0 ]; then
-        command claude --append-system-prompt-file "$append_prompt_file" "$@"
-    else
-        command claude "$@"
+
+    local -a extra_args=()
+    if [ -s "$system_prompt_file" ] && [ "$has_system_prompt_arg" -eq 0 ]; then
+        extra_args+=(--system-prompt-file "$system_prompt_file")
     fi
+    if [ -s "$append_prompt_file" ] && [ "$has_append_prompt_arg" -eq 0 ]; then
+        extra_args+=(--append-system-prompt-file "$append_prompt_file")
+    fi
+
+    command claude "${{extra_args[@]}}" "$@"
 }}
 {WRAPPER_END}"#
     )
 }
 
-fn generate_fish_wrapper(append_prompt_path: &Path) -> String {
-    let path_expression = fish_append_path_expression(append_prompt_path);
+fn generate_fish_wrapper(append_prompt_path: &Path, system_prompt_path: &Path) -> String {
+    let append_expr = fish_append_path_expression(append_prompt_path);
+    let system_expr = fish_system_path_expression(system_prompt_path);
     format!(
         r#"{WRAPPER_START}
 function claude
-    set -l append_prompt_file {path_expression}
+    set -l append_prompt_file {append_expr}
+    set -l system_prompt_file {system_expr}
     set -l has_append_prompt_arg 0
+    set -l has_system_prompt_arg 0
     for arg in $argv
         switch $arg
             case '--'
                 break
             case '--append-system-prompt' '--append-system-prompt=*' '--append-system-prompt-file' '--append-system-prompt-file=*'
                 set has_append_prompt_arg 1
-                break
+            case '--system-prompt' '--system-prompt=*' '--system-prompt-file' '--system-prompt-file=*'
+                set has_system_prompt_arg 1
         end
     end
+
+    set -l extra_args
+    if test -s "$system_prompt_file"; and test $has_system_prompt_arg -eq 0
+        set extra_args --system-prompt-file "$system_prompt_file"
+    end
     if test -s "$append_prompt_file"; and test $has_append_prompt_arg -eq 0
-        command claude --append-system-prompt-file "$append_prompt_file" $argv
+        set extra_args $extra_args --append-system-prompt-file "$append_prompt_file"
+    end
+
+    if test (count $extra_args) -gt 0
+        command claude $extra_args $argv
     else
         command claude $argv
     end
@@ -203,14 +261,17 @@ end
     )
 }
 
-fn generate_powershell_wrapper(append_prompt_path: &Path) -> String {
-    let path_expression = powershell_append_path_expression(append_prompt_path);
+fn generate_powershell_wrapper(append_prompt_path: &Path, system_prompt_path: &Path) -> String {
+    let append_expr = powershell_append_path_expression(append_prompt_path);
+    let system_expr = powershell_system_path_expression(system_prompt_path);
     format!(
         r#"{WRAPPER_START}
 $script:CCSwitchClaudeExecutable = (Get-Command claude -CommandType Application -ErrorAction Stop).Path
 function global:claude {{
-    $appendPromptFile = {path_expression}
+    $appendPromptFile = {append_expr}
+    $systemPromptFile = {system_expr}
     $hasAppendPromptArgument = $false
+    $hasSystemPromptArgument = $false
     foreach ($argument in $args) {{
         if ($argument -eq "--") {{
             break
@@ -222,11 +283,29 @@ function global:claude {{
             $argument -like "--append-system-prompt-file=*"
         ) {{
             $hasAppendPromptArgument = $true
-            break
+        }}
+        if (
+            $argument -eq "--system-prompt" -or
+            $argument -like "--system-prompt=*" -or
+            $argument -eq "--system-prompt-file" -or
+            $argument -like "--system-prompt-file=*"
+        ) {{
+            $hasSystemPromptArgument = $true
         }}
     }}
+
+    $extraArgs = @()
+    if ((Test-Path -LiteralPath $systemPromptFile -PathType Leaf) -and ((Get-Item -LiteralPath $systemPromptFile).Length -gt 0) -and -not $hasSystemPromptArgument) {{
+        $extraArgs += "--system-prompt-file"
+        $extraArgs += $systemPromptFile
+    }}
     if ((Test-Path -LiteralPath $appendPromptFile -PathType Leaf) -and ((Get-Item -LiteralPath $appendPromptFile).Length -gt 0) -and -not $hasAppendPromptArgument) {{
-        & $script:CCSwitchClaudeExecutable --append-system-prompt-file $appendPromptFile @args
+        $extraArgs += "--append-system-prompt-file"
+        $extraArgs += $appendPromptFile
+    }}
+
+    if ($extraArgs.Count -gt 0) {{
+        & $script:CCSwitchClaudeExecutable @extraArgs @args
     }} else {{
         & $script:CCSwitchClaudeExecutable @args
     }}
@@ -235,11 +314,24 @@ function global:claude {{
     )
 }
 
-fn generate_wrapper_code(shell_type: &str, append_prompt_path: &Path) -> Result<String, String> {
+fn generate_wrapper_code(
+    shell_type: &str,
+    append_prompt_path: &Path,
+    system_prompt_path: &Path,
+) -> Result<String, String> {
     match shell_type {
-        "Zsh" | "Bash" => Ok(generate_posix_wrapper(append_prompt_path)),
-        "Fish" => Ok(generate_fish_wrapper(append_prompt_path)),
-        "PowerShell" => Ok(generate_powershell_wrapper(append_prompt_path)),
+        "Zsh" | "Bash" => Ok(generate_posix_wrapper(
+            append_prompt_path,
+            system_prompt_path,
+        )),
+        "Fish" => Ok(generate_fish_wrapper(
+            append_prompt_path,
+            system_prompt_path,
+        )),
+        "PowerShell" => Ok(generate_powershell_wrapper(
+            append_prompt_path,
+            system_prompt_path,
+        )),
         _ => Err(format!("不支持生成 {shell_type} wrapper")),
     }
 }
@@ -506,8 +598,10 @@ pub fn check_shell_wrapper_status() -> Result<WrapperStatus, String> {
     let inspection = inspect_wrapper(&content)?;
     let installed = !inspection.blocks.is_empty();
     let append_prompt_path = get_append_prompt_path()?;
-    let expected_wrapper = generate_wrapper_code(&shell_type, &append_prompt_path)?
-        .replace('\n', detect_newline(&content));
+    let system_prompt_path = get_system_prompt_path()?;
+    let expected_wrapper =
+        generate_wrapper_code(&shell_type, &append_prompt_path, &system_prompt_path)?
+            .replace('\n', detect_newline(&content));
     let current_wrapper_matches = inspection.blocks.len() == 1
         && inspection.blocks[0].kind == WrapperKind::Current
         && &content[inspection.blocks[0].start..inspection.blocks[0].end]
@@ -540,7 +634,9 @@ pub fn install_shell_wrapper() -> Result<String, String> {
     }
     let newline = detect_newline(&existing_content);
     let append_prompt_path = get_append_prompt_path()?;
-    let wrapper = generate_wrapper_code(&shell_type, &append_prompt_path)?.replace('\n', newline);
+    let system_prompt_path = get_system_prompt_path()?;
+    let wrapper = generate_wrapper_code(&shell_type, &append_prompt_path, &system_prompt_path)?
+        .replace('\n', newline);
     let current_wrapper_matches = inspection.blocks.len() == 1
         && inspection.blocks[0].kind == WrapperKind::Current
         && &existing_content[inspection.blocks[0].start..inspection.blocks[0].end]
@@ -593,7 +689,9 @@ pub fn uninstall_shell_wrapper() -> Result<String, String> {
 pub fn get_shell_wrapper_instructions() -> Result<String, String> {
     let (config_path, shell_type) = get_shell_config_path()?;
     let append_prompt_path = get_append_prompt_path()?;
-    let wrapper_code = generate_wrapper_code(&shell_type, &append_prompt_path)?;
+    let system_prompt_path = get_system_prompt_path()?;
+    let wrapper_code =
+        generate_wrapper_code(&shell_type, &append_prompt_path, &system_prompt_path)?;
     let config_path_text = config_path.to_string_lossy();
     let reload_command = if shell_type == "PowerShell" {
         format!(". {}", quote_powershell(&config_path_text))
@@ -616,15 +714,20 @@ mod tests {
     #[test]
     fn wrappers_skip_the_flag_when_the_append_file_is_empty() {
         let append_path = Path::new("/tmp/append-prompt.md");
-        let posix = generate_posix_wrapper(append_path);
+        let system_path = Path::new("/tmp/system-prompt.md");
+        let posix = generate_posix_wrapper(append_path, system_path);
         assert!(posix.contains("if [ -s \"$append_prompt_file\" ]"));
-        assert!(posix.contains("command claude \"$@\""));
+        assert!(posix.contains("if [ -s \"$system_prompt_file\" ]"));
+        assert!(posix.contains("local -a extra_args=()"));
+        assert!(posix.contains("command claude \"${extra_args[@]}\" \"$@\""));
+        assert!(!posix.contains("eval "));
 
-        let fish = generate_fish_wrapper(append_path);
+        let fish = generate_fish_wrapper(append_path, system_path);
         assert!(fish.contains("if test -s \"$append_prompt_file\""));
+        assert!(fish.contains("if test -s \"$system_prompt_file\""));
         assert!(fish.contains("command claude $argv"));
 
-        let powershell = generate_powershell_wrapper(append_path);
+        let powershell = generate_powershell_wrapper(append_path, system_path);
         assert!(powershell.contains("-CommandType Application"));
         assert!(powershell.contains(").Path"));
         assert!(powershell.contains("& $script:CCSwitchClaudeExecutable @args"));
@@ -633,22 +736,33 @@ mod tests {
     #[test]
     fn wrappers_defer_to_user_supplied_append_prompt_arguments() {
         let append_path = Path::new("/tmp/append-prompt.md");
+        let system_path = Path::new("/tmp/system-prompt.md");
 
-        let posix = generate_posix_wrapper(append_path);
+        let posix = generate_posix_wrapper(append_path, system_path);
         assert!(posix.contains("has_append_prompt_arg=0"));
+        assert!(posix.contains("has_system_prompt_arg=0"));
         assert!(posix.contains("--append-system-prompt-file=*"));
+        assert!(posix.contains("--system-prompt-file=*"));
         assert!(posix.contains("[ \"$has_append_prompt_arg\" -eq 0 ]"));
+        assert!(posix.contains("[ \"$has_system_prompt_arg\" -eq 0 ]"));
 
-        let fish = generate_fish_wrapper(append_path);
+        let fish = generate_fish_wrapper(append_path, system_path);
         assert!(fish.contains("set -l has_append_prompt_arg 0"));
+        assert!(fish.contains("set -l has_system_prompt_arg 0"));
         assert!(fish.contains("'--append-system-prompt-file=*'"));
+        assert!(fish.contains("'--system-prompt-file=*'"));
         assert!(fish.contains("test $has_append_prompt_arg -eq 0"));
+        assert!(fish.contains("test $has_system_prompt_arg -eq 0"));
 
-        let powershell = generate_powershell_wrapper(append_path);
+        let powershell = generate_powershell_wrapper(append_path, system_path);
         assert!(powershell.contains("$hasAppendPromptArgument = $false"));
+        assert!(powershell.contains("$hasSystemPromptArgument = $false"));
         assert!(powershell.contains("$argument -eq \"--append-system-prompt\""));
+        assert!(powershell.contains("$argument -eq \"--system-prompt\""));
         assert!(powershell.contains("$argument -like \"--append-system-prompt-file=*\""));
+        assert!(powershell.contains("$argument -like \"--system-prompt-file=*\""));
         assert!(powershell.contains("-not $hasAppendPromptArgument"));
+        assert!(powershell.contains("-not $hasSystemPromptArgument"));
     }
 
     #[test]
@@ -675,7 +789,10 @@ mod tests {
         let upgraded = replace_wrapper_blocks(
             &legacy,
             &inspection.blocks,
-            Some(&generate_posix_wrapper(Path::new("/tmp/append-prompt.md"))),
+            Some(&generate_posix_wrapper(
+                Path::new("/tmp/append-prompt.md"),
+                Path::new("/tmp/system-prompt.md"),
+            )),
         );
         assert_eq!(upgraded.matches(WRAPPER_START).count(), 1);
         assert!(!upgraded.contains(LEGACY_CC_SWITCH_START));
@@ -703,16 +820,20 @@ mod tests {
 
     #[test]
     fn custom_append_path_is_quoted_for_each_shell() {
-        let path = Path::new("/tmp/CC Switch/append'prompt.md");
+        let append_path = Path::new("/tmp/CC Switch/append'prompt.md");
+        let system_path = Path::new("/tmp/CC Switch/system'prompt.md");
 
-        let posix = generate_posix_wrapper(path);
+        let posix = generate_posix_wrapper(append_path, system_path);
         assert!(posix.contains("'/tmp/CC Switch/append'\"'\"'prompt.md'"));
+        assert!(posix.contains("'/tmp/CC Switch/system'\"'\"'prompt.md'"));
 
-        let fish = generate_fish_wrapper(path);
+        let fish = generate_fish_wrapper(append_path, system_path);
         assert!(fish.contains("'/tmp/CC Switch/append\\'prompt.md'"));
+        assert!(fish.contains("'/tmp/CC Switch/system\\'prompt.md'"));
 
-        let powershell = generate_powershell_wrapper(path);
+        let powershell = generate_powershell_wrapper(append_path, system_path);
         assert!(powershell.contains("'/tmp/CC Switch/append''prompt.md'"));
+        assert!(powershell.contains("'/tmp/CC Switch/system''prompt.md'"));
     }
 
     #[test]

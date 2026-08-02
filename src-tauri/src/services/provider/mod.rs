@@ -162,8 +162,8 @@ mod tests {
     use crate::config::{get_claude_settings_path, read_json_file, write_json_file};
     use crate::database::Database;
     use crate::provider::{
-        ClaudeAppendInstructionsConfig, ProviderMcpOverrides, ProviderMeta,
-        ProviderResourceOverrides, UsageScript,
+        ClaudeAppendInstructionsConfig, ClaudeSystemInstructionsConfig, ProviderMcpOverrides,
+        ProviderMeta, ProviderResourceOverrides, UsageScript,
     };
     #[cfg(any(target_os = "macos", windows))]
     use crate::provider::{ClaudeDesktopMode, ClaudeDesktopModelRoute};
@@ -869,7 +869,7 @@ mod tests {
 
     #[test]
     #[serial]
-    fn updating_current_claude_provider_refreshes_append_instructions_projection() {
+    fn updating_current_claude_provider_refreshes_runtime_instruction_projections() {
         let _home = TempHome::new();
         crate::settings::reload_settings().expect("reload settings");
 
@@ -885,6 +885,16 @@ mod tests {
             "provider b\n",
         )
         .expect("write provider b instructions");
+        crate::config::write_text_file(
+            &crate::config::get_claude_config_dir().join("system-a.md"),
+            "system a\n",
+        )
+        .expect("write provider a system instructions");
+        crate::config::write_text_file(
+            &crate::config::get_claude_config_dir().join("system-b.md"),
+            "system b\n",
+        )
+        .expect("write provider b system instructions");
 
         let mut original =
             Provider::with_id("p1".into(), "Claude A".into(), json!({ "env": {} }), None);
@@ -892,6 +902,10 @@ mod tests {
             claude_append_instructions: Some(ClaudeAppendInstructionsConfig {
                 files: vec!["./provider-a.md".to_string()],
                 active_file: Some("./provider-a.md".to_string()),
+            }),
+            claude_system_instructions: Some(ClaudeSystemInstructionsConfig {
+                files: vec!["./system-a.md".to_string()],
+                active_file: Some("./system-a.md".to_string()),
             }),
             ..ProviderMeta::default()
         });
@@ -910,6 +924,10 @@ mod tests {
                 files: vec!["./provider-b.md".to_string()],
                 active_file: Some("./provider-b.md".to_string()),
             }),
+            claude_system_instructions: Some(ClaudeSystemInstructionsConfig {
+                files: vec!["./system-b.md".to_string()],
+                active_file: Some("./system-b.md".to_string()),
+            }),
             ..ProviderMeta::default()
         });
         ProviderService::update(&state, AppType::Claude, None, updated)
@@ -919,6 +937,13 @@ mod tests {
             std::fs::read_to_string(crate::claude_append_instructions::runtime_projection_path(),)
                 .expect("read updated projection"),
             "provider b\n"
+        );
+        assert_eq!(
+            std::fs::read_to_string(
+                crate::claude_append_instructions::system_runtime_projection_path(),
+            )
+            .expect("read updated system projection"),
+            "system b\n"
         );
     }
 

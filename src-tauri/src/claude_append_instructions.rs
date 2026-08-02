@@ -10,10 +10,11 @@ use crate::database::Database;
 use crate::error::AppError;
 use crate::provider::Provider;
 
-pub use crate::provider::ClaudeAppendInstructionsConfig;
+pub use crate::provider::{ClaudeAppendInstructionsConfig, ClaudeSystemInstructionsConfig};
 
 const CLAUDE_APPEND_INSTRUCTIONS_KEY: &str = "claude_append_prompt_files";
 const RUNTIME_PROJECTION_FILENAME: &str = "append-prompt.md";
+const SYSTEM_RUNTIME_PROJECTION_FILENAME: &str = "system-prompt.md";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -81,6 +82,29 @@ fn normalize_config(mut config: ClaudeAppendInstructionsConfig) -> ClaudeAppendI
     config
 }
 
+fn normalize_system_config(
+    mut config: ClaudeSystemInstructionsConfig,
+) -> ClaudeSystemInstructionsConfig {
+    let mut seen = HashSet::new();
+    config.files = config
+        .files
+        .into_iter()
+        .map(|file| file.trim().to_string())
+        .filter(|file| !file.is_empty() && seen.insert(file.clone()))
+        .collect();
+
+    config.active_file = config
+        .active_file
+        .map(|file| file.trim().to_string())
+        .filter(|file| !file.is_empty());
+    if let Some(active_file) = config.active_file.as_ref() {
+        if !config.files.contains(active_file) {
+            config.files.push(active_file.clone());
+        }
+    }
+    config
+}
+
 fn resolve_file_path(configured_path: &str, config_dir: &Path) -> PathBuf {
     let path = PathBuf::from(configured_path);
     let resolved = if path.is_absolute() {
@@ -95,7 +119,7 @@ fn validated_file_path(configured_path: &str, config_dir: &Path) -> Result<PathB
     let configured_path = configured_path.trim();
     if configured_path.is_empty() {
         return Err(AppError::InvalidInput(
-            "Claude append instructions file path is empty".to_string(),
+            "Claude runtime instructions file path is empty".to_string(),
         ));
     }
     Ok(resolve_file_path(configured_path, config_dir))
@@ -107,11 +131,17 @@ pub(crate) fn runtime_projection_path() -> PathBuf {
         .join(RUNTIME_PROJECTION_FILENAME)
 }
 
+pub(crate) fn system_runtime_projection_path() -> PathBuf {
+    get_claude_config_dir()
+        .join("cc-switch")
+        .join(SYSTEM_RUNTIME_PROJECTION_FILENAME)
+}
+
 fn render_runtime_projection(
-    config: &ClaudeAppendInstructionsConfig,
+    active_file: Option<&str>,
     config_dir: &Path,
 ) -> Result<String, AppError> {
-    let Some(active_file) = config.active_file.as_deref() else {
+    let Some(active_file) = active_file else {
         return Ok(String::new());
     };
     let source_path = validated_file_path(active_file, config_dir)?;
@@ -123,7 +153,7 @@ fn sync_runtime_projection_at(
     config_dir: &Path,
     runtime_path: &Path,
 ) -> Result<(), AppError> {
-    let content = render_runtime_projection(config, config_dir)?;
+    let content = render_runtime_projection(config.active_file.as_deref(), config_dir)?;
     write_text_file(runtime_path, &content)
 }
 
@@ -131,16 +161,28 @@ fn sync_runtime_projection(config: &ClaudeAppendInstructionsConfig) -> Result<()
     sync_runtime_projection_at(config, &get_claude_config_dir(), &runtime_projection_path())
 }
 
-/// Project one provider's append file into Claude Code's fixed runtime path.
-/// The projection is intentionally cleared on invalid input so instructions from
-/// a previously selected provider cannot leak into the newly selected provider.
+fn sync_system_runtime_projection(config: &ClaudeSystemInstructionsConfig) -> Result<(), AppError> {
+    let content =
+        render_runtime_projection(config.active_file.as_deref(), &get_claude_config_dir())?;
+    write_text_file(&system_runtime_projection_path(), &content)
+}
+
+/// Project one provider's system and append files into Claude Code's fixed runtime paths.
+/// Both projections are cleared on invalid input so instructions from a previously
+/// selected provider cannot leak into the newly selected provider.
 pub fn sync_runtime_projection_for_provider(provider: Option<&Provider>) -> Result<(), AppError> {
-    let config = provider.map(provider_config).unwrap_or_default();
-    match sync_runtime_projection(&config) {
+    let append_config = provider.map(provider_config).unwrap_or_default();
+    let system_config = provider.map(system_provider_config).unwrap_or_default();
+    match sync_system_runtime_projection(&system_config)
+        .and_then(|_| sync_runtime_projection(&append_config))
+    {
         Ok(()) => Ok(()),
         Err(error) => {
             if let Err(clear_error) = clear_runtime_projection() {
                 log::error!("清除 Claude append instructions 运行时投影失败: {clear_error}");
+            }
+            if let Err(clear_error) = clear_system_runtime_projection() {
+                log::error!("清除 Claude system instructions 运行时投影失败: {clear_error}");
             }
             Err(error)
         }
@@ -149,6 +191,14 @@ pub fn sync_runtime_projection_for_provider(provider: Option<&Provider>) -> Resu
 
 fn clear_runtime_projection() -> Result<(), AppError> {
     let path = runtime_projection_path();
+    if path.exists() {
+        write_text_file(&path, "")?;
+    }
+    Ok(())
+}
+
+fn clear_system_runtime_projection() -> Result<(), AppError> {
+    let path = system_runtime_projection_path();
     if path.exists() {
         write_text_file(&path, "")?;
     }
@@ -164,11 +214,96 @@ pub fn provider_config(provider: &Provider) -> ClaudeAppendInstructionsConfig {
         .unwrap_or_default()
 }
 
+pub fn system_provider_config(provider: &Provider) -> ClaudeSystemInstructionsConfig {
+    provider
+        .meta
+        .as_ref()
+        .and_then(|meta| meta.claude_system_instructions.clone())
+        .map(normalize_system_config)
+        .unwrap_or_default()
+}
+
 fn current_provider(db: &Database) -> Result<Option<Provider>, AppError> {
     let Some(id) = crate::settings::get_effective_current_provider(db, &AppType::Claude)? else {
         return Ok(None);
     };
     db.get_provider_by_id(&id, AppType::Claude.as_str())
+}
+
+fn configured_paths_match(left: &str, right: &str, config_dir: &Path) -> bool {
+    let left = left.trim();
+    let right = right.trim();
+    !left.is_empty()
+        && !right.is_empty()
+        && resolve_file_path(left, config_dir) == resolve_file_path(right, config_dir)
+}
+
+fn active_projections_for_path(
+    provider: &Provider,
+    configured_path: &str,
+    config_dir: &Path,
+) -> (bool, bool) {
+    let append_active = provider_config(provider)
+        .active_file
+        .as_deref()
+        .is_some_and(|active| configured_paths_match(active, configured_path, config_dir));
+    let system_active = system_provider_config(provider)
+        .active_file
+        .as_deref()
+        .is_some_and(|active| configured_paths_match(active, configured_path, config_dir));
+    (append_active, system_active)
+}
+
+fn sync_projections_after_source_write(
+    db: &Database,
+    configured_path: &str,
+) -> Result<(), AppError> {
+    let config_dir = get_claude_config_dir();
+    let provider = migrate_legacy_to_current_provider(db)?;
+    if let Some(provider) = provider.or(current_provider(db)?) {
+        let (append_active, system_active) =
+            active_projections_for_path(&provider, configured_path, &config_dir);
+        if append_active || system_active {
+            sync_runtime_projection_for_provider(Some(&provider))?;
+        }
+    } else {
+        let config = load_legacy_config(db)?;
+        if config
+            .active_file
+            .as_deref()
+            .is_some_and(|active| configured_paths_match(active, configured_path, &config_dir))
+        {
+            sync_runtime_projection(&config)?;
+        }
+    }
+    Ok(())
+}
+
+fn clear_projections_after_source_delete(
+    db: &Database,
+    configured_path: &str,
+) -> Result<(), AppError> {
+    let config_dir = get_claude_config_dir();
+    if let Some(provider) = current_provider(db)? {
+        let (append_active, system_active) =
+            active_projections_for_path(&provider, configured_path, &config_dir);
+        if append_active {
+            clear_runtime_projection()?;
+        }
+        if system_active {
+            clear_system_runtime_projection()?;
+        }
+    } else {
+        let config = load_legacy_config(db)?;
+        if config
+            .active_file
+            .as_deref()
+            .is_some_and(|active| configured_paths_match(active, configured_path, &config_dir))
+        {
+            clear_runtime_projection()?;
+        }
+    }
+    Ok(())
 }
 
 fn load_legacy_config(db: &Database) -> Result<ClaudeAppendInstructionsConfig, AppError> {
@@ -243,6 +378,45 @@ fn save_provider_config(
     if let Err(error) = db.save_provider(AppType::Claude.as_str(), &next) {
         if let Err(rollback_error) = sync_runtime_projection_for_provider(Some(&previous)) {
             log::error!("恢复 Claude append instructions 运行时投影失败: {rollback_error}");
+        }
+        return Err(error);
+    }
+    Ok(next)
+}
+
+fn set_system_provider_config(provider: &mut Provider, config: ClaudeSystemInstructionsConfig) {
+    let config = normalize_system_config(config);
+    let meta = provider.meta.get_or_insert_with(Default::default);
+    meta.claude_system_instructions = if config.files.is_empty() && config.active_file.is_none() {
+        None
+    } else {
+        Some(config)
+    };
+}
+
+fn save_system_provider_config(
+    db: &Database,
+    provider: &Provider,
+    config: ClaudeSystemInstructionsConfig,
+) -> Result<Provider, AppError> {
+    let current_id = current_provider(db)?.map(|current| current.id);
+    if current_id.as_deref() != Some(provider.id.as_str()) {
+        return Err(AppError::InvalidInput(format!(
+            "Claude system instructions can only update the current provider: {}",
+            provider.id
+        )));
+    }
+
+    let config = normalize_system_config(config);
+    let previous = provider.clone();
+    let mut next = provider.clone();
+    set_system_provider_config(&mut next, config);
+
+    // Validate both runtime projections before committing the new provider metadata.
+    sync_runtime_projection_for_provider(Some(&next))?;
+    if let Err(error) = db.save_provider(AppType::Claude.as_str(), &next) {
+        if let Err(rollback_error) = sync_runtime_projection_for_provider(Some(&previous)) {
+            log::error!("恢复 Claude system instructions 运行时投影失败: {rollback_error}");
         }
         return Err(error);
     }
@@ -498,7 +672,30 @@ pub fn update_config(
     } else {
         clear_runtime_projection()?;
     }
+    clear_system_runtime_projection()?;
     Ok(config)
+}
+
+pub fn get_system_config(db: &Database) -> Result<ClaudeSystemInstructionsConfig, AppError> {
+    Ok(current_provider(db)?
+        .as_ref()
+        .map(system_provider_config)
+        .unwrap_or_default())
+}
+
+pub fn update_system_config(
+    db: &Database,
+    config: ClaudeSystemInstructionsConfig,
+) -> Result<ClaudeSystemInstructionsConfig, AppError> {
+    let provider = migrate_legacy_to_current_provider(db)?
+        .or(current_provider(db)?)
+        .ok_or_else(|| {
+            AppError::InvalidInput(
+                "Claude system instructions require a selected Claude provider".to_string(),
+            )
+        })?;
+    let saved = save_system_provider_config(db, &provider, config)?;
+    Ok(system_provider_config(&saved))
 }
 
 pub fn sync_runtime_projection_on_startup(
@@ -515,6 +712,7 @@ pub fn sync_runtime_projection_on_startup(
     } else {
         clear_runtime_projection()?;
     }
+    clear_system_runtime_projection()?;
     Ok(config)
 }
 
@@ -558,7 +756,7 @@ fn write_file_at(
                 .is_file()
             {
                 return Err(AppError::InvalidInput(format!(
-                    "Claude append instructions path is not a file: {}",
+                    "Claude runtime instructions path is not a file: {}",
                     resolved_path.display()
                 )));
             }
@@ -566,7 +764,7 @@ fn write_file_at(
         }
         Ok(metadata) if !metadata.is_file() => {
             return Err(AppError::InvalidInput(format!(
-                "Claude append instructions path is not a file: {}",
+                "Claude runtime instructions path is not a file: {}",
                 resolved_path.display()
             )));
         }
@@ -586,24 +784,23 @@ pub fn write_file(
     content: &str,
 ) -> Result<ClaudeAppendInstructionsFileStatus, AppError> {
     let status = write_file_at(configured_path, content, &get_claude_config_dir())?;
-    let provider = migrate_legacy_to_current_provider(db)?;
-    if let Some(provider) = provider.or(current_provider(db)?) {
-        let config = provider_config(&provider);
-        if config.active_file.as_deref() == Some(configured_path.trim()) {
-            sync_runtime_projection_for_provider(Some(&provider))?;
-        }
-    } else {
-        let config = load_legacy_config(db)?;
-        if config.active_file.as_deref() == Some(configured_path.trim()) {
-            sync_runtime_projection(&config)?;
-        }
-    }
+    sync_projections_after_source_write(db, configured_path)?;
     Ok(status)
 }
 
-pub fn delete_file_only(db: &Database, configured_path: &str) -> Result<bool, AppError> {
+pub fn write_system_file(
+    db: &Database,
+    configured_path: &str,
+    content: &str,
+) -> Result<ClaudeAppendInstructionsFileStatus, AppError> {
+    let status = write_file_at(configured_path, content, &get_claude_config_dir())?;
+    sync_projections_after_source_write(db, configured_path)?;
+    Ok(status)
+}
+
+fn delete_file_at(configured_path: &str, config_dir: &Path) -> Result<bool, AppError> {
     let configured_path = configured_path.trim();
-    let resolved_path = validated_file_path(configured_path, &get_claude_config_dir())?;
+    let resolved_path = validated_file_path(configured_path, config_dir)?;
     let metadata = match std::fs::symlink_metadata(&resolved_path) {
         Ok(metadata) => Some(metadata),
         Err(error) if error.kind() == ErrorKind::NotFound => None,
@@ -613,27 +810,38 @@ pub fn delete_file_only(db: &Database, configured_path: &str) -> Result<bool, Ap
         let file_type = metadata.file_type();
         if !file_type.is_file() && !file_type.is_symlink() {
             return Err(AppError::InvalidInput(format!(
-                "Claude append instructions path is not a file: {}",
+                "Claude instructions path is not a file: {}",
                 resolved_path.display()
             )));
         }
         std::fs::remove_file(&resolved_path)
             .map_err(|error| AppError::io(&resolved_path, error))?;
     }
+    Ok(metadata.is_some())
+}
+
+pub fn delete_file_only(db: &Database, configured_path: &str) -> Result<bool, AppError> {
+    let configured_path = configured_path.trim();
+    let deleted = delete_file_at(configured_path, &get_claude_config_dir())?;
 
     // The form owns provider metadata until its Save button is pressed. Clear
-    // only the runtime copy here so a deleted source cannot continue to run.
-    let provider = current_provider(db)?;
-    let is_active = provider.as_ref().is_some_and(|provider| {
-        provider_config(provider).active_file.as_deref() == Some(configured_path)
-    });
-    let legacy_is_active = provider.is_none()
-        && load_legacy_config(db)?.active_file.as_deref() == Some(configured_path);
-    if is_active || legacy_is_active {
-        clear_runtime_projection()?;
-    }
+    // every active runtime projection that references the deleted source so a
+    // shared source cannot leave stale system or append instructions running.
+    clear_projections_after_source_delete(db, configured_path)?;
 
-    Ok(metadata.is_some())
+    Ok(deleted)
+}
+
+pub fn delete_system_file_only(db: &Database, configured_path: &str) -> Result<bool, AppError> {
+    let configured_path = configured_path.trim();
+    let deleted = delete_file_at(configured_path, &get_claude_config_dir())?;
+
+    // Provider metadata is only persisted when the form is saved. Clear every
+    // active projection that references the source, regardless of which file
+    // manager initiated the deletion.
+    clear_projections_after_source_delete(db, configured_path)?;
+
+    Ok(deleted)
 }
 
 fn set_file_access_error(status: &mut ClaudeAppendInstructionsFileStatus, error: std::io::Error) {
@@ -651,7 +859,7 @@ fn inspect_file_at(configured_path: &str, config_dir: &Path) -> ClaudeAppendInst
     let mut status =
         ClaudeAppendInstructionsFileStatus::new(configured_path, resolved_path.clone());
     if status.configured_path.is_empty() {
-        status.error = Some("Claude append instructions file path is empty".to_string());
+        status.error = Some("Claude runtime instructions file path is empty".to_string());
         return status;
     }
 
@@ -706,7 +914,7 @@ fn inspect_file_at(configured_path: &str, config_dir: &Path) -> ClaudeAppendInst
         Err(error) => {
             status.state = ClaudeAppendInstructionsFileState::Invalid;
             status.error = Some(format!(
-                "Claude append instructions file is not valid UTF-8: {error}"
+                "Claude runtime instructions file is not valid UTF-8: {error}"
             ));
         }
     }
@@ -755,12 +963,23 @@ mod tests {
     }
 
     fn provider_with_config(id: &str, config: Option<ClaudeAppendInstructionsConfig>) -> Provider {
+        provider_with_instruction_configs(id, config, None)
+    }
+
+    fn provider_with_instruction_configs(
+        id: &str,
+        append_config: Option<ClaudeAppendInstructionsConfig>,
+        system_config: Option<ClaudeSystemInstructionsConfig>,
+    ) -> Provider {
         let mut provider =
             Provider::with_id(id.to_string(), id.to_string(), json!({ "env": {} }), None);
-        provider.meta = config.map(|config| ProviderMeta {
-            claude_append_instructions: Some(config),
-            ..ProviderMeta::default()
-        });
+        if append_config.is_some() || system_config.is_some() {
+            provider.meta = Some(ProviderMeta {
+                claude_append_instructions: append_config,
+                claude_system_instructions: system_config,
+                ..ProviderMeta::default()
+            });
+        }
         provider
     }
 
@@ -985,26 +1204,38 @@ mod tests {
 
     #[test]
     #[serial_test::serial]
-    fn switching_current_provider_replaces_the_runtime_projection() {
+    fn switching_current_provider_replaces_both_runtime_projections() {
         let _home = TempHome::new();
         let db = Database::memory().expect("create memory database");
         write_text_file(&get_claude_config_dir().join("a.md"), "provider a\n")
             .expect("write source a");
         write_text_file(&get_claude_config_dir().join("b.md"), "provider b\n")
             .expect("write source b");
+        write_text_file(&get_claude_config_dir().join("a-system.md"), "system a\n")
+            .expect("write system source a");
+        write_text_file(&get_claude_config_dir().join("b-system.md"), "system b\n")
+            .expect("write system source b");
 
-        let provider_a = provider_with_config(
+        let provider_a = provider_with_instruction_configs(
             "claude-a",
             Some(ClaudeAppendInstructionsConfig {
                 files: vec!["./a.md".to_string()],
                 active_file: Some("./a.md".to_string()),
             }),
+            Some(ClaudeSystemInstructionsConfig {
+                files: vec!["./a-system.md".to_string()],
+                active_file: Some("./a-system.md".to_string()),
+            }),
         );
-        let provider_b = provider_with_config(
+        let provider_b = provider_with_instruction_configs(
             "claude-b",
             Some(ClaudeAppendInstructionsConfig {
                 files: vec!["./b.md".to_string()],
                 active_file: Some("./b.md".to_string()),
+            }),
+            Some(ClaudeSystemInstructionsConfig {
+                files: vec!["./b-system.md".to_string()],
+                active_file: Some("./b-system.md".to_string()),
             }),
         );
         db.save_provider(AppType::Claude.as_str(), &provider_a)
@@ -1018,12 +1249,22 @@ mod tests {
             std::fs::read_to_string(runtime_projection_path()).expect("read provider a"),
             "provider a\n"
         );
+        assert_eq!(
+            std::fs::read_to_string(system_runtime_projection_path())
+                .expect("read system provider a"),
+            "system a\n"
+        );
 
         set_current(&db, "claude-b");
         sync_current_provider_projection(&db).expect("project provider b");
         assert_eq!(
             std::fs::read_to_string(runtime_projection_path()).expect("read provider b"),
             "provider b\n"
+        );
+        assert_eq!(
+            std::fs::read_to_string(system_runtime_projection_path())
+                .expect("read system provider b"),
+            "system b\n"
         );
     }
 
@@ -1051,6 +1292,105 @@ mod tests {
             std::fs::read_to_string(runtime_projection_path()).expect("read projection"),
             "after\n"
         );
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn editing_the_saved_active_system_file_refreshes_its_runtime_projection() {
+        let _home = TempHome::new();
+        let db = Database::memory().expect("create memory database");
+        write_text_file(&get_claude_config_dir().join("system.md"), "before\n")
+            .expect("write system source");
+        let provider = provider_with_instruction_configs(
+            "claude-current",
+            None,
+            Some(ClaudeSystemInstructionsConfig {
+                files: vec!["./system.md".to_string()],
+                active_file: Some("./system.md".to_string()),
+            }),
+        );
+        db.save_provider(AppType::Claude.as_str(), &provider)
+            .expect("save provider");
+        set_current(&db, "claude-current");
+        sync_current_provider_projection(&db).expect("seed system projection");
+
+        write_system_file(&db, "./system.md", "after\n").expect("edit system source");
+        assert_eq!(
+            std::fs::read_to_string(system_runtime_projection_path())
+                .expect("read system projection"),
+            "after\n"
+        );
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn editing_a_shared_active_file_refreshes_both_runtime_projections() {
+        let _home = TempHome::new();
+        let db = Database::memory().expect("create memory database");
+        write_text_file(&get_claude_config_dir().join("shared.md"), "before\n")
+            .expect("write shared source");
+        let provider = provider_with_instruction_configs(
+            "claude-current",
+            Some(ClaudeAppendInstructionsConfig {
+                files: vec!["./shared.md".to_string()],
+                active_file: Some("./shared.md".to_string()),
+            }),
+            Some(ClaudeSystemInstructionsConfig {
+                files: vec!["shared.md".to_string()],
+                active_file: Some("shared.md".to_string()),
+            }),
+        );
+        db.save_provider(AppType::Claude.as_str(), &provider)
+            .expect("save provider");
+        set_current(&db, "claude-current");
+        sync_current_provider_projection(&db).expect("seed projections");
+
+        write_system_file(&db, "./shared.md", "after\n").expect("edit shared source");
+        assert_eq!(
+            std::fs::read_to_string(runtime_projection_path()).expect("read append projection"),
+            "after\n"
+        );
+        assert_eq!(
+            std::fs::read_to_string(system_runtime_projection_path())
+                .expect("read system projection"),
+            "after\n"
+        );
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn deleting_a_shared_active_file_clears_both_runtime_projections() {
+        let _home = TempHome::new();
+        let db = Database::memory().expect("create memory database");
+        write_text_file(&get_claude_config_dir().join("shared.md"), "shared\n")
+            .expect("write shared source");
+        let provider = provider_with_instruction_configs(
+            "claude-current",
+            Some(ClaudeAppendInstructionsConfig {
+                files: vec!["./shared.md".to_string()],
+                active_file: Some("./shared.md".to_string()),
+            }),
+            Some(ClaudeSystemInstructionsConfig {
+                files: vec!["./shared.md".to_string()],
+                active_file: Some("./shared.md".to_string()),
+            }),
+        );
+        db.save_provider(AppType::Claude.as_str(), &provider)
+            .expect("save provider");
+        set_current(&db, "claude-current");
+        sync_current_provider_projection(&db).expect("seed projections");
+
+        assert!(delete_system_file_only(&db, "shared.md").expect("delete shared source"));
+        assert_eq!(
+            std::fs::read_to_string(runtime_projection_path()).expect("read append projection"),
+            ""
+        );
+        assert_eq!(
+            std::fs::read_to_string(system_runtime_projection_path())
+                .expect("read system projection"),
+            ""
+        );
+        assert!(!get_claude_config_dir().join("shared.md").exists());
     }
 
     #[test]
