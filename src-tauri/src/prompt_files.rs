@@ -45,7 +45,8 @@ pub fn prompt_file_path(app: &AppType) -> Result<PathBuf, AppError> {
         AppType::Claude => "CLAUDE.md",
         AppType::Codex => "AGENTS.md",
         AppType::Gemini => "GEMINI.md",
-        AppType::GrokBuild | AppType::OpenCode | AppType::OpenClaw | AppType::Hermes => "AGENTS.md",
+        AppType::GrokBuild | AppType::OpenCode | AppType::OpenClaw => "AGENTS.md",
+        AppType::Hermes => "SOUL.md",
         AppType::ClaudeDesktop => unreachable!("handled above"),
     };
 
@@ -311,6 +312,16 @@ fn get_base_dir_with_fallback(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn hermes_prompt_file_uses_soul_md() {
+        let path = prompt_file_path(&AppType::Hermes).expect("Hermes prompt path");
+
+        assert_eq!(
+            path.file_name().and_then(|name| name.to_str()),
+            Some("SOUL.md")
+        );
+    }
 
     #[test]
     fn managed_import_preserves_surrounding_content() {
