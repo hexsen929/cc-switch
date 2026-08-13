@@ -71,6 +71,7 @@ import { ProxyToggle } from "@/components/proxy/ProxyToggle";
 import { CodexChatgptAuthToggle } from "@/components/proxy/CodexChatgptAuthToggle";
 import { ClaudeDesktopRouteToggle } from "@/components/proxy/ClaudeDesktopRouteToggle";
 import { FailoverToggle } from "@/components/proxy/FailoverToggle";
+import { RoutingActivationBrand } from "@/components/proxy/RoutingActivationBrand";
 import UsageScriptModal from "@/components/UsageScriptModal";
 import UnifiedMcpPanel from "@/components/mcp/UnifiedMcpPanel";
 import PromptPanel from "@/components/prompts/PromptPanel";
@@ -1236,21 +1237,13 @@ function App() {
               </div>
             ) : (
               <div className="flex items-center gap-2">
-                <div className="relative inline-flex items-center">
-                  <a
-                    href="https://ccswitch.io"
-                    target="_blank"
-                    rel="noreferrer"
-                    className={cn(
-                      "text-xl font-semibold transition-colors",
-                      isProxyRunning && isCurrentAppTakeoverActive
-                        ? "text-emerald-500 hover:text-emerald-600 dark:text-emerald-400 dark:hover:text-emerald-300"
-                        : "text-blue-500 hover:text-blue-600 dark:text-blue-400 dark:hover:text-blue-300",
-                    )}
-                  >
-                    CC Switch
-                  </a>
-                </div>
+                <RoutingActivationBrand
+                  active={isProxyRunning && isCurrentAppTakeoverActive}
+                  contextKey={activeApp}
+                  ready={
+                    proxyStatus !== undefined && takeoverStatus !== undefined
+                  }
+                />
                 <Button
                   variant="ghost"
                   size="icon"

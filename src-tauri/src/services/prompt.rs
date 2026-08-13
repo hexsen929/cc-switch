@@ -44,6 +44,26 @@ fn is_direct_prompt_owned_memory(
 
 pub struct PromptService;
 
+fn duplicate_enabled_prompt_warning(prompts: &IndexMap<String, Prompt>) -> Option<String> {
+    let enabled: Vec<(&String, &Prompt)> = prompts
+        .iter()
+        .filter(|(_, prompt)| prompt.enabled)
+        .collect();
+
+    if enabled.len() <= 1 {
+        return None;
+    }
+
+    let ids = enabled
+        .iter()
+        .map(|(id, _)| id.as_str())
+        .collect::<Vec<_>>()
+        .join(", ");
+    Some(format!(
+        "多个全局 Prompt 同时启用；已按当前供应商覆盖规则投影（无覆盖时按稳定顺序选择第一个）；enabled IDs: {ids}"
+    ))
+}
+
 impl PromptService {
     fn get_current_provider_for_app(
         state: &AppState,
@@ -358,6 +378,47 @@ impl PromptService {
         read_live_prompt_content(&app)
     }
 
+    /// Project the database SSOT to one application's managed prompt file.
+    ///
+    /// This deliberately does not call `enable_prompt`: restore paths must not
+    /// read stale live content and write it back into the freshly imported DB.
+    pub fn sync_to_live(state: &AppState, app: AppType) -> Result<(), AppError> {
+        if matches!(app, AppType::ClaudeDesktop) {
+            return Ok(());
+        }
+
+        let prompts = state.db.get_prompts(app.as_str())?;
+        let warning = duplicate_enabled_prompt_warning(&prompts);
+        Self::sync_effective_prompt_to_file(state, app)?;
+        if let Some(warning) = warning {
+            return Err(AppError::Message(warning));
+        }
+        Ok(())
+    }
+
+    /// Best-effort projection for every Prompt-capable application.
+    pub fn sync_all_to_live(state: &AppState) -> Result<(), AppError> {
+        let mut failures = Vec::new();
+        for app in AppType::all() {
+            if matches!(app, AppType::ClaudeDesktop) {
+                continue;
+            }
+            if let Err(error) = Self::sync_to_live(state, app.clone()) {
+                log::warn!("同步 Prompt 到 {app:?} 失败: {error}");
+                failures.push(format!("{}: {error}", app.as_str()));
+            }
+        }
+
+        if failures.is_empty() {
+            Ok(())
+        } else {
+            Err(AppError::Message(format!(
+                "部分应用 Prompt 同步失败: {}",
+                failures.join("; ")
+            )))
+        }
+    }
+
     /// 首次启动时从现有提示词文件自动导入（如果存在）
     /// 返回导入的数量
     pub fn import_from_file_on_first_launch(
@@ -413,17 +474,21 @@ mod tests {
     use crate::Database;
     use std::sync::Arc;
 
-    fn prompt(id: &str) -> Prompt {
+    fn prompt_with_content(id: &str, content: &str, enabled: bool) -> Prompt {
         Prompt {
             id: id.to_string(),
             name: id.to_string(),
-            content: "main".to_string(),
+            content: content.to_string(),
             description: None,
             managed_import: false,
-            enabled: true,
+            enabled,
             created_at: None,
             updated_at: None,
         }
+    }
+
+    fn prompt(id: &str) -> Prompt {
+        prompt_with_content(id, "main", true)
     }
 
     #[test]
@@ -504,6 +569,95 @@ mod tests {
             std::env::set_var("CC_SWITCH_TEST_HOME", previous_home);
         } else {
             std::env::remove_var("CC_SWITCH_TEST_HOME");
+        }
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn restored_prompt_projection_writes_the_enabled_content() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let previous_home = std::env::var_os("CC_SWITCH_TEST_HOME");
+        std::env::set_var("CC_SWITCH_TEST_HOME", temp.path());
+        let db = Arc::new(Database::memory().expect("create memory database"));
+        let state = AppState::new(db.clone());
+        db.save_prompt(
+            AppType::Codex.as_str(),
+            &prompt_with_content("off", "old", false),
+        )
+        .expect("save disabled prompt");
+        db.save_prompt(
+            AppType::Codex.as_str(),
+            &prompt_with_content("on", "restored", true),
+        )
+        .expect("save enabled prompt");
+
+        PromptService::sync_to_live(&state, AppType::Codex).expect("project prompt");
+        let path = prompt_file_path(&AppType::Codex).expect("prompt path");
+        assert_eq!(
+            std::fs::read_to_string(path).expect("read prompt"),
+            "restored"
+        );
+
+        match previous_home {
+            Some(value) => std::env::set_var("CC_SWITCH_TEST_HOME", value),
+            None => std::env::remove_var("CC_SWITCH_TEST_HOME"),
+        }
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn restored_prompt_projection_clears_a_stale_file_when_none_are_enabled() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let previous_home = std::env::var_os("CC_SWITCH_TEST_HOME");
+        std::env::set_var("CC_SWITCH_TEST_HOME", temp.path());
+        let db = Arc::new(Database::memory().expect("create memory database"));
+        let state = AppState::new(db);
+        let path = prompt_file_path(&AppType::Codex).expect("prompt path");
+        std::fs::create_dir_all(path.parent().expect("prompt parent"))
+            .expect("create prompt directory");
+        std::fs::write(&path, "stale").expect("seed stale prompt");
+
+        PromptService::sync_to_live(&state, AppType::Codex).expect("clear prompt");
+        assert_eq!(std::fs::read_to_string(path).expect("read prompt"), "");
+
+        match previous_home {
+            Some(value) => std::env::set_var("CC_SWITCH_TEST_HOME", value),
+            None => std::env::remove_var("CC_SWITCH_TEST_HOME"),
+        }
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn restored_prompt_projection_selects_the_first_enabled_prompt_deterministically() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let previous_home = std::env::var_os("CC_SWITCH_TEST_HOME");
+        std::env::set_var("CC_SWITCH_TEST_HOME", temp.path());
+        let db = Arc::new(Database::memory().expect("create memory database"));
+        let state = AppState::new(db.clone());
+        db.save_prompt(
+            AppType::Codex.as_str(),
+            &prompt_with_content("first", "first body", true),
+        )
+        .expect("save first prompt");
+        db.save_prompt(
+            AppType::Codex.as_str(),
+            &prompt_with_content("second", "second body", true),
+        )
+        .expect("save second prompt");
+
+        let warning = PromptService::sync_to_live(&state, AppType::Codex)
+            .expect_err("duplicate enabled prompts should warn")
+            .to_string();
+        assert!(warning.contains("first, second"));
+        let path = prompt_file_path(&AppType::Codex).expect("prompt path");
+        assert_eq!(
+            std::fs::read_to_string(path).expect("read prompt"),
+            "first body"
+        );
+
+        match previous_home {
+            Some(value) => std::env::set_var("CC_SWITCH_TEST_HOME", value),
+            None => std::env::remove_var("CC_SWITCH_TEST_HOME"),
         }
     }
 }
