@@ -486,7 +486,7 @@ function ClaudeInstructionsFileField({
       {normalizedFiles.length === 0 ? (
         <div className="flex min-h-20 items-center justify-center rounded-md border border-dashed border-border-default px-4 text-center text-sm text-muted-foreground">
           {instructionT("empty", {
-            defaultValue: `暂无${instructionLabel}文件`,
+            defaultValue: `暂无 ${instructionLabel}文件`,
           })}
         </div>
       ) : (

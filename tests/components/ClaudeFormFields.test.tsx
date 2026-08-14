@@ -41,6 +41,9 @@ vi.mock(
     ClaudeAppendInstructionsFileField: () => (
       <div data-testid="claude-append-instructions-field" />
     ),
+    ClaudeSystemInstructionsFileField: () => (
+      <div data-testid="claude-system-instructions-field" />
+    ),
   }),
 );
 
@@ -113,6 +116,8 @@ const renderCopilotForm = (overrides: Partial<ClaudeFormFieldsProps> = {}) => {
     onLocalProxyBodyOverrideChange: vi.fn(),
     appendInstructions: { files: [], activeFile: null },
     onAppendInstructionsChange: vi.fn(),
+    systemInstructions: { files: [], activeFile: null },
+    onSystemInstructionsChange: vi.fn(),
     ...overrides,
   };
 
