@@ -179,13 +179,15 @@ export function ProviderResourceOverridesConfig({
     queryFn: () => promptsApi.getPrompts(appId),
   });
 
-  const availableMcps = useMemo<McpServer[]>(
-    () =>
-      Object.values(mcpData ?? {})
-        .filter((server) => server.apps?.[appId] === true)
-        .sort((a, b) => a.name.localeCompare(b.name)),
-    [appId, mcpData],
-  );
+  const availableMcps = useMemo<McpServer[]>(() => {
+    // Pi has no native MCP registry, so it cannot inherit provider-scoped
+    // MCP exclusions even though it shares the common AppId type.
+    if (appId === "pi") return [];
+
+    return Object.values(mcpData ?? {})
+      .filter((server) => server.apps?.[appId] === true)
+      .sort((a, b) => a.name.localeCompare(b.name));
+  }, [appId, mcpData]);
 
   const availableSkills = useMemo<InstalledSkill[]>(
     () =>

@@ -6,6 +6,7 @@ import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
 import MarkdownEditor from "@/components/MarkdownEditor";
 import { FullScreenPanel } from "@/components/common/FullScreenPanel";
+import { useDarkMode } from "@/hooks/useDarkMode";
 import type { Prompt, AppId } from "@/lib/api";
 
 interface PromptFormPanelProps {
@@ -34,6 +35,7 @@ const PromptFormPanel: React.FC<PromptFormPanelProps> = ({
     opencode: "AGENTS.md",
     openclaw: "AGENTS.md",
     hermes: "SOUL.md",
+    pi: "AGENTS.md",
   };
   const filename = filenameMap[appId];
   const [name, setName] = useState("");
@@ -44,22 +46,7 @@ const PromptFormPanel: React.FC<PromptFormPanelProps> = ({
   );
   const [saving, setSaving] = useState(false);
   const savingRef = useRef(false);
-  const [isDarkMode, setIsDarkMode] = useState(false);
-
-  useEffect(() => {
-    setIsDarkMode(document.documentElement.classList.contains("dark"));
-
-    const observer = new MutationObserver(() => {
-      setIsDarkMode(document.documentElement.classList.contains("dark"));
-    });
-
-    observer.observe(document.documentElement, {
-      attributes: true,
-      attributeFilter: ["class"],
-    });
-
-    return () => observer.disconnect();
-  }, []);
+  const isDarkMode = useDarkMode();
 
   useEffect(() => {
     if (initialData) {
@@ -84,7 +71,7 @@ const PromptFormPanel: React.FC<PromptFormPanelProps> = ({
         id,
         name: name.trim(),
         description: description.trim() || undefined,
-        content: content.trim(),
+        content: appId === "pi" ? content : content.trim(),
         managedImport: appId === "claude" && managedImport,
         enabled: initialData?.enabled || false,
         createdAt: initialData?.createdAt || timestamp,
