@@ -50,6 +50,17 @@ function normalizeCatalogModels(rawModels: unknown): CodexCatalogModel[] {
               : typeof item?.base_instructions === "string"
                 ? item.base_instructions
                 : undefined;
+          const reasoningLevels = Array.isArray(item?.reasoningLevels)
+            ? item.reasoningLevels
+            : Array.isArray(item?.reasoning_levels)
+              ? item.reasoning_levels
+              : undefined;
+          const defaultReasoningLevel =
+            typeof item?.defaultReasoningLevel === "string"
+              ? item.defaultReasoningLevel
+              : typeof item?.default_reasoning_level === "string"
+                ? item.default_reasoning_level
+                : undefined;
 
           return {
             model: typeof item?.model === "string" ? item.model : "",
@@ -72,6 +83,10 @@ function normalizeCatalogModels(rawModels: unknown): CodexCatalogModel[] {
               : {}),
             ...(inputModalities ? { inputModalities } : {}),
             ...(baseInstructions ? { baseInstructions } : {}),
+            ...(reasoningLevels && reasoningLevels.length > 0
+              ? { reasoningLevels }
+              : {}),
+            ...(defaultReasoningLevel ? { defaultReasoningLevel } : {}),
           };
         })
         .filter((item: CodexCatalogModel) => item.model.trim())
@@ -93,7 +108,10 @@ function catalogModelsEqual(
         (other.supportsParallelToolCalls ?? null) &&
       (item.baseInstructions ?? "") === (other.baseInstructions ?? "") &&
       JSON.stringify(item.inputModalities ?? []) ===
-        JSON.stringify(other.inputModalities ?? [])
+        JSON.stringify(other.inputModalities ?? []) &&
+      JSON.stringify(item.reasoningLevels ?? []) ===
+        JSON.stringify(other.reasoningLevels ?? []) &&
+      (item.defaultReasoningLevel ?? "") === (other.defaultReasoningLevel ?? "")
     );
   });
 }

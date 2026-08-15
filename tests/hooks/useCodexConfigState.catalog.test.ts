@@ -3,7 +3,7 @@ import { describe, it, expect } from "vitest";
 import { useCodexConfigState } from "@/components/providers/forms/hooks/useCodexConfigState";
 
 // 回归：编辑已存在的原生 Responses 供应商时，读回 modelCatalog 必须保留隐藏字段
-// (supportsParallelToolCalls / inputModalities / baseInstructions)，否则保存会
+// (supportsParallelToolCalls / inputModalities / baseInstructions / reasoningLevels)，否则保存会
 // 把它们剥掉，导致生成的 Codex catalog 丢官方 base_instructions、并行工具、图像模态。
 //
 // 注意：initialData 必须是稳定引用（hook 的 init effect 依赖 [initialData]）。
@@ -23,6 +23,8 @@ describe("useCodexConfigState catalog load", () => {
               supportsParallelToolCalls: true,
               inputModalities: ["text", "image"],
               baseInstructions: "You are Codex, based on MiniMax-M3.",
+              reasoningLevels: ["none", "medium", "high"],
+              defaultReasoningLevel: "medium",
             },
           ],
         },
@@ -39,6 +41,8 @@ describe("useCodexConfigState catalog load", () => {
         supportsParallelToolCalls: true,
         inputModalities: ["text", "image"],
         baseInstructions: "You are Codex, based on MiniMax-M3.",
+        reasoningLevels: ["none", "medium", "high"],
+        defaultReasoningLevel: "medium",
       },
     ]);
   });
@@ -57,6 +61,8 @@ describe("useCodexConfigState catalog load", () => {
               supports_parallel_tool_calls: false,
               input_modalities: ["text"],
               base_instructions: "You are MiMo, developed by Xiaomi.",
+              reasoning_levels: ["low", "high", "ultra"],
+              default_reasoning_level: "high",
             },
           ],
         },
@@ -73,6 +79,8 @@ describe("useCodexConfigState catalog load", () => {
         supportsParallelToolCalls: false,
         inputModalities: ["text"],
         baseInstructions: "You are MiMo, developed by Xiaomi.",
+        reasoningLevels: ["low", "high", "ultra"],
+        defaultReasoningLevel: "high",
       },
     ]);
   });

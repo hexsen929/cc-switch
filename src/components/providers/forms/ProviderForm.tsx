@@ -168,6 +168,10 @@ export const normalizeCodexCatalogModelsForSave = (
     );
 
     const baseInstructions = item.baseInstructions?.trim();
+    const reasoningLevels = item.reasoningLevels?.filter(
+      (level) => typeof level === "string" && level.trim(),
+    );
+    const defaultReasoningLevel = item.defaultReasoningLevel?.trim();
 
     normalized.push({
       model,
@@ -181,6 +185,10 @@ export const normalizeCodexCatalogModelsForSave = (
         ? { inputModalities }
         : {}),
       ...(baseInstructions ? { baseInstructions } : {}),
+      ...(reasoningLevels && reasoningLevels.length > 0
+        ? { reasoningLevels }
+        : {}),
+      ...(defaultReasoningLevel ? { defaultReasoningLevel } : {}),
     });
   }
 
