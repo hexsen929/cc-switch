@@ -34,7 +34,7 @@ impl Database {
             .prepare(
                 "SELECT p.id, p.name, q.sort_index, p.notes
                  FROM forkdb.fork_model_failover_queue q
-                 JOIN forkdb.providers p ON p.id = q.provider_id AND p.app_type = q.app_type
+                 JOIN main.providers p ON p.id = q.provider_id AND p.app_type = q.app_type
                  WHERE q.app_type = ?1 AND q.model_key = ?2
                  ORDER BY COALESCE(q.sort_index, 999999), p.id ASC",
             )
@@ -121,7 +121,7 @@ impl Database {
             .prepare(
                 "SELECT c.node_type, c.node_id, p.name, c.sort_index
                  FROM forkdb.fork_failover_chain c
-                 LEFT JOIN forkdb.providers p
+                 LEFT JOIN main.providers p
                    ON c.node_type = 'provider' AND p.id = c.node_id AND p.app_type = c.app_type
                  WHERE c.app_type = ?1
                  ORDER BY COALESCE(c.sort_index, 999999), c.node_type, c.node_id",
@@ -201,5 +201,68 @@ impl Database {
             .into_values()
             .filter(|provider| !existing.contains(&provider.id))
             .collect())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{Database, ForkFailoverChainItem};
+    use crate::provider::Provider;
+    use serde_json::json;
+
+    fn save_provider(db: &Database, app_type: &str, id: &str, name: &str) {
+        let provider = Provider::with_id(id.to_string(), name.to_string(), json!({}), None);
+        db.save_provider(app_type, &provider)
+            .expect("save provider in main database");
+    }
+
+    #[test]
+    fn model_failover_queue_reads_provider_name_from_main_database() {
+        let db = Database::memory().expect("memory database");
+        save_provider(&db, "claude", "provider-a", "Provider A");
+
+        db.set_failover_queue_for_model("claude", "sonnet", &["provider-a".to_string()])
+            .expect("save model failover queue");
+
+        let queue = db
+            .get_failover_queue_for_model("claude", "sonnet")
+            .expect("read model failover queue");
+        assert_eq!(queue.len(), 1);
+        assert_eq!(queue[0].provider_id, "provider-a");
+        assert_eq!(queue[0].provider_name, "Provider A");
+    }
+
+    #[test]
+    fn fork_failover_chain_reads_provider_name_from_main_database() {
+        let db = Database::memory().expect("memory database");
+        save_provider(&db, "claude", "provider-b", "Provider B");
+
+        db.set_fork_failover_chain(
+            "claude",
+            &[
+                ForkFailoverChainItem {
+                    node_type: "provider".to_string(),
+                    node_id: "provider-b".to_string(),
+                    provider_name: None,
+                    sort_index: None,
+                },
+                ForkFailoverChainItem {
+                    node_type: "route_mode".to_string(),
+                    node_id: "__claude_route_mode_virtual__".to_string(),
+                    provider_name: None,
+                    sort_index: None,
+                },
+            ],
+        )
+        .expect("save fork failover chain");
+
+        let chain = db
+            .get_fork_failover_chain("claude")
+            .expect("read fork failover chain");
+        assert_eq!(chain.len(), 2);
+        assert_eq!(chain[0].node_type, "provider");
+        assert_eq!(chain[0].provider_name.as_deref(), Some("Provider B"));
+        assert_eq!(chain[1].node_type, "route_mode");
+        assert!(chain[1].provider_name.is_none());
     }
 }

@@ -2,7 +2,7 @@ use crate::database::{lock_conn, Database};
 use crate::error::AppError;
 use crate::provider::{Provider, ProviderMeta};
 use indexmap::IndexMap;
-use rusqlite::params;
+use rusqlite::{params, OptionalExtension};
 use std::collections::{HashMap, HashSet};
 
 type OmoProviderRow = (
@@ -272,6 +272,139 @@ impl Database {
                 .map_err(|e| AppError::Database(e.to_string()))?;
             }
         }
+
+        tx.commit().map_err(|e| AppError::Database(e.to_string()))?;
+        Ok(())
+    }
+
+    /// Replace a provider row under a new ID without exposing an intermediate
+    /// duplicate or missing row. Existing endpoint, health, and fork routing
+    /// references move with the provider, while its current-state bit is preserved.
+    pub fn replace_provider_id(
+        &self,
+        app_type: &str,
+        original_id: &str,
+        provider: &Provider,
+    ) -> Result<(), AppError> {
+        if original_id == provider.id {
+            return self.save_provider(app_type, provider);
+        }
+
+        let mut conn = lock_conn!(self.conn);
+        let tx = conn
+            .transaction()
+            .map_err(|e| AppError::Database(e.to_string()))?;
+
+        let (is_current, in_failover_queue) = tx
+            .query_row(
+                "SELECT is_current, in_failover_queue FROM providers WHERE id = ?1 AND app_type = ?2",
+                params![original_id, app_type],
+                |row| Ok((row.get::<_, bool>(0)?, row.get::<_, bool>(1)?)),
+            )
+            .optional()
+            .map_err(|e| AppError::Database(e.to_string()))?
+            .ok_or_else(|| {
+                AppError::Database(format!(
+                    "Provider '{original_id}' does not exist in app '{app_type}'"
+                ))
+            })?;
+
+        let target_exists = tx
+            .query_row(
+                "SELECT 1 FROM providers WHERE id = ?1 AND app_type = ?2",
+                params![provider.id, app_type],
+                |_| Ok(()),
+            )
+            .optional()
+            .map_err(|e| AppError::Database(e.to_string()))?
+            .is_some();
+        if target_exists {
+            return Err(AppError::Database(format!(
+                "Provider '{}' already exists in app '{app_type}'",
+                provider.id
+            )));
+        }
+
+        let mut meta = provider.meta.clone().unwrap_or_default();
+        meta.custom_endpoints.clear();
+        tx.execute(
+            "INSERT INTO providers (
+                id, app_type, name, settings_config, website_url, category,
+                created_at, sort_index, notes, icon, icon_color, meta,
+                is_current, in_failover_queue
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)",
+            params![
+                provider.id,
+                app_type,
+                provider.name,
+                serde_json::to_string(&provider.settings_config).map_err(|e| {
+                    AppError::Database(format!("Failed to serialize settings_config: {e}"))
+                })?,
+                provider.website_url,
+                provider.category,
+                provider.created_at,
+                provider.sort_index,
+                provider.notes,
+                provider.icon,
+                provider.icon_color,
+                serde_json::to_string(&meta).map_err(|e| {
+                    AppError::Database(format!("Failed to serialize meta: {e}"))
+                })?,
+                is_current,
+                in_failover_queue,
+            ],
+        )
+        .map_err(|e| AppError::Database(e.to_string()))?;
+
+        tx.execute(
+            "UPDATE provider_endpoints SET provider_id = ?1 WHERE provider_id = ?2 AND app_type = ?3",
+            params![provider.id, original_id, app_type],
+        )
+        .map_err(|e| AppError::Database(e.to_string()))?;
+        tx.execute(
+            "UPDATE provider_health SET provider_id = ?1 WHERE provider_id = ?2 AND app_type = ?3",
+            params![provider.id, original_id, app_type],
+        )
+        .map_err(|e| AppError::Database(e.to_string()))?;
+
+        tx.execute(
+            "UPDATE forkdb.fork_model_route_policy
+             SET default_provider_id = ?1
+             WHERE default_provider_id = ?2 AND app_type = ?3",
+            params![provider.id, original_id, app_type],
+        )
+        .map_err(|e| AppError::Database(e.to_string()))?;
+
+        // Fork tables intentionally have no cross-database foreign keys. If a
+        // stale target-ID row collides with a composite key, the renamed
+        // provider's existing row is authoritative and replaces it.
+        tx.execute(
+            "UPDATE OR REPLACE forkdb.fork_provider_health_model
+             SET provider_id = ?1
+             WHERE provider_id = ?2 AND app_type = ?3",
+            params![provider.id, original_id, app_type],
+        )
+        .map_err(|e| AppError::Database(e.to_string()))?;
+        tx.execute(
+            "UPDATE OR REPLACE forkdb.fork_model_failover_queue
+             SET provider_id = ?1
+             WHERE provider_id = ?2 AND app_type = ?3",
+            params![provider.id, original_id, app_type],
+        )
+        .map_err(|e| AppError::Database(e.to_string()))?;
+        tx.execute(
+            "UPDATE OR REPLACE forkdb.fork_failover_chain
+             SET node_id = ?1
+             WHERE node_type = 'provider' AND node_id = ?2 AND app_type = ?3",
+            params![provider.id, original_id, app_type],
+        )
+        .map_err(|e| AppError::Database(e.to_string()))?;
+
+        tx.execute(
+            "DELETE FROM providers WHERE id = ?1 AND app_type = ?2",
+            params![original_id, app_type],
+        )
+        .map_err(|e| AppError::Database(e.to_string()))?;
 
         tx.commit().map_err(|e| AppError::Database(e.to_string()))?;
         Ok(())
@@ -824,5 +957,164 @@ mod ensure_official_seed_tests {
         let result =
             db.ensure_official_seed_by_id(CLAUDE_DESKTOP_OFFICIAL_PROVIDER_ID, AppType::Claude);
         assert!(result.is_err(), "(id, app_type) mismatch should be Err");
+    }
+}
+
+#[cfg(test)]
+mod replace_provider_id_tests {
+    use super::*;
+
+    const APP_TYPE: &str = "claude";
+    const ORIGINAL_ID: &str = "provider-old";
+    const REPLACEMENT_ID: &str = "provider-new";
+
+    fn provider(id: &str, name: &str) -> Provider {
+        Provider::with_id(
+            id.to_string(),
+            name.to_string(),
+            serde_json::json!({"env": {}}),
+            None,
+        )
+    }
+
+    fn seed_provider_references(db: &Database) {
+        db.save_provider(APP_TYPE, &provider(ORIGINAL_ID, "Original"))
+            .expect("save original provider");
+
+        let conn = db.conn.lock().expect("lock conn");
+        // Target-ID rows emulate stale fork data that collides with the
+        // composite keys when the original provider is renamed.
+        conn.execute_batch(
+            "INSERT INTO forkdb.fork_model_route_policy
+                 (app_type, model_key, enabled, default_provider_id)
+                 VALUES ('claude', 'sonnet', 1, 'provider-old');
+             INSERT INTO forkdb.fork_provider_health_model
+                 (provider_id, app_type, model_key, is_healthy, consecutive_failures, last_error, updated_at)
+                 VALUES ('provider-old', 'claude', 'sonnet', 0, 3, 'source', '2026-01-01T00:00:00Z'),
+                        ('provider-new', 'claude', 'sonnet', 0, 9, 'stale', '2026-01-01T00:00:00Z');
+             INSERT INTO forkdb.fork_model_failover_queue
+                 (app_type, model_key, provider_id, sort_index)
+                 VALUES ('claude', 'sonnet', 'provider-old', 2),
+                        ('claude', 'sonnet', 'provider-new', 8);
+             INSERT INTO forkdb.fork_failover_chain
+                 (app_type, node_type, node_id, sort_index)
+                 VALUES ('claude', 'provider', 'provider-old', 4),
+                        ('claude', 'provider', 'provider-new', 7),
+                        ('claude', 'route_mode', 'provider-old', 10);",
+        )
+        .expect("seed fork references");
+    }
+
+    #[test]
+    fn replace_migrates_all_fork_references_with_unique_conflicts() {
+        let db = Database::memory().expect("memory db");
+        seed_provider_references(&db);
+
+        db.replace_provider_id(
+            APP_TYPE,
+            ORIGINAL_ID,
+            &provider(REPLACEMENT_ID, "Replacement"),
+        )
+        .expect("replace provider id");
+
+        assert!(db
+            .get_provider_by_id(ORIGINAL_ID, APP_TYPE)
+            .expect("query original")
+            .is_none());
+        assert_eq!(
+            db.get_provider_by_id(REPLACEMENT_ID, APP_TYPE)
+                .expect("query replacement")
+                .expect("replacement exists")
+                .name,
+            "Replacement"
+        );
+
+        let conn = db.conn.lock().expect("lock conn");
+        let migrated: (String, i64, String, i64, i64, i64) = conn
+            .query_row(
+                "SELECT
+                   (SELECT default_provider_id FROM forkdb.fork_model_route_policy
+                    WHERE app_type = 'claude' AND model_key = 'sonnet'),
+                   (SELECT consecutive_failures FROM forkdb.fork_provider_health_model
+                    WHERE provider_id = 'provider-new' AND app_type = 'claude' AND model_key = 'sonnet'),
+                   (SELECT last_error FROM forkdb.fork_provider_health_model
+                    WHERE provider_id = 'provider-new' AND app_type = 'claude' AND model_key = 'sonnet'),
+                   (SELECT sort_index FROM forkdb.fork_model_failover_queue
+                    WHERE provider_id = 'provider-new' AND app_type = 'claude' AND model_key = 'sonnet'),
+                   (SELECT sort_index FROM forkdb.fork_failover_chain
+                    WHERE app_type = 'claude' AND node_type = 'provider' AND node_id = 'provider-new'),
+                   (SELECT COUNT(*) FROM forkdb.fork_failover_chain
+                    WHERE app_type = 'claude' AND node_type = 'route_mode' AND node_id = 'provider-old')",
+                [],
+                |row| {
+                    Ok((
+                        row.get(0)?,
+                        row.get(1)?,
+                        row.get(2)?,
+                        row.get(3)?,
+                        row.get(4)?,
+                        row.get(5)?,
+                    ))
+                },
+            )
+            .expect("query migrated fork references");
+        assert_eq!(
+            migrated,
+            (REPLACEMENT_ID.to_string(), 3, "source".to_string(), 2, 4, 1)
+        );
+    }
+
+    #[test]
+    fn replace_rolls_back_attached_fork_database_when_main_delete_fails() {
+        let db = Database::memory().expect("memory db");
+        seed_provider_references(&db);
+
+        {
+            let conn = db.conn.lock().expect("lock conn");
+            conn.execute_batch(
+                "CREATE TEMP TRIGGER reject_original_provider_delete
+                 BEFORE DELETE ON providers
+                 WHEN OLD.id = 'provider-old' AND OLD.app_type = 'claude'
+                 BEGIN
+                     SELECT RAISE(ABORT, 'forced delete failure');
+                 END;",
+            )
+            .expect("create failure trigger");
+        }
+
+        let result = db.replace_provider_id(
+            APP_TYPE,
+            ORIGINAL_ID,
+            &provider(REPLACEMENT_ID, "Replacement"),
+        );
+        assert!(
+            result.is_err(),
+            "forced delete failure should abort replace"
+        );
+
+        assert!(db
+            .get_provider_by_id(ORIGINAL_ID, APP_TYPE)
+            .expect("query original")
+            .is_some());
+        assert!(db
+            .get_provider_by_id(REPLACEMENT_ID, APP_TYPE)
+            .expect("query replacement")
+            .is_none());
+
+        let conn = db.conn.lock().expect("lock conn");
+        let rolled_back: (String, i64, i64) = conn
+            .query_row(
+                "SELECT
+                   (SELECT default_provider_id FROM forkdb.fork_model_route_policy
+                    WHERE app_type = 'claude' AND model_key = 'sonnet'),
+                   (SELECT COUNT(*) FROM forkdb.fork_provider_health_model
+                    WHERE provider_id = 'provider-old' AND app_type = 'claude'),
+                   (SELECT COUNT(*) FROM forkdb.fork_provider_health_model
+                    WHERE provider_id = 'provider-new' AND app_type = 'claude')",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )
+            .expect("query fork references after rollback");
+        assert_eq!(rolled_back, (ORIGINAL_ID.to_string(), 1, 1));
     }
 }

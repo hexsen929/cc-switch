@@ -8,7 +8,17 @@ import {
   ProviderForm,
   type ProviderFormValues,
 } from "@/components/providers/forms/ProviderForm";
-import { openclawApi, providersApi, vscodeApi, type AppId } from "@/lib/api";
+import { AuthSettingsPanel } from "@/components/providers/AuthSettingsPanel";
+import {
+  openclawApi,
+  providersApi,
+  vscodeApi,
+  type AppId,
+  type ManagedAuthProvider,
+} from "@/lib/api";
+import { resolveManagedAccountId } from "@/lib/authBinding";
+import { CODEX_OFFICIAL_PROVIDER_ID } from "@/utils/providerCapabilities";
+import { generateUUID } from "@/utils/uuid";
 import { extractCodexBaseUrl } from "@/utils/providerConfigUtils";
 import { CodexToolStripPanel } from "@/components/providers/CodexToolStripPanel";
 
@@ -77,6 +87,13 @@ export function EditProviderDialog({
 }: EditProviderDialogProps) {
   const { t } = useTranslation();
   const [isFormSubmitting, setIsFormSubmitting] = useState(false);
+  const [authSettingsTarget, setAuthSettingsTarget] =
+    useState<ManagedAuthProvider | null>(null);
+
+  useEffect(() => {
+    setAuthSettingsTarget(null);
+  }, [appId, open, provider?.id]);
+
   const formReadyToken = useMemo(
     () => Symbol("provider-form-ready"),
     [appId, open, provider?.id],
@@ -108,6 +125,19 @@ export function EditProviderDialog({
 
   // 使用 ref 标记是否已经加载过，防止重复读取覆盖用户编辑
   const [hasLoadedLive, setHasLoadedLive] = useState(false);
+
+  const closeDialog = useCallback(() => {
+    setAuthSettingsTarget(null);
+    onOpenChange(false);
+  }, [onOpenChange]);
+
+  const handlePanelClose = useCallback(() => {
+    if (authSettingsTarget) {
+      setAuthSettingsTarget(null);
+      return;
+    }
+    closeDialog();
+  }, [authSettingsTarget, closeDialog]);
 
   useEffect(() => {
     let cancelled = false;
@@ -208,8 +238,8 @@ export function EditProviderDialog({
       unknown
     >;
 
-    // Codex 的 modelCatalog / modelInstructionsFiles 是 cc-switch 私有字段，
-    // SSOT 在数据库。Live 只包含投影后的 config.toml，不会保存路径历史；
+    // Codex 的 modelCatalog / modelInstructionsFiles / codex_strip_tools 是
+    // cc-switch 私有字段，SSOT 在数据库。Live 只包含投影后的 config.toml；
     // 若放任 Live 整体覆盖，编辑当前供应商并保存就会清空这些私有字段。
     if (
       appId === "codex" &&
@@ -219,7 +249,11 @@ export function EditProviderDialog({
     ) {
       const dbSettings = provider.settingsConfig as Record<string, unknown>;
       const privateSettings: Record<string, unknown> = {};
-      for (const key of ["modelCatalog", "modelInstructionsFiles"] as const) {
+      for (const key of [
+        "modelCatalog",
+        "modelInstructionsFiles",
+        "codex_strip_tools",
+      ] as const) {
         if (dbSettings[key] !== undefined) {
           privateSettings[key] = dbSettings[key];
         }
@@ -282,7 +316,6 @@ export function EditProviderDialog({
         string,
         unknown
       >;
-
       // Codex 中转兼容性：把"剥除工具清单"合并进 settings_config 顶层
       // 写空数组也保留为字段（明确表达"无剥除"语义）；用户可手动改 JSON 删该字段
       if (appId === "codex") {
@@ -293,11 +326,21 @@ export function EditProviderDialog({
           delete parsedConfig.codex_strip_tools;
         }
       }
+      const convertsNativeCodexLoginToManagedAccount =
+        appId === "codex" &&
+        provider.id === CODEX_OFFICIAL_PROVIDER_ID &&
+        Boolean(resolveManagedAccountId(values.meta, "codex_oauth")?.trim());
       const nextProviderId =
-        (appId === "opencode" || appId === "openclaw" || appId === "pi") &&
-        values.providerKey?.trim()
-          ? values.providerKey.trim()
-          : provider.id;
+        appId === "codex" && values.codexNativeLoginSelected
+          ? CODEX_OFFICIAL_PROVIDER_ID
+          : convertsNativeCodexLoginToManagedAccount
+            ? generateUUID()
+            : (appId === "opencode" ||
+                  appId === "openclaw" ||
+                  appId === "pi") &&
+                values.providerKey?.trim()
+              ? values.providerKey.trim()
+              : provider.id;
 
       const updatedProvider: Provider = {
         ...provider,
@@ -317,9 +360,9 @@ export function EditProviderDialog({
         provider: updatedProvider,
         originalId: provider.id,
       });
-      onOpenChange(false);
+      closeDialog();
     },
-    [appId, codexStripTools, onSubmit, onOpenChange, provider],
+    [appId, codexStripTools, onSubmit, closeDialog, provider],
   );
 
   if (!provider || !initialData) {
@@ -330,7 +373,7 @@ export function EditProviderDialog({
     <FullScreenPanel
       isOpen={open}
       title={t("provider.editProvider")}
-      onClose={() => onOpenChange(false)}
+      onClose={handlePanelClose}
       contentClassName={appId === "pi" ? "pb-0" : undefined}
       footer={
         <Button
@@ -349,7 +392,8 @@ export function EditProviderDialog({
         providerId={provider.id}
         submitLabel={t("common.save")}
         onSubmit={handleSubmit}
-        onCancel={() => onOpenChange(false)}
+        onCancel={closeDialog}
+        onManageAuthAccounts={setAuthSettingsTarget}
         onSubmittingChange={setIsFormSubmitting}
         onSubmitReadyChange={handleSubmitReadyChange}
         initialData={initialData}
@@ -364,6 +408,10 @@ export function EditProviderDialog({
           />
         </div>
       )}
+      <AuthSettingsPanel
+        target={authSettingsTarget}
+        onClose={() => setAuthSettingsTarget(null)}
+      />
     </FullScreenPanel>
   );
 }
