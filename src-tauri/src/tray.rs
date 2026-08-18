@@ -305,6 +305,17 @@ fn format_script_summary(result: &crate::provider::UsageResult) -> Option<String
 }
 
 fn provider_uses_official_subscription(provider: &crate::provider::Provider) -> bool {
+    // Managed Codex quota is account-scoped in the native footer; the tray's
+    // app-wide subscription cache cannot represent it safely.
+    if provider
+        .meta
+        .as_ref()
+        .and_then(|meta| meta.managed_account_id_for("codex_oauth"))
+        .is_some_and(|id| !id.trim().is_empty())
+    {
+        return false;
+    }
+
     provider
         .meta
         .as_ref()
@@ -1163,9 +1174,12 @@ pub(crate) async fn refresh_all_usage_in_tray(app: &tauri::AppHandle) {
 
 #[cfg(test)]
 mod tests {
-    use super::{format_script_summary, format_subscription_summary, TRAY_ID, TRAY_SECTIONS};
+    use super::{
+        format_script_summary, format_subscription_summary, provider_uses_official_subscription,
+        TRAY_ID, TRAY_SECTIONS,
+    };
     use crate::app_config::AppType;
-    use crate::provider::{UsageData, UsageResult};
+    use crate::provider::{Provider, UsageData, UsageResult};
     use crate::services::subscription::{
         CredentialStatus, QuotaTier, SubscriptionQuota, TIER_FIVE_HOUR, TIER_GEMINI_FLASH,
         TIER_GEMINI_FLASH_LITE, TIER_GEMINI_PRO, TIER_MONTHLY, TIER_SEVEN_DAY, TIER_SEVEN_DAY_OPUS,
@@ -1176,6 +1190,57 @@ mod tests {
     fn tray_id_is_unique_to_app() {
         assert_eq!(TRAY_ID, "cc-switch");
         assert_ne!(TRAY_ID, "main");
+    }
+
+    #[test]
+    fn managed_codex_quota_stays_out_of_the_app_wide_tray_cache() {
+        let provider =
+            |provider_id: &str, category: Option<&str>, account_id: Option<&str>| -> Provider {
+                serde_json::from_value(serde_json::json!({
+                    "id": provider_id,
+                    "name": "Managed Codex",
+                    "settingsConfig": {},
+                    "category": category,
+                    "meta": {
+                        "authBinding": account_id.map(|id| serde_json::json!({
+                            "source": "managed_account",
+                            "authProvider": "codex_oauth",
+                            "accountId": id
+                        })),
+                        "usage_script": {
+                            "enabled": true,
+                            "language": "javascript",
+                            "code": "",
+                            "templateType": "official_subscription"
+                        }
+                    }
+                }))
+                .unwrap()
+            };
+
+        // Both the current fixed ID and a follow-login provider ID are
+        // account-scoped when bound to a managed Codex OAuth account.
+        assert!(!provider_uses_official_subscription(&provider(
+            crate::database::CODEX_OFFICIAL_PROVIDER_ID,
+            Some("official"),
+            Some("account-1"),
+        )));
+        assert!(!provider_uses_official_subscription(&provider(
+            "managed-codex",
+            Some("official"),
+            Some("account-1"),
+        )));
+        // Legacy records may lack a category; the managed binding still wins.
+        assert!(!provider_uses_official_subscription(&provider(
+            crate::database::CODEX_OFFICIAL_PROVIDER_ID,
+            None,
+            Some("account-1"),
+        )));
+        assert!(provider_uses_official_subscription(&provider(
+            crate::database::CODEX_OFFICIAL_PROVIDER_ID,
+            Some("official"),
+            None,
+        )));
     }
 
     #[test]
