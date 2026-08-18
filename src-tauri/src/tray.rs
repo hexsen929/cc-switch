@@ -304,15 +304,18 @@ fn format_script_summary(result: &crate::provider::UsageResult) -> Option<String
     }
 }
 
-fn provider_uses_official_subscription(provider: &crate::provider::Provider) -> bool {
-    // Managed Codex quota is account-scoped in the native footer; the tray's
-    // app-wide subscription cache cannot represent it safely.
-    if provider
+fn provider_has_managed_codex_account(provider: &crate::provider::Provider) -> bool {
+    provider
         .meta
         .as_ref()
         .and_then(|meta| meta.managed_account_id_for("codex_oauth"))
         .is_some_and(|id| !id.trim().is_empty())
-    {
+}
+
+fn provider_uses_official_subscription(provider: &crate::provider::Provider) -> bool {
+    // Managed Codex quota is account-scoped in the native footer; the tray's
+    // app-wide subscription cache cannot represent it safely.
+    if provider_has_managed_codex_account(provider) {
         return false;
     }
 
@@ -327,6 +330,20 @@ fn provider_uses_official_subscription(provider: &crate::provider::Provider) -> 
         .unwrap_or(false)
 }
 
+fn provider_has_official_usage_route(provider: &crate::provider::Provider) -> bool {
+    provider.category.as_deref() == Some("official")
+        || (provider_has_managed_codex_account(provider)
+            && provider
+                .meta
+                .as_ref()
+                .and_then(|meta| meta.usage_script.as_ref())
+                .is_some_and(|script| {
+                    script.enabled
+                        && script.template_type.as_deref()
+                            == Some(TEMPLATE_TYPE_OFFICIAL_SUBSCRIPTION)
+                }))
+}
+
 fn format_usage_suffix(
     app_state: &AppState,
     app_type: &AppType,
@@ -335,7 +352,7 @@ fn format_usage_suffix(
 ) -> Option<String> {
     // 当前脚本是否启用：禁用/删除时不再沿用旧 UsageCache 结果，
     // 并顺手 invalidate，防止后续重建继续命中过期数据。
-    let is_official_provider = provider.category.as_deref() == Some("official");
+    let is_official_provider = provider_has_official_usage_route(provider);
     let can_use_script = provider.has_usage_script_enabled()
         && (!is_official_provider || provider_uses_official_subscription(provider));
     if can_use_script {
@@ -1142,7 +1159,7 @@ pub(crate) async fn refresh_all_usage_in_tray(app: &tauri::AppHandle) {
         };
 
         // 与 format_usage_suffix 同一优先级：只有显式启用的用量查询才发请求。
-        let is_official_provider = current.category.as_deref() == Some("official");
+        let is_official_provider = provider_has_official_usage_route(&current);
         if current.has_usage_script_enabled()
             && (!is_official_provider || provider_uses_official_subscription(&current))
         {
@@ -1175,8 +1192,8 @@ pub(crate) async fn refresh_all_usage_in_tray(app: &tauri::AppHandle) {
 #[cfg(test)]
 mod tests {
     use super::{
-        format_script_summary, format_subscription_summary, provider_uses_official_subscription,
-        TRAY_ID, TRAY_SECTIONS,
+        format_script_summary, format_subscription_summary, provider_has_official_usage_route,
+        provider_uses_official_subscription, TRAY_ID, TRAY_SECTIONS,
     };
     use crate::app_config::AppType;
     use crate::provider::{Provider, UsageData, UsageResult};
@@ -1232,6 +1249,11 @@ mod tests {
         )));
         // Legacy records may lack a category; the managed binding still wins.
         assert!(!provider_uses_official_subscription(&provider(
+            crate::database::CODEX_OFFICIAL_PROVIDER_ID,
+            None,
+            Some("account-1"),
+        )));
+        assert!(provider_has_official_usage_route(&provider(
             crate::database::CODEX_OFFICIAL_PROVIDER_ID,
             None,
             Some("account-1"),
