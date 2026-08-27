@@ -16,7 +16,10 @@ import {
   type AppId,
   type ManagedAuthProvider,
 } from "@/lib/api";
-import { extractCodexBaseUrl } from "@/utils/providerConfigUtils";
+import {
+  extractCodexBaseUrl,
+  extractCodexExperimentalBearerToken,
+} from "@/utils/providerConfigUtils";
 import { CodexToolStripPanel } from "@/components/providers/CodexToolStripPanel";
 
 interface EditProviderDialogProps {
@@ -61,18 +64,77 @@ function shouldUseCodexLiveSettings(live: Record<string, unknown>): boolean {
     return false;
   }
 
+  const configText = typeof live.config === "string" ? live.config : "";
+  const bearer = extractCodexExperimentalBearerToken(configText);
   if (
-    auth.auth_mode === "chatgpt" ||
-    auth.preferred_auth_method === "chatgpt" ||
-    (auth.tokens && typeof auth.tokens === "object")
+    !bearer &&
+    (auth.auth_mode === "chatgpt" ||
+      auth.preferred_auth_method === "chatgpt" ||
+      (auth.tokens && typeof auth.tokens === "object"))
   ) {
     return false;
   }
-
-  const configText = typeof live.config === "string" ? live.config : "";
   const baseUrl = extractCodexBaseUrl(configText);
   return !baseUrl || !isLocalProxyUrl(baseUrl);
 }
+
+const asRecord = (value: unknown): Record<string, unknown> | null =>
+  typeof value === "object" && value !== null && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : null;
+
+const hasAuthMaterial = (value: unknown): boolean => {
+  if (value === null || value === undefined) return false;
+  if (typeof value === "string") return value.trim().length > 0;
+  if (Array.isArray(value)) return value.length > 0;
+  if (typeof value === "object") return Object.keys(value).length > 0;
+  return true;
+};
+
+/**
+ * Rebuild the provider auth only for a current Codex provider's live snapshot.
+ *
+ * In official-auth-preservation mode, live config.toml owns the active
+ * provider bearer while the shared auth.json may belong to another provider or
+ * contain the user's ChatGPT login. Stored provider auth remains the template:
+ * this mirrors the backend switch-away backfill and avoids copying shared auth
+ * material into the provider row. DB snapshots and presets must keep their
+ * normal auth-first precedence.
+ */
+const reconcileCodexLiveAuth = (
+  liveSettings: Record<string, unknown>,
+  storedSettings: Record<string, unknown> | null,
+  category: string | undefined,
+): Record<string, unknown> => {
+  if (category === "official") return liveSettings;
+
+  const configText =
+    typeof liveSettings.config === "string" ? liveSettings.config : "";
+  const bearer = extractCodexExperimentalBearerToken(configText);
+  if (!bearer) return liveSettings;
+
+  const storedAuth = asRecord(storedSettings?.auth);
+  const authTemplate = storedAuth ?? asRecord(liveSettings.auth) ?? {};
+  const hasProviderApiKey =
+    typeof authTemplate.OPENAI_API_KEY === "string" &&
+    authTemplate.OPENAI_API_KEY.trim().length > 0;
+  const hasOauthLogin = Object.entries(authTemplate).some(
+    ([key, value]) =>
+      key !== "auth_mode" && key !== "OPENAI_API_KEY" && hasAuthMaterial(value),
+  );
+
+  // Match should_restore_codex_provider_token_for_backfill: an OAuth-only
+  // provider must not be silently converted into an API-key provider.
+  if (hasOauthLogin && !hasProviderApiKey) return liveSettings;
+
+  return {
+    ...liveSettings,
+    auth: {
+      ...authTemplate,
+      OPENAI_API_KEY: bearer,
+    },
+  };
+};
 
 export function EditProviderDialog({
   open,
@@ -230,10 +292,15 @@ export function EditProviderDialog({
   }, [open, provider?.id, appId, hasLoadedLive, isProxyTakeover]); // 只依赖 provider.id，不依赖整个 provider 对象
 
   const initialSettingsConfig = useMemo(() => {
-    const base = (liveSettings ?? provider?.settingsConfig ?? {}) as Record<
-      string,
-      unknown
-    >;
+    const storedSettings = asRecord(provider?.settingsConfig);
+    const base =
+      appId === "codex" && liveSettings
+        ? reconcileCodexLiveAuth(
+            liveSettings,
+            storedSettings,
+            provider?.category,
+          )
+        : (liveSettings ?? storedSettings ?? {});
 
     // Codex 的 modelCatalog / modelInstructionsFiles / codex_strip_tools 是
     // cc-switch 私有字段，SSOT 在数据库。Live 只包含投影后的 config.toml；
@@ -261,7 +328,7 @@ export function EditProviderDialog({
     }
 
     return base;
-  }, [liveSettings, provider?.settingsConfig, appId]); // 只依赖 settingsConfig，不依赖整个 provider
+  }, [liveSettings, provider?.settingsConfig, provider?.category, appId]); // 只依赖表单初始化所需字段，不依赖整个 provider
 
   // Codex 中转兼容性：tools 剥除清单
   // 数据源：provider.settings_config.codex_strip_tools（数组，元素是工具 type 字符串）

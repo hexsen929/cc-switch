@@ -109,7 +109,6 @@ pub fn reapply_current_codex_official_live(state: &AppState) -> Result<bool, App
         }
         return Ok(true);
     }
-
     live::write_live_with_common_config_for_state(state, &AppType::Codex, provider)?;
     // 重写 live 会整体替换 config.toml（有意设计），[mcp_servers] 随之丢失，
     // 写完必须立刻从 DB 重新投影启用的 MCP。只投影 Codex 而非
@@ -171,9 +170,9 @@ mod tests {
     use crate::config::{get_claude_settings_path, read_json_file, write_json_file};
     use crate::database::Database;
     use crate::provider::{
-        AuthBinding, AuthBindingSource, ClaudeAppendInstructionsConfig,
+        AuthBinding, AuthBindingSource, ClaudeAppendInstructionsConfig, ClaudeModelConfig,
         ClaudeSystemInstructionsConfig, ProviderMcpOverrides, ProviderMeta,
-        ProviderResourceOverrides, UsageScript,
+        ProviderResourceOverrides, UniversalProvider, UsageScript,
     };
     #[cfg(any(target_os = "macos", windows))]
     use crate::provider::{ClaudeDesktopMode, ClaudeDesktopModelRoute};
@@ -5047,6 +5046,61 @@ wire_api = "responses"
             );
         });
     }
+
+    #[test]
+    #[serial]
+    fn sync_universal_to_apps_reprojects_current_child_to_live() {
+        with_test_home(|state, _home| {
+            let mut universal = UniversalProvider::new(
+                "shared".to_string(),
+                "Shared Relay".to_string(),
+                "custom".to_string(),
+                "https://api.new.example".to_string(),
+                "new-key".to_string(),
+            );
+            universal.apps.claude = true;
+            universal.models.claude = Some(ClaudeModelConfig {
+                model: Some("claude-sonnet-4".to_string()),
+                ..Default::default()
+            });
+            state
+                .db
+                .save_universal_provider(&universal)
+                .expect("save universal provider");
+
+            let child = universal
+                .to_claude_provider()
+                .expect("claude child provider");
+            state
+                .db
+                .save_provider("claude", &child)
+                .expect("seed child provider");
+            state
+                .db
+                .set_current_provider("claude", &child.id)
+                .expect("set current child");
+            crate::settings::set_current_provider(&AppType::Claude, Some(&child.id))
+                .expect("set local current child");
+
+            let mut old_live = child.settings_config.clone();
+            old_live["env"]["ANTHROPIC_BASE_URL"] =
+                Value::String("https://api.old.example".to_string());
+            write_json_file(&get_claude_settings_path(), &old_live).expect("seed old live");
+
+            ProviderService::sync_universal_to_apps(state, "shared")
+                .expect("sync universal provider");
+
+            let live: Value = read_json_file(&get_claude_settings_path()).expect("read live");
+            assert_eq!(
+                live["env"]["ANTHROPIC_BASE_URL"].as_str(),
+                Some("https://api.new.example")
+            );
+            assert_eq!(
+                live["env"]["ANTHROPIC_AUTH_TOKEN"].as_str(),
+                Some("new-key")
+            );
+        });
+    }
 }
 
 impl ProviderService {
@@ -7907,6 +7961,11 @@ impl ProviderService {
             .get_universal_provider(id)?
             .ok_or_else(|| AppError::Message(format!("统一供应商 {id} 不存在")))?;
 
+        // Keep DB and live projections in sync independently per application:
+        // one broken config file must not prevent the other two apps from being
+        // updated, but it must still be reported instead of returning success.
+        let mut live_failures = Vec::new();
+
         // 同步到 Claude
         if let Some(mut claude_provider) = provider.to_claude_provider() {
             // 合并已有配置
@@ -7916,6 +7975,12 @@ impl ProviderService {
                 claude_provider.settings_config = merged;
             }
             state.db.save_provider("claude", &claude_provider)?;
+            Self::project_universal_child_to_live(
+                state,
+                AppType::Claude,
+                &claude_provider.id,
+                &mut live_failures,
+            );
         } else {
             // 如果禁用了 Claude，删除对应的子供应商
             let claude_id = format!("universal-claude-{id}");
@@ -7931,6 +7996,12 @@ impl ProviderService {
                 codex_provider.settings_config = merged;
             }
             state.db.save_provider("codex", &codex_provider)?;
+            Self::project_universal_child_to_live(
+                state,
+                AppType::Codex,
+                &codex_provider.id,
+                &mut live_failures,
+            );
         } else {
             let codex_id = format!("universal-codex-{id}");
             let _ = state.db.delete_provider("codex", &codex_id);
@@ -7945,12 +8016,59 @@ impl ProviderService {
                 gemini_provider.settings_config = merged;
             }
             state.db.save_provider("gemini", &gemini_provider)?;
+            Self::project_universal_child_to_live(
+                state,
+                AppType::Gemini,
+                &gemini_provider.id,
+                &mut live_failures,
+            );
         } else {
             let gemini_id = format!("universal-gemini-{id}");
             let _ = state.db.delete_provider("gemini", &gemini_id);
         }
 
-        Ok(true)
+        if live_failures.is_empty() {
+            Ok(true)
+        } else {
+            Err(AppError::Message(format!(
+                "统一供应商已保存到数据库，但以下应用的配置文件未能写入，仍是旧内容：{}。请重试同步，或切换一次该应用的供应商。",
+                live_failures.join("、")
+            )))
+        }
+    }
+
+    /// Re-project a generated universal child only when it is the effective
+    /// current provider for that app. Failures are collected by the caller so
+    /// the other applications can continue syncing.
+    fn project_universal_child_to_live(
+        state: &AppState,
+        app_type: AppType,
+        child_id: &str,
+        failures: &mut Vec<String>,
+    ) {
+        let is_current = match crate::settings::get_effective_current_provider(&state.db, &app_type)
+        {
+            Ok(current) => current.as_deref() == Some(child_id),
+            Err(err) => {
+                log::warn!(
+                    "读取 {} 当前供应商失败，跳过统一供应商的 live 重投影: {err}",
+                    app_type.as_str()
+                );
+                failures.push(app_type.as_str().to_string());
+                return;
+            }
+        };
+        if !is_current {
+            return;
+        }
+
+        if let Err(err) = Self::sync_current_provider_for_app(state, app_type.clone()) {
+            log::warn!(
+                "统一供应商同步后重写 {} live 配置失败: {err}",
+                app_type.as_str()
+            );
+            failures.push(app_type.as_str().to_string());
+        }
     }
 
     /// 递归合并 JSON：base 为底，patch 覆盖同名字段

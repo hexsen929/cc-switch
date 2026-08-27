@@ -755,7 +755,7 @@ mod tests {
         assert!(status.exists);
         assert!(status.is_file);
         assert!(status.readable);
-        assert_eq!(status.size_bytes, Some(20));
+        assert_eq!(status.size_bytes, Some(21));
         assert_eq!(status.sha256.as_deref().map(str::len), Some(64));
         assert_eq!(
             PathBuf::from(status.resolved_path),

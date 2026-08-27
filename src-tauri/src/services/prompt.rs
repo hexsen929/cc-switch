@@ -423,7 +423,16 @@ impl PromptService {
 
         let prompts = state.db.get_prompts(app.as_str())?;
         let warning = duplicate_enabled_prompt_warning(&prompts);
-        Self::sync_effective_prompt_to_file(state, app)?;
+        let provider = Self::get_current_provider_for_app(state, &app)?;
+
+        // Restore payloads contain the prompt rows, but not the live prompt
+        // files. If the restored state has no effective prompt, leave the
+        // existing local file untouched instead of treating that absence as
+        // an explicit UI disable. A provider-level selected prompt still
+        // projects even when no global prompt is enabled.
+        if Self::resolve_effective_prompt_from_map(&prompts, provider.as_ref()).is_some() {
+            Self::sync_effective_prompt_to_file_for_provider(state, app, provider.as_ref())?;
+        }
         if let Some(warning) = warning {
             return Err(AppError::Message(warning));
         }
@@ -797,19 +806,27 @@ mod tests {
 
     #[test]
     #[serial_test::serial]
-    fn restored_prompt_projection_clears_a_stale_file_when_none_are_enabled() {
+    fn restored_prompt_projection_preserves_the_live_file_when_none_are_enabled() {
         let temp = tempfile::tempdir().expect("tempdir");
         let previous_home = std::env::var_os("CC_SWITCH_TEST_HOME");
         std::env::set_var("CC_SWITCH_TEST_HOME", temp.path());
         let db = Arc::new(Database::memory().expect("create memory database"));
-        let state = AppState::new(db);
+        let state = AppState::new(db.clone());
+        db.save_prompt(
+            AppType::Codex.as_str(),
+            &prompt_with_content("off", "managed", false),
+        )
+        .expect("save disabled prompt");
         let path = prompt_file_path(&AppType::Codex).expect("prompt path");
         std::fs::create_dir_all(path.parent().expect("prompt parent"))
             .expect("create prompt directory");
-        std::fs::write(&path, "stale").expect("seed stale prompt");
+        std::fs::write(&path, "local content").expect("seed live prompt file");
 
-        PromptService::sync_to_live(&state, AppType::Codex).expect("clear prompt");
-        assert_eq!(std::fs::read_to_string(path).expect("read prompt"), "");
+        PromptService::sync_to_live(&state, AppType::Codex).expect("project prompt");
+        assert_eq!(
+            std::fs::read_to_string(path).expect("read prompt"),
+            "local content"
+        );
 
         match previous_home {
             Some(value) => std::env::set_var("CC_SWITCH_TEST_HOME", value),
