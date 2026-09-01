@@ -394,12 +394,20 @@ impl Database {
         .map_err(|e| AppError::Database(e.to_string()))?;
 
         // 18. Session Log Sync 表 (会话日志同步状态)
+        //
+        // last_byte_offset：Claude 路径的字节游标（seek 增量读）；NULL 表示
+        // 尚无字节游标（旧行号游标或非 Claude 路径行），此时回退全量读。
+        // last_tail_fingerprint：游标边界前尾部字节的指纹，用于识别文件被
+        // 外部重写（同尺寸/更大的替换无法靠 size 检测）；NULL 表示无指纹
+        // 可校验，按纯追加处理。
         conn.execute(
             "CREATE TABLE IF NOT EXISTS session_log_sync (
                 file_path TEXT PRIMARY KEY,
                 last_modified INTEGER NOT NULL,
                 last_line_offset INTEGER NOT NULL DEFAULT 0,
-                last_synced_at INTEGER NOT NULL
+                last_synced_at INTEGER NOT NULL,
+                last_byte_offset INTEGER,
+                last_tail_fingerprint INTEGER
             )",
             [],
         )
@@ -638,7 +646,9 @@ impl Database {
                         Self::set_user_version(conn, 17)?;
                     }
                     17 => {
-                        log::info!("迁移数据库从 v17 到 v18（Claude 受管理提示词导入块）");
+                        log::info!(
+                            "迁移数据库从 v17 到 v18（Claude 提示词字段 + 会话日志字节游标）"
+                        );
                         Self::migrate_v17_to_v18(conn)?;
                         Self::set_user_version(conn, 18)?;
                     }
@@ -646,6 +656,11 @@ impl Database {
                         log::info!("迁移数据库从 v18 到 v19（添加会话用量持久去重账本）");
                         Self::migrate_v18_to_v19(conn)?;
                         Self::set_user_version(conn, 19)?;
+                    }
+                    19 => {
+                        log::info!("迁移数据库从 v19 到 v20（对齐 fork 与上游分叉迁移）");
+                        Self::migrate_v19_to_v20(conn)?;
+                        Self::set_user_version(conn, 20)?;
                     }
                     _ => {
                         return Err(AppError::Database(format!(
@@ -1681,12 +1696,9 @@ impl Database {
         Ok(())
     }
 
-    /// v17 -> v18: allow Claude prompts to preserve CLAUDE.md via a managed import block.
+    /// v17 -> v18: reconcile the fork prompt fields with upstream's byte cursor migration.
     fn migrate_v17_to_v18(conn: &Connection) -> Result<(), AppError> {
         if Self::table_exists(conn, "prompts")? {
-            // Upstream also used schema v17 for a different migration. Keep
-            // this step idempotent so a database produced by that lineage
-            // receives both fork-owned prompt columns before moving forward.
             Self::add_column_if_missing(conn, "prompts", "append_content", "TEXT")?;
             Self::add_column_if_missing(
                 conn,
@@ -1695,6 +1707,8 @@ impl Database {
                 "BOOLEAN NOT NULL DEFAULT 0",
             )?;
         }
+
+        Self::add_session_log_byte_cursor_columns(conn)?;
 
         Ok(())
     }
@@ -1712,7 +1726,37 @@ impl Database {
              CREATE INDEX IF NOT EXISTS idx_session_usage_dedup_semantic
              ON session_usage_dedup(data_source, semantic_id, has_entry_id);",
         )
-        .map_err(|error| AppError::Database(format!("创建会话用量去重账本失败: {error}")))?;
+        .map_err(|error| AppError::Database(format!("创建会话用量去重账本失败: {error}")))
+    }
+
+    /// v19 -> v20: both lineages shipped different v17-v19 migrations. Re-run
+    /// every divergent step idempotently so either database shape converges.
+    fn migrate_v19_to_v20(conn: &Connection) -> Result<(), AppError> {
+        if Self::table_exists(conn, "prompts")? {
+            Self::add_column_if_missing(conn, "prompts", "append_content", "TEXT")?;
+            Self::add_column_if_missing(
+                conn,
+                "prompts",
+                "managed_import",
+                "BOOLEAN NOT NULL DEFAULT 0",
+            )?;
+        }
+
+        Self::migrate_v18_to_v19(conn)?;
+        Self::add_session_log_byte_cursor_columns(conn)
+    }
+
+    fn add_session_log_byte_cursor_columns(conn: &Connection) -> Result<(), AppError> {
+        // 缺表的库（异常/测试夹具）跳过：create_tables 会以含列的新 DDL 建表。
+        if Self::table_exists(conn, "session_log_sync")? {
+            Self::add_column_if_missing(conn, "session_log_sync", "last_byte_offset", "INTEGER")?;
+            Self::add_column_if_missing(
+                conn,
+                "session_log_sync",
+                "last_tail_fingerprint",
+                "INTEGER",
+            )?;
+        }
         Ok(())
     }
 
@@ -3630,6 +3674,98 @@ mod tests {
              VALUES ('pi_session', 'request', 'semantic', 1)",
             [],
         )?;
+        Ok(())
+    }
+
+    #[test]
+    fn migrate_v19_to_v20_reconciles_fork_and_upstream_schema_shapes() -> Result<(), AppError> {
+        let conn = Connection::open_in_memory()?;
+        conn.execute_batch(
+            "CREATE TABLE prompts (
+                id TEXT NOT NULL,
+                app_type TEXT NOT NULL,
+                name TEXT NOT NULL,
+                content TEXT NOT NULL,
+                PRIMARY KEY (id, app_type)
+             );
+             CREATE TABLE session_log_sync (
+                file_path TEXT PRIMARY KEY,
+                last_modified INTEGER NOT NULL,
+                last_line_offset INTEGER NOT NULL DEFAULT 0,
+                last_synced_at INTEGER NOT NULL
+             );
+             INSERT INTO prompts (id, app_type, name, content)
+             VALUES ('existing', 'claude', 'Existing', 'keep me');
+             INSERT INTO session_log_sync
+                (file_path, last_modified, last_line_offset, last_synced_at)
+             VALUES ('/tmp/a.jsonl', 5, 3, 1);",
+        )?;
+        Database::set_user_version(&conn, 19)?;
+
+        Database::apply_schema_migrations_on_conn(&conn)?;
+
+        assert_eq!(Database::get_user_version(&conn)?, SCHEMA_VERSION);
+        assert!(Database::has_column(&conn, "prompts", "append_content")?);
+        assert!(Database::has_column(&conn, "prompts", "managed_import")?);
+        assert!(Database::has_column(
+            &conn,
+            "session_log_sync",
+            "last_byte_offset"
+        )?);
+        assert!(Database::has_column(
+            &conn,
+            "session_log_sync",
+            "last_tail_fingerprint"
+        )?);
+        assert!(Database::table_exists(&conn, "session_usage_dedup")?);
+
+        let prompt: (String, Option<String>, bool) = conn.query_row(
+            "SELECT content, append_content, managed_import
+             FROM prompts WHERE id = 'existing'",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        )?;
+        assert_eq!(prompt, ("keep me".to_string(), None, false));
+        Ok(())
+    }
+
+    #[test]
+    fn migrate_v17_to_v18_adds_byte_cursor_to_existing_sync_table() -> Result<(), AppError> {
+        // 真实升级路径：v17 库带旧 DDL 的 session_log_sync（无字节游标列，
+        // 字节游标曾短暂搭 v17 车、已执行过 v17 的开发库正是这个形状）
+        // 与存量游标行，迁移后列补上、存量行保持 NULL（首轮按行号转换）
+        let conn = Connection::open_in_memory()?;
+        conn.execute_batch(
+            "CREATE TABLE session_log_sync (
+                file_path TEXT PRIMARY KEY,
+                last_modified INTEGER NOT NULL,
+                last_line_offset INTEGER NOT NULL DEFAULT 0,
+                last_synced_at INTEGER NOT NULL
+             );
+             INSERT INTO session_log_sync VALUES ('/tmp/a.jsonl', 5, 3, 1);",
+        )?;
+        Database::set_user_version(&conn, 17)?;
+
+        Database::apply_schema_migrations_on_conn(&conn)?;
+
+        assert!(Database::has_column(
+            &conn,
+            "session_log_sync",
+            "last_byte_offset"
+        )?);
+        assert!(Database::has_column(
+            &conn,
+            "session_log_sync",
+            "last_tail_fingerprint"
+        )?);
+        let (byte_offset, fingerprint): (Option<i64>, Option<i64>) = conn.query_row(
+            "SELECT last_byte_offset, last_tail_fingerprint
+             FROM session_log_sync WHERE file_path = '/tmp/a.jsonl'",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )?;
+        assert_eq!(byte_offset, None, "存量行的字节游标必须为 NULL");
+        assert_eq!(fingerprint, None, "存量行的尾部指纹必须为 NULL");
         Ok(())
     }
 }

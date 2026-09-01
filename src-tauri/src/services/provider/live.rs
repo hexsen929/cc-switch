@@ -806,7 +806,33 @@ pub(crate) fn build_effective_provider_for_live_with_codex_oauth_manager(
         )?;
     }
     apply_codex_official_auth(app_type, &mut effective_provider, Some(codex_oauth_manager))?;
+    neutralize_codex_proxy_oauth_fallback(app_type, &mut effective_provider);
     Ok(effective_provider)
+}
+
+/// Proxy-managed OAuth cards (xai_oauth, github_copilot, …) are keyless by
+/// design — the local proxy injects the real token per request — yet their
+/// preset snapshots inherited the legacy `requires_openai_auth = true`,
+/// which the keyless write-layer safety gate rightly refuses. Neutralize
+/// the flag in the effective snapshot instead of exempting the gate: the
+/// written config is then genuinely safe (0.149 treats it as
+/// unauthenticated and never reads auth.json). `codex_oauth` stays out via
+/// the predicate — the official login IS its credential.
+fn neutralize_codex_proxy_oauth_fallback(app_type: &AppType, provider: &mut Provider) {
+    if !matches!(app_type, AppType::Codex) || !provider.uses_proxy_injected_oauth() {
+        return;
+    }
+    let Some(settings) = provider.settings_config.as_object_mut() else {
+        return;
+    };
+    let Some(config_text) = settings.get("config").and_then(Value::as_str) else {
+        return;
+    };
+    if let Some(updated) =
+        crate::codex_config::neutralize_codex_official_auth_fallback_for_proxy_oauth(config_text)
+    {
+        settings.insert("config".to_string(), Value::String(updated));
+    }
 }
 
 fn apply_codex_official_auth(
@@ -2613,6 +2639,70 @@ mod tests {
     use serde_json::json;
 
     #[test]
+    fn proxy_oauth_codex_snapshot_neutralizes_official_auth_fallback() {
+        let poisoned_config = "model_provider = \"custom\"\n\n[model_providers.custom]\nname = \"xai\"\nbase_url = \"https://api.x.ai/v1\"\nwire_api = \"responses\"\nrequires_openai_auth = true\n";
+        let settings = json!({
+            "auth": { "OPENAI_API_KEY": "" },
+            "config": poisoned_config,
+        });
+
+        // The raw managed-OAuth snapshot is exactly what the keyless safety
+        // gate refuses — the switch regression this neutralization fixes.
+        assert!(crate::codex_config::preflight_codex_live_write(
+            None,
+            &settings["auth"],
+            Some(poisoned_config)
+        )
+        .is_err());
+
+        let mut provider = Provider::with_id(
+            "grok-oauth".to_string(),
+            "xAI (Grok) OAuth".to_string(),
+            settings.clone(),
+            None,
+        );
+        provider.meta = Some(ProviderMeta {
+            provider_type: Some("xai_oauth".to_string()),
+            ..Default::default()
+        });
+        neutralize_codex_proxy_oauth_fallback(&AppType::Codex, &mut provider);
+        let config = provider.settings_config["config"].as_str().expect("config");
+        assert!(config.contains("requires_openai_auth = false"));
+        assert!(crate::codex_config::preflight_codex_live_write(
+            None,
+            &provider.settings_config["auth"],
+            Some(config)
+        )
+        .is_ok());
+
+        // codex_oauth keeps its fallback shape — the official login IS its
+        // credential — and non-Codex app types are untouched entirely.
+        let mut official = Provider::with_id(
+            "chatgpt".to_string(),
+            "ChatGPT".to_string(),
+            settings.clone(),
+            None,
+        );
+        official.meta = Some(ProviderMeta {
+            provider_type: Some("codex_oauth".to_string()),
+            ..Default::default()
+        });
+        neutralize_codex_proxy_oauth_fallback(&AppType::Codex, &mut official);
+        assert!(official.settings_config["config"]
+            .as_str()
+            .expect("config")
+            .contains("requires_openai_auth = true"));
+
+        let mut claude_card = provider.clone();
+        claude_card.settings_config = settings;
+        neutralize_codex_proxy_oauth_fallback(&AppType::Claude, &mut claude_card);
+        assert!(claude_card.settings_config["config"]
+            .as_str()
+            .expect("config")
+            .contains("requires_openai_auth = true"));
+    }
+
+    #[test]
     fn kimi_for_coding_effective_settings_backfill_256k_context() {
         let db = Database::memory().expect("create memory db");
         let provider = Provider::with_id(
@@ -3118,13 +3208,14 @@ base_url = "https://a.example/v1"
     fn category_less_managed_codex_binding_with_null_config_uses_selected_account_token() {
         let temp = tempfile::tempdir().expect("tempdir");
         let manager = Arc::new(CodexOAuthManager::new(temp.path().to_path_buf()));
+        let id_token = crate::codex_config::test_codex_id_token("managed-user");
         tauri::async_runtime::block_on(async {
             manager
                 .add_test_account_with_workspace_and_access_token(
                     "local-managed",
                     "workspace-shared",
                     "managed-token",
-                    Some("managed-id-token"),
+                    Some(&id_token),
                 )
                 .await
                 .expect("seed managed account");
@@ -3176,7 +3267,7 @@ base_url = "https://a.example/v1"
         );
         assert_eq!(
             tokens.get("id_token").and_then(|v| v.as_str()),
-            Some("managed-id-token")
+            Some(id_token.as_str())
         );
         assert_eq!(
             tokens.get("refresh_token").and_then(|v| v.as_str()),
