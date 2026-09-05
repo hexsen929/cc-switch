@@ -289,6 +289,9 @@ fn provider_service_switch_codex_preserves_chatgpt_auth_for_keyless_provider() {
                 "keyless-provider".to_string(),
                 "Keyless".to_string(),
                 json!({
+                    // 「无密钥」在 Codex 供应商记录里就是空的 auth 对象；整段缺失会被
+                    // 写入前的 preflight 判为配置损坏（缺少 'auth' 字段）。
+                    "auth": {},
                     "config": r#"model_provider = "keyless"
 model = "gpt-5.1-codex"
 
@@ -410,18 +413,16 @@ base_url = "https://plain.example/v1"
     ProviderService::switch(&state, AppType::Codex, "plain-provider")
         .expect("switch should cache chatgpt auth before writing plain provider");
 
-    let auth_after_switch: serde_json::Value =
-        read_json_file(&cc_switch_lib::get_codex_auth_path()).expect("read auth after switch");
-    assert_eq!(
-        auth_after_switch
-            .get("OPENAI_API_KEY")
-            .and_then(|v| v.as_str()),
-        Some("plain-key"),
-        "default provider switch may overwrite live auth.json while the ChatGPT cache is kept separately"
-    );
+    // 自 cbb79127（refactor(codex): unify provider switching on config-only auth
+    // writes）起，auth.json 只留给官方 ChatGPT 登录：preservation 关着时第三方切换
+    // 直接删掉它，密钥改走 config.toml 的 provider 级 experimental_bearer_token。
+    // 这里只验证「live 里没留下 ChatGPT 登录态」，缓存本身由下面开启接管后的
+    // 恢复流程验证。参见对偶用例
+    // `provider_service_switch_codex_default_removes_auth_json_when_preservation_off`。
     assert!(
-        auth_after_switch.get("auth_mode").is_none(),
-        "live auth.json should no longer be the ChatGPT auth before takeover preservation is enabled"
+        !cc_switch_lib::get_codex_auth_path().exists(),
+        "preservation off: a third-party switch must remove live auth.json instead of \
+         parking the ChatGPT login or the third-party key there"
     );
 
     let mut proxy_config = futures::executor::block_on(state.db.get_proxy_config_for_app("codex"))
@@ -937,7 +938,7 @@ wire_api = "responses"
     clippy::await_holding_lock,
     reason = "this integration-style test must serialize global test HOME and settings mutations across async takeover calls"
 )]
-async fn codex_takeover_allows_switching_back_to_official_and_leaves_route_mode() {
+async fn codex_takeover_allows_switching_back_to_official_and_keeps_route_mode() {
     let _guard = test_mutex().lock().expect("acquire test mutex");
     reset_test_fs();
     enable_codex_official_auth_preservation();
@@ -1028,16 +1029,21 @@ experimental_bearer_token = "deepseek-key"
     );
 
     ProviderService::switch(&state, AppType::Codex, "official-provider")
-        .expect("switching Codex back to OpenAI Official should leave takeover mode");
+        .expect("switching Codex back to OpenAI Official must be allowed during takeover");
 
+    // v3.16 起（feat(codex): route native ChatGPT sessions through proxy takeover）
+    // 内置 Codex 官方卡片可以留在接管模式里：Codex 自己持有 ChatGPT 登录态，代理
+    // 只转发已认证请求，所以切回官方不再退出本地路由。对应实现是
+    // `official_provider_supports_proxy_takeover`，单测见
+    // `codex_takeover_hot_switches_between_builtin_official_and_third_party`。
     assert!(
-        !state
+        state
             .db
             .get_proxy_config_for_app("codex")
             .await
             .expect("get codex proxy config")
             .enabled,
-        "switching to OpenAI Official must disable Codex local route takeover"
+        "switching to OpenAI Official must keep Codex local route takeover active"
     );
     assert!(
         state
@@ -1045,8 +1051,8 @@ experimental_bearer_token = "deepseek-key"
             .get_live_backup("codex")
             .await
             .expect("read Codex backup")
-            .is_none(),
-        "Codex takeover backup should be removed after leaving route mode"
+            .is_some(),
+        "the takeover backup must survive an official hot switch"
     );
 
     let auth_after_switch: serde_json::Value =
@@ -1056,15 +1062,18 @@ experimental_bearer_token = "deepseek-key"
             .pointer("/tokens/access_token")
             .and_then(|v| v.as_str()),
         Some("official-oauth-token"),
-        "OpenAI Official recovery should preserve the user's ChatGPT OAuth token"
+        "the official route must reuse the user's native ChatGPT OAuth token"
     );
 
     let config_after_switch =
         std::fs::read_to_string(cc_switch_lib::get_codex_config_path()).expect("read config");
     assert!(
-        !config_after_switch.contains("127.0.0.1")
-            && !config_after_switch.contains("PROXY_MANAGED"),
-        "OpenAI Official must not keep local-route proxy fields"
+        cc_switch_lib::codex_config_has_official_proxy_route(&config_after_switch),
+        "official takeover must project the dedicated official proxy route, got:\n{config_after_switch}"
+    );
+    assert!(
+        !config_after_switch.contains("PROXY_MANAGED"),
+        "the official route forwards native auth, so it must not carry the managed token placeholder"
     );
 }
 
@@ -1650,15 +1659,18 @@ wire_api = "responses"
         "stale takeover flag should not require ChatGPT login while global preservation is off",
     );
 
-    let auth_value: serde_json::Value =
-        read_json_file(&cc_switch_lib::get_codex_auth_path()).expect("read auth.json");
-    assert_eq!(
-        auth_value.get("OPENAI_API_KEY").and_then(|v| v.as_str()),
-        Some("third-party-key")
-    );
+    // 「普通第三方语义」自 cbb79127 起就是 config-only：auth.json 被删掉，密钥以
+    // provider 级 experimental_bearer_token 落在 config.toml。本用例锁的是
+    // 「残留的 takeover 标记不会额外要求 ChatGPT 登录」，而不是密钥写去哪。
     assert!(
-        auth_value.get("auth_mode").is_none(),
-        "global opt-out should keep ordinary third-party auth semantics"
+        !cc_switch_lib::get_codex_auth_path().exists(),
+        "global opt-out keeps ordinary third-party semantics: auth.json is removed"
+    );
+    let live_config =
+        std::fs::read_to_string(cc_switch_lib::get_codex_config_path()).expect("read config.toml");
+    assert!(
+        live_config.contains("experimental_bearer_token = \"third-party-key\""),
+        "the third-party key must ride in config.toml; got:\n{live_config}"
     );
 }
 

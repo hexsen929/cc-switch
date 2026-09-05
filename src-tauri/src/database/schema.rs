@@ -670,6 +670,9 @@ impl Database {
                 }
                 version = Self::get_user_version(conn)?;
             }
+            // 迁移收尾统一补 fork 私有列：见 ensure_fork_owned_columns 的说明，
+            // 已经停在最新版本的库不会再进上面的 while，只能靠这一步兜住。
+            Self::ensure_fork_owned_columns(conn)?;
             Ok(())
         })();
 
@@ -1576,6 +1579,7 @@ impl Database {
                 enable_logging INTEGER NOT NULL DEFAULT 1,
                 enabled INTEGER NOT NULL DEFAULT 0,
                 auto_failover_enabled INTEGER NOT NULL DEFAULT 0,
+                codex_chatgpt_auth_takeover INTEGER NOT NULL DEFAULT 0,
                 max_retries INTEGER NOT NULL DEFAULT 3,
                 streaming_first_byte_timeout INTEGER NOT NULL DEFAULT 60,
                 streaming_idle_timeout INTEGER NOT NULL DEFAULT 120,
@@ -1603,6 +1607,9 @@ impl Database {
             ("enable_logging", "1"),
             ("enabled", "0"),
             ("auto_failover_enabled", "0"),
+            // fork 私有列：整表重建必须把它一起搬过去，否则升级会静默清掉用户
+            // 已经开启的 Codex ChatGPT 接管开关。
+            ("codex_chatgpt_auth_takeover", "0"),
             ("max_retries", "3"),
             ("streaming_first_byte_timeout", "60"),
             ("streaming_idle_timeout", "120"),
@@ -1634,7 +1641,7 @@ impl Database {
         let copy_sql = format!(
             "INSERT INTO proxy_config_v14 (
                 app_type, proxy_enabled, listen_address, listen_port, enable_logging,
-                enabled, auto_failover_enabled, max_retries,
+                enabled, auto_failover_enabled, codex_chatgpt_auth_takeover, max_retries,
                 streaming_first_byte_timeout, streaming_idle_timeout, non_streaming_timeout,
                 circuit_failure_threshold, circuit_success_threshold, circuit_timeout_seconds,
                 circuit_error_rate_threshold, circuit_min_requests,
@@ -1755,6 +1762,35 @@ impl Database {
                 "session_log_sync",
                 "last_tail_fingerprint",
                 "INTEGER",
+            )?;
+        }
+        Ok(())
+    }
+
+    /// 重新补齐 fork 加在上游表上的私有列。
+    ///
+    /// `create_tables_on_conn` 里的 DDL/ALTER 跑在迁移**之前**，而上游迁移会整表
+    /// 重建：`migrate_v13_to_v14` 用固定列清单重建 `proxy_config` 再 `DROP` 旧表，
+    /// 把 `codex_chatgpt_auth_takeover` 一起带走。新建库从 user_version=0 一路迁到
+    /// 最新版，于是每个全新安装都缺这一列，`get_proxy_config_for_app` 直接
+    /// 「no such column」；而已经停在最新版本的库不会再触发任何迁移，光修
+    /// v13→v14 也救不回来。所以放在迁移收尾按幂等方式重新确认一遍。
+    fn ensure_fork_owned_columns(conn: &Connection) -> Result<(), AppError> {
+        if Self::table_exists(conn, "proxy_config")? {
+            Self::add_column_if_missing(
+                conn,
+                "proxy_config",
+                "codex_chatgpt_auth_takeover",
+                "INTEGER NOT NULL DEFAULT 0",
+            )?;
+        }
+        if Self::table_exists(conn, "prompts")? {
+            Self::add_column_if_missing(conn, "prompts", "append_content", "TEXT")?;
+            Self::add_column_if_missing(
+                conn,
+                "prompts",
+                "managed_import",
+                "BOOLEAN NOT NULL DEFAULT 0",
             )?;
         }
         Ok(())
@@ -3527,6 +3563,66 @@ mod tests {
             |row| Ok((row.get(0)?, row.get(1)?)),
         )?;
         assert_eq!(codex_values, (1, 9));
+
+        Ok(())
+    }
+
+    /// 回归：`migrate_v13_to_v14` 整表重建 proxy_config 时必须把 fork 私有列
+    /// 一起搬过去。漏掉它会让每个走过这段迁移的库丢列，`get_proxy_config_for_app`
+    /// 直接「no such column: codex_chatgpt_auth_takeover」。
+    #[test]
+    fn migrate_v13_to_v14_keeps_the_fork_owned_codex_takeover_column() -> Result<(), AppError> {
+        let conn = Connection::open_in_memory()?;
+        Database::create_tables_on_conn(&conn)?;
+        conn.execute(
+            "UPDATE proxy_config SET codex_chatgpt_auth_takeover = 1 WHERE app_type = 'codex'",
+            [],
+        )?;
+        Database::set_user_version(&conn, 13)?;
+
+        Database::apply_schema_migrations_on_conn(&conn)?;
+
+        assert!(Database::has_column(
+            &conn,
+            "proxy_config",
+            "codex_chatgpt_auth_takeover"
+        )?);
+        let takeover: i64 = conn.query_row(
+            "SELECT codex_chatgpt_auth_takeover FROM proxy_config WHERE app_type = 'codex'",
+            [],
+            |row| row.get(0),
+        )?;
+        assert_eq!(
+            takeover, 1,
+            "the rebuild must carry the user's takeover flag, not reset it to the default"
+        );
+
+        Ok(())
+    }
+
+    /// 已经停在最新版本的库不会再触发任何迁移，所以「修好 v13→v14」救不回历史上
+    /// 已经被削掉列的库；迁移收尾的 `ensure_fork_owned_columns` 负责补齐。
+    #[test]
+    fn migrations_backfill_fork_columns_on_a_database_already_at_latest_version(
+    ) -> Result<(), AppError> {
+        let conn = Connection::open_in_memory()?;
+        // 复刻受损形状：三行结构齐全，但缺 fork 私有列。
+        conn.execute(
+            "CREATE TABLE proxy_config (
+                app_type TEXT PRIMARY KEY,
+                enabled INTEGER NOT NULL DEFAULT 0
+            )",
+            [],
+        )?;
+        conn.execute("INSERT INTO proxy_config (app_type) VALUES ('codex')", [])?;
+        Database::set_user_version(&conn, SCHEMA_VERSION)?;
+
+        Database::apply_schema_migrations_on_conn(&conn)?;
+
+        assert!(
+            Database::has_column(&conn, "proxy_config", "codex_chatgpt_auth_takeover")?,
+            "a database parked at the latest version must still get the fork column back"
+        );
 
         Ok(())
     }
