@@ -37,6 +37,7 @@ const DEFAULT_OVERRIDES: Required<ProviderResourceOverrides> = {
   skills: {
     enabled: false,
     disabledSkillIds: [],
+    enabledSkillIds: [],
   },
   prompt: {
     enabled: false,
@@ -96,14 +97,14 @@ function OverrideCard({
 
 function ResourceChecklist<T extends { id: string; name: string }>({
   items,
-  disabledIds,
+  selectedIds,
   emptyLabel,
   onToggle,
 }: {
   items: T[];
-  disabledIds: string[];
+  selectedIds: string[];
   emptyLabel: string;
-  onToggle: (id: string, disabled: boolean) => void;
+  onToggle: (id: string, selected: boolean) => void;
 }) {
   if (items.length === 0) {
     return <div className="text-xs text-muted-foreground">{emptyLabel}</div>;
@@ -112,7 +113,7 @@ function ResourceChecklist<T extends { id: string; name: string }>({
   return (
     <div className="max-h-56 overflow-y-auto space-y-2 pr-1">
       {items.map((item) => {
-        const checked = disabledIds.includes(item.id);
+        const checked = selectedIds.includes(item.id);
         return (
           <label
             key={item.id}
@@ -197,6 +198,23 @@ export function ProviderResourceOverridesConfig({
     [appId, skillsData],
   );
 
+  // Skills 管理里对当前应用关掉的条目：只有这些才需要「单独为该供应商启用」。
+  //
+  // Pi / Claude Desktop 不列：后端 `sync_to_app_for_provider` 对这两个应用直接早退
+  // （它们的 skill 目录由原生形态决定），列出来只会给出一个点了没用的开关。
+  const supportsProviderScopedSkills =
+    appId !== "pi" && appId !== "claude-desktop";
+
+  const globallyDisabledSkills = useMemo<InstalledSkill[]>(
+    () =>
+      supportsProviderScopedSkills
+        ? (skillsData ?? [])
+            .filter((skill) => skill.apps?.[appId] !== true)
+            .sort((a, b) => a.name.localeCompare(b.name))
+        : [],
+    [appId, skillsData, supportsProviderScopedSkills],
+  );
+
   const availablePrompts = useMemo<Prompt[]>(
     () =>
       Object.values(promptsData ?? {}).sort((a, b) =>
@@ -228,6 +246,8 @@ export function ProviderResourceOverridesConfig({
     });
   };
 
+  // 禁用名单与启用名单互斥：后端同 ID 冲突时以禁用为准，若界面允许两边都留着，
+  // 用户会看到勾选了「为此供应商启用」却依旧不加载的假状态。
   const updateSkillDisabledIds = (id: string, disabled: boolean) => {
     const currentIds = resolvedValue.skills.disabledSkillIds ?? [];
     const nextIds = disabled
@@ -238,6 +258,30 @@ export function ProviderResourceOverridesConfig({
       skills: {
         ...resolvedValue.skills,
         disabledSkillIds: nextIds,
+        enabledSkillIds: disabled
+          ? (resolvedValue.skills.enabledSkillIds ?? []).filter(
+              (item) => item !== id,
+            )
+          : (resolvedValue.skills.enabledSkillIds ?? []),
+      },
+    });
+  };
+
+  const updateSkillEnabledIds = (id: string, enabled: boolean) => {
+    const currentIds = resolvedValue.skills.enabledSkillIds ?? [];
+    const nextIds = enabled
+      ? Array.from(new Set([...currentIds, id]))
+      : currentIds.filter((item) => item !== id);
+    updateValue({
+      ...resolvedValue,
+      skills: {
+        ...resolvedValue.skills,
+        enabledSkillIds: nextIds,
+        disabledSkillIds: enabled
+          ? (resolvedValue.skills.disabledSkillIds ?? []).filter(
+              (item) => item !== id,
+            )
+          : (resolvedValue.skills.disabledSkillIds ?? []),
       },
     });
   };
@@ -297,7 +341,7 @@ export function ProviderResourceOverridesConfig({
         ) : (
           <ResourceChecklist
             items={availableMcps}
-            disabledIds={resolvedValue.mcp.disabledServerIds ?? []}
+            selectedIds={resolvedValue.mcp.disabledServerIds ?? []}
             emptyLabel={t("providerOverrides.noMcp", {
               defaultValue: "当前应用还没有启用任何全局 MCP。",
             })}
@@ -313,7 +357,7 @@ export function ProviderResourceOverridesConfig({
         })}
         description={t("providerOverrides.skillDescription", {
           defaultValue:
-            "基于全局启用列表，额外禁用这个供应商不应加载的 Skill。",
+            "基于全局启用列表，额外禁用这个供应商不应加载的 Skill；也可以单独打开 Skills 管理里已关闭的 Skill。",
         })}
         enabled={resolvedValue.skills.enabled}
         onEnabledChange={(enabled) =>
@@ -326,30 +370,60 @@ export function ProviderResourceOverridesConfig({
           })
         }
       >
-        <div className="mb-3 flex items-center gap-2">
-          <Badge variant="outline">
-            {t("providerOverrides.globalEnabledCount", {
-              defaultValue: "全局已启用 {{count}} 项",
-              count: availableSkills.length,
-            })}
-          </Badge>
-          <span className="text-xs text-muted-foreground">
-            {t("providerOverrides.checkedMeansDisabled", {
-              defaultValue: "勾选表示对此供应商禁用",
-            })}
-          </span>
-        </div>
         {isLoadingSkills ? (
           <div className="text-xs text-muted-foreground">{loadingLabel}</div>
         ) : (
-          <ResourceChecklist
-            items={availableSkills}
-            disabledIds={resolvedValue.skills.disabledSkillIds ?? []}
-            emptyLabel={t("providerOverrides.noSkill", {
-              defaultValue: "当前应用还没有启用任何全局 Skill。",
-            })}
-            onToggle={updateSkillDisabledIds}
-          />
+          <div className="space-y-4">
+            <div>
+              <div className="mb-3 flex items-center gap-2">
+                <Badge variant="outline">
+                  {t("providerOverrides.globalEnabledCount", {
+                    defaultValue: "全局已启用 {{count}} 项",
+                    count: availableSkills.length,
+                  })}
+                </Badge>
+                <span className="text-xs text-muted-foreground">
+                  {t("providerOverrides.checkedMeansDisabled", {
+                    defaultValue: "勾选表示对此供应商禁用",
+                  })}
+                </span>
+              </div>
+              <ResourceChecklist
+                items={availableSkills}
+                selectedIds={resolvedValue.skills.disabledSkillIds ?? []}
+                emptyLabel={t("providerOverrides.noSkill", {
+                  defaultValue: "当前应用还没有启用任何全局 Skill。",
+                })}
+                onToggle={updateSkillDisabledIds}
+              />
+            </div>
+
+            {supportsProviderScopedSkills ? (
+              <div className="border-t border-border/50 pt-4">
+                <div className="mb-3 flex items-center gap-2">
+                  <Badge variant="outline">
+                    {t("providerOverrides.globalDisabledCount", {
+                      defaultValue: "全局已关闭 {{count}} 项",
+                      count: globallyDisabledSkills.length,
+                    })}
+                  </Badge>
+                  <span className="text-xs text-muted-foreground">
+                    {t("providerOverrides.checkedMeansEnabled", {
+                      defaultValue: "勾选表示只为此供应商启用",
+                    })}
+                  </span>
+                </div>
+                <ResourceChecklist
+                  items={globallyDisabledSkills}
+                  selectedIds={resolvedValue.skills.enabledSkillIds ?? []}
+                  emptyLabel={t("providerOverrides.noDisabledSkill", {
+                    defaultValue: "Skills 管理里没有对当前应用关闭的 Skill。",
+                  })}
+                  onToggle={updateSkillEnabledIds}
+                />
+              </div>
+            ) : null}
+          </div>
         )}
       </OverrideCard>
 

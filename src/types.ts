@@ -118,7 +118,10 @@ export interface ProviderMcpOverrides {
 
 export interface ProviderSkillOverrides {
   enabled: boolean;
+  /** 全局启用、但对这个供应商禁用的 Skill ID */
   disabledSkillIds?: string[];
+  /** Skills 管理里已关闭、但对这个供应商单独启用的 Skill ID */
+  enabledSkillIds?: string[];
 }
 
 export type ProviderPromptOverrideMode = "selected" | "disabled";

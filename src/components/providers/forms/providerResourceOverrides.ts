@@ -13,9 +13,17 @@ export function normalizeProviderResourceOverrides(
   }
 
   if (value.skills?.enabled) {
+    const disabledSkillIds = (value.skills.disabledSkillIds ?? []).filter(
+      Boolean,
+    );
     next.skills = {
       enabled: true,
-      disabledSkillIds: (value.skills.disabledSkillIds ?? []).filter(Boolean),
+      disabledSkillIds,
+      // 禁用优先与后端 is_effectively_enabled_for_app 对齐：同一个 ID 不能两张
+      // 名单都留着，否则界面上勾了「为此供应商启用」却仍旧不生效。
+      enabledSkillIds: (value.skills.enabledSkillIds ?? []).filter(
+        (id) => Boolean(id) && !disabledSkillIds.includes(id),
+      ),
     };
   }
 

@@ -8544,6 +8544,7 @@ command = "echo"
                 skills: Some(ProviderSkillOverrides {
                     enabled: true,
                     disabled_skill_ids: vec!["skill-echo".to_string()],
+                    enabled_skill_ids: Vec::new(),
                 }),
                 prompt: Some(ProviderPromptOverrides {
                     enabled: true,

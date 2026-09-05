@@ -517,26 +517,41 @@ impl SkillService {
             .map_err(anyhow::Error::from)
     }
 
+    /// 判断某个 Skill 对「当前生效的 provider」是否应该出现在应用目录里。
+    ///
+    /// 两个方向的 provider 覆盖都在这里收口：
+    /// - `disabled_skill_ids`：全局开着，但这个 provider 不要；
+    /// - `enabled_skill_ids`：Skills 管理里对该应用关掉了，但这个 provider 要。
+    ///
+    /// 同一个 ID 落在两张名单里时以禁用为准——手工编辑过的配置不该因为多写了
+    /// 一行启用名单，就把用户明确屏蔽掉的 Skill 放回去。
     fn is_effectively_enabled_for_app(
         skill: &InstalledSkill,
         app: &AppType,
         provider: Option<&Provider>,
     ) -> bool {
-        if !skill.apps.is_enabled_for(app) {
-            return false;
-        }
-
-        let Some(disabled_skill_ids) = provider
+        let Some(overrides) = provider
             .and_then(|provider| provider.meta.as_ref())
             .and_then(|meta| meta.resource_overrides.as_ref())
             .and_then(|overrides| overrides.skills.as_ref())
             .filter(|override_config| override_config.enabled)
-            .map(|override_config| &override_config.disabled_skill_ids)
         else {
-            return true;
+            return skill.apps.is_enabled_for(app);
         };
 
-        !disabled_skill_ids.iter().any(|id| id == &skill.id)
+        if overrides
+            .disabled_skill_ids
+            .iter()
+            .any(|id| id == &skill.id)
+        {
+            return false;
+        }
+
+        if overrides.enabled_skill_ids.iter().any(|id| id == &skill.id) {
+            return true;
+        }
+
+        skill.apps.is_enabled_for(app)
     }
 
     pub fn new() -> Self {
@@ -5849,6 +5864,134 @@ mod tests {
         assert!(
             app_dir.join("good-skill").exists(),
             "the healthy skill must still be synced despite the poisoned row"
+        );
+    }
+
+    /// 构造只带 Skill 覆盖的 provider。
+    fn provider_with_skill_overrides(
+        disabled_skill_ids: &[&str],
+        enabled_skill_ids: &[&str],
+    ) -> Provider {
+        use crate::provider::{ProviderMeta, ProviderResourceOverrides, ProviderSkillOverrides};
+
+        let mut provider = Provider::with_id(
+            "p1".to_string(),
+            "P1".to_string(),
+            serde_json::json!({}),
+            None,
+        );
+        provider.meta = Some(ProviderMeta {
+            resource_overrides: Some(ProviderResourceOverrides {
+                mcp: None,
+                skills: Some(ProviderSkillOverrides {
+                    enabled: true,
+                    disabled_skill_ids: disabled_skill_ids
+                        .iter()
+                        .map(|id| id.to_string())
+                        .collect(),
+                    enabled_skill_ids: enabled_skill_ids.iter().map(|id| id.to_string()).collect(),
+                }),
+                prompt: None,
+            }),
+            ..ProviderMeta::default()
+        });
+        provider
+    }
+
+    #[test]
+    fn provider_enabled_ids_reopen_a_globally_disabled_skill() {
+        // 全局（Skills 管理）对 Claude 关掉的一条，只有落在 enabled_skill_ids 里
+        // 才对该 provider 生效；没被点名的仍然保持关闭。
+        let mut off_globally = poisoned_skill("owner/repo:wanted", "wanted");
+        off_globally.apps = SkillApps::default();
+        let mut other_off = poisoned_skill("owner/repo:untouched", "untouched");
+        other_off.apps = SkillApps::default();
+
+        let provider = provider_with_skill_overrides(&[], &["owner/repo:wanted"]);
+
+        assert!(SkillService::is_effectively_enabled_for_app(
+            &off_globally,
+            &AppType::Claude,
+            Some(&provider)
+        ));
+        assert!(!SkillService::is_effectively_enabled_for_app(
+            &other_off,
+            &AppType::Claude,
+            Some(&provider)
+        ));
+        // 没有 provider 覆盖时不得凭空放开
+        assert!(!SkillService::is_effectively_enabled_for_app(
+            &off_globally,
+            &AppType::Claude,
+            None
+        ));
+    }
+
+    #[test]
+    fn provider_disabled_ids_win_over_enabled_ids() {
+        // 手改过的配置里同一个 ID 可能两张名单都在：以「关闭」为准，
+        // 否则启用名单会把用户明确屏蔽的 Skill 放回去。
+        let mut skill = poisoned_skill("owner/repo:conflict", "conflict");
+        skill.apps = SkillApps::default();
+        let provider =
+            provider_with_skill_overrides(&["owner/repo:conflict"], &["owner/repo:conflict"]);
+
+        assert!(!SkillService::is_effectively_enabled_for_app(
+            &skill,
+            &AppType::Claude,
+            Some(&provider)
+        ));
+
+        // 反方向不受影响：全局开着 + 只在禁用名单里，照旧关闭。
+        skill.apps = SkillApps::only(&AppType::Claude);
+        assert!(!SkillService::is_effectively_enabled_for_app(
+            &skill,
+            &AppType::Claude,
+            Some(&provider)
+        ));
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn sync_to_app_for_provider_materializes_provider_enabled_skill() {
+        let temp = tempdir().expect("tempdir");
+        let _guard = TestHomeGuard::set(temp.path());
+
+        let ssot_dir = SkillService::get_ssot_dir().expect("ssot dir");
+        write_skill(&ssot_dir.join("provider-only"), "provider only");
+        write_skill(&ssot_dir.join("stays-off"), "stays off");
+
+        let db = std::sync::Arc::new(Database::memory().expect("memory db"));
+        let mut wanted = poisoned_skill("owner/repo:provider-only", "provider-only");
+        wanted.name = "provider only".to_string();
+        wanted.apps = SkillApps::default();
+        db.save_skill(&wanted).expect("seed provider-only skill");
+
+        let mut untouched = poisoned_skill("owner/repo:stays-off", "stays-off");
+        untouched.name = "stays off".to_string();
+        untouched.apps = SkillApps::default();
+        db.save_skill(&untouched).expect("seed stays-off skill");
+
+        let provider = provider_with_skill_overrides(&[], &["owner/repo:provider-only"]);
+        SkillService::sync_to_app_for_provider(&db, &AppType::Claude, Some(&provider))
+            .expect("sync for provider");
+
+        let app_dir = SkillService::get_app_skills_dir(&AppType::Claude).expect("app dir");
+        assert!(
+            app_dir.join("provider-only").exists(),
+            "a globally disabled skill must be materialized when the provider enables it"
+        );
+        assert!(
+            !app_dir.join("stays-off").exists(),
+            "skills outside the provider allowlist must stay out of the app dir"
+        );
+
+        // 切到没有覆盖的 provider 后，同一目录必须被收回。
+        SkillService::sync_to_app_for_provider(&db, &AppType::Claude, None)
+            .expect("sync without provider override");
+        assert!(
+            !app_dir.join("provider-only").exists(),
+            "the provider-scoped skill must be removed once that provider is no longer current"
         );
     }
 

@@ -379,6 +379,17 @@ pub struct ProviderSkillOverrides {
         skip_serializing_if = "Vec::is_empty"
     )]
     pub disabled_skill_ids: Vec<String>,
+    /// 在 Skills 管理里对该应用关闭、但要单独为这个 provider 打开的 Skill ID。
+    ///
+    /// 与 `disabled_skill_ids` 方向相反：前者从全局启用列表里减，这里往全局
+    /// 禁用列表里加。同一个 ID 同时出现在两张名单时以禁用为准（见
+    /// `SkillService::is_effectively_enabled_for_app`）。
+    #[serde(
+        rename = "enabledSkillIds",
+        default,
+        skip_serializing_if = "Vec::is_empty"
+    )]
+    pub enabled_skill_ids: Vec<String>,
 }
 
 /// Provider 级 Prompt 覆盖模式
