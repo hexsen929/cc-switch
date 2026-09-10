@@ -166,7 +166,7 @@ describe("Codex Chat provider presets", () => {
         "DouBaoSeed",
         { contextWindows: { "doubao-seed-2-1-pro-260628": 262144 } },
       ],
-      ["Bailian", { contextWindows: { "qwen3-coder-plus": 1048576 } }],
+      ["千问AI平台", { contextWindows: { "qwen3.8-max": 983616 } }],
       // 腾讯 TokenHub 官方 Codex 文档确认 hy3 原生 Responses（2026-07-14）
       [
         "Tencent Hunyuan",
