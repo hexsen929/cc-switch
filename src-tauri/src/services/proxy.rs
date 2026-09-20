@@ -8,7 +8,7 @@ use crate::config::{
 };
 use crate::database::Database;
 use crate::provider::Provider;
-use crate::proxy::providers::codex_oauth_auth::CodexOAuthManager;
+use crate::proxy::providers::codex_oauth_auth::{CodexLiveAuthSwitchGuard, CodexOAuthManager};
 use crate::proxy::server::ProxyServer;
 use crate::proxy::switch_lock::SwitchLockManager;
 use crate::proxy::types::*;
@@ -1593,7 +1593,7 @@ impl ProxyService {
         &self,
         provider: &Provider,
         outgoing_managed_account_id: Option<&str>,
-        expected_outgoing_refresh_token: Option<&str>,
+        outgoing_guard: Option<&CodexLiveAuthSwitchGuard>,
     ) -> Result<(), String> {
         let existing_live = self.read_codex_live().ok();
         let mut effective_settings = build_effective_provider_for_live_with_codex_oauth_manager(
@@ -1631,14 +1631,10 @@ impl ProxyService {
         )?;
         Self::attach_codex_model_catalog_from_provider(&mut effective_settings, Some(provider));
 
-        if let (Some(account_id), Some(expected_refresh_token)) =
-            (outgoing_managed_account_id, expected_outgoing_refresh_token)
-        {
-            crate::codex_config::ensure_codex_live_auth_unchanged_for_managed_account(
-                account_id,
-                expected_refresh_token,
-            )
-            .map_err(|error| error.to_string())?;
+        if let (Some(account_id), Some(guard)) = (outgoing_managed_account_id, outgoing_guard) {
+            guard
+                .ensure_unchanged(account_id)
+                .map_err(|error| error.to_string())?;
         }
 
         self.write_codex_takeover_live_for_provider(&effective_settings, Some(provider))?;
@@ -2126,6 +2122,26 @@ impl ProxyService {
                         self.takeover_live_config_strict(&app).await?;
                     }
                     self.sync_active_target_for_app(&app).await?;
+                    if let Some(provider_id) =
+                        crate::settings::get_effective_current_provider(&self.db, &app)
+                            .map_err(|error| error.to_string())?
+                    {
+                        if let Some(account_id) = self
+                            .db
+                            .get_provider_by_id(&provider_id, app_type_str)
+                            .map_err(|error| error.to_string())?
+                            .filter(crate::proxy::providers::is_codex_official_provider)
+                            .and_then(|provider| provider.meta)
+                            .and_then(|meta| meta.managed_account_id_for("codex_oauth"))
+                            .filter(|id| !id.trim().is_empty())
+                        {
+                            self.codex_oauth_manager
+                                .ensure_account_exists(account_id.trim())
+                                .await
+                                .map_err(|error| error.to_string())?;
+                        }
+                    }
+                    self.refresh_active_target_from_current_provider(&app).await;
                     return Ok(());
                 }
                 restore_existing_backup_before_takeover = has_backup;
@@ -4068,13 +4084,14 @@ impl ProxyService {
             .is_some();
         let live_taken_over = self.detect_takeover_in_live_config_for_app(&app_type_enum);
         let should_sync_backup = has_backup || live_taken_over;
-        let outgoing_live_refresh_token =
+        let outgoing_live_auth_guard =
             if should_sync_backup && matches!(app_type_enum, AppType::Codex) {
                 match outgoing_managed_codex_account_id.as_deref() {
                     Some(account_id) => self
                         .codex_oauth_manager
                         .prepare_live_auth_for_account_switch_away(account_id)
                         .await
+                        .map(Some)
                         .map_err(|error| error.to_string())?,
                     None => None,
                 }
@@ -4120,15 +4137,13 @@ impl ProxyService {
 
         let prepare_result: Result<(), String> = async {
             if leave_codex_takeover {
-                if let (Some(account_id), Some(expected_refresh_token)) = (
+                if let (Some(account_id), Some(guard)) = (
                     outgoing_managed_codex_account_id.as_deref(),
-                    outgoing_live_refresh_token.as_deref(),
+                    outgoing_live_auth_guard.as_ref(),
                 ) {
-                    crate::codex_config::ensure_codex_live_auth_unchanged_for_managed_account(
-                        account_id,
-                        expected_refresh_token,
-                    )
-                    .map_err(|error| error.to_string())?;
+                    guard
+                        .ensure_unchanged(account_id)
+                        .map_err(|error| error.to_string())?;
                 }
                 self.leave_codex_takeover_for_unified_official_provider(
                     &provider,
@@ -4152,7 +4167,7 @@ impl ProxyService {
                         self.sync_codex_live_from_provider_while_proxy_active_guarded(
                             &provider,
                             outgoing_managed_codex_account_id.as_deref(),
-                            outgoing_live_refresh_token.as_deref(),
+                            outgoing_live_auth_guard.as_ref(),
                         )
                         .await?;
                     } else if live_taken_over && matches!(app_type_enum, AppType::GrokBuild) {
@@ -4179,15 +4194,13 @@ impl ProxyService {
                         &effective_provider,
                     );
 
-                    if let (Some(account_id), Some(expected_refresh_token)) = (
+                    if let (Some(account_id), Some(guard)) = (
                         outgoing_managed_codex_account_id.as_deref(),
-                        outgoing_live_refresh_token.as_deref(),
+                        outgoing_live_auth_guard.as_ref(),
                     ) {
-                        crate::codex_config::ensure_codex_live_auth_unchanged_for_managed_account(
-                            account_id,
-                            expected_refresh_token,
-                        )
-                        .map_err(|error| error.to_string())?;
+                        guard
+                            .ensure_unchanged(account_id)
+                            .map_err(|error| error.to_string())?;
                     }
 
                     crate::codex_config::write_codex_provider_live_with_catalog(
@@ -4207,17 +4220,13 @@ impl ProxyService {
             }
 
             if should_sync_backup && matches!(app_type_enum, AppType::Codex) {
-                if let Some(account_id) = outgoing_managed_codex_account_id.as_deref() {
-                    if let Some(expected_refresh_token) = outgoing_live_refresh_token.as_deref() {
-                        crate::codex_config::clear_codex_live_auth_for_managed_account_if_unchanged(
-                            account_id,
-                            Some(expected_refresh_token),
-                        )
+                if let (Some(account_id), Some(guard)) = (
+                    outgoing_managed_codex_account_id.as_deref(),
+                    outgoing_live_auth_guard.as_ref(),
+                ) {
+                    guard
+                        .clear_outgoing(account_id)
                         .map_err(|error| error.to_string())?;
-                    } else {
-                        crate::codex_config::clear_codex_live_auth_for_managed_account(account_id)
-                            .map_err(|error| error.to_string())?;
-                    }
                 }
             }
 
