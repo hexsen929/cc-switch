@@ -17,6 +17,7 @@ const CLAUDE_MANAGED_IMPORT_PREFIX: &str = "@cc-switch/prompts/";
 struct ClaudeManagedImportBlock {
     start: usize,
     end: usize,
+    target: String,
 }
 
 pub(crate) fn validate_prompt_content(app: &AppType, content: &str) -> Result<(), AppError> {

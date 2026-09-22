@@ -640,6 +640,7 @@ fn enable_mcode_prompt(state: &AppState, id: &str, target_path: &Path) -> Result
                     ),
                     content: live_content,
                     description: Some("自动备份的原始提示词".to_string()),
+                    managed_import: false,
                     enabled: false,
                     created_at: Some(timestamp),
                     updated_at: Some(timestamp),
