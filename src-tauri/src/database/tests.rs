@@ -1161,6 +1161,71 @@ fn model_pricing_seed_includes_claude_5_1_and_standard_sonnet_5_prices() {
 }
 
 #[test]
+fn model_pricing_seed_includes_claude_opus_5_5() {
+    let db = Database::memory().expect("create memory db");
+    let conn = db.conn.lock().expect("lock conn");
+
+    let price: (String, String, String, String) = conn
+        .query_row(
+            "SELECT input_cost_per_million, output_cost_per_million,
+                    cache_read_cost_per_million, cache_creation_cost_per_million
+             FROM model_pricing WHERE model_id = 'claude-opus-5-5'",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+        )
+        .expect("query Opus 5.5 price");
+
+    // 缓存读 0.05x = $0.20：不是常规 0.1x 的 $0.40，也不是 Opus 5 的 $0.50
+    assert_eq!(
+        price,
+        (
+            "4".to_string(),
+            "20".to_string(),
+            "0.20".to_string(),
+            "5".to_string(),
+        )
+    );
+}
+
+#[test]
+fn model_pricing_refresh_finishes_old_repair_chains_and_preserves_custom_prices() {
+    let db = Database::memory().expect("create memory db");
+    {
+        let conn = db.conn.lock().unwrap();
+        conn.execute_batch(
+            "UPDATE model_pricing SET input_cost_per_million = '0.09',
+                output_cost_per_million = '0.29', cache_read_cost_per_million = '0.009',
+                cache_creation_cost_per_million = '0' WHERE model_id = 'mimo-v2.5';
+             UPDATE model_pricing SET input_cost_per_million = '9.99' WHERE model_id = 'o3-mini';",
+        )
+        .unwrap();
+    }
+    db.ensure_model_pricing_seeded().unwrap();
+    for _ in 0..2 {
+        {
+            let conn = db.conn.lock().unwrap();
+            let output: String = conn
+                .query_row(
+                    "SELECT output_cost_per_million FROM model_pricing WHERE model_id = 'mimo-v2.5'",
+                    [],
+                    |row| row.get(0),
+                )
+                .unwrap();
+            assert_eq!(output, "0.28");
+            let custom: String = conn
+                .query_row(
+                    "SELECT input_cost_per_million FROM model_pricing WHERE model_id = 'o3-mini'",
+                    [],
+                    |row| row.get(0),
+                )
+                .unwrap();
+            assert_eq!(custom, "9.99");
+        }
+        db.ensure_model_pricing_seeded().unwrap();
+    }
+}
+
+#[test]
 fn model_pricing_seed_includes_gpt_6_astra() {
     let db = Database::memory().expect("create memory db");
     let conn = db.conn.lock().expect("lock conn");
