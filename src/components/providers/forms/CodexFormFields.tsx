@@ -64,6 +64,8 @@ import type {
 } from "@/types";
 import type { ManagedAuthProvider } from "@/lib/api";
 import type { AppId } from "@/lib/api";
+import { ModelAliasEditor } from "./ModelAliasEditor";
+import type { ModelAliasEntry } from "@/utils/modelAliases";
 
 interface EndpointCandidate {
   url: string;
@@ -145,6 +147,10 @@ interface CodexFormFieldsProps {
   // Model Catalog
   catalogModels?: CodexCatalogModel[];
   onCatalogModelsChange?: (models: CodexCatalogModel[]) => void;
+
+  // Exact model aliases (source model name -> upstream model name)
+  modelAliases?: ModelAliasEntry[];
+  onModelAliasesChange?: (aliases: ModelAliasEntry[]) => void;
 
   // Speed Test Endpoints
   speedTestEndpoints: EndpointCandidate[];
@@ -434,6 +440,8 @@ export function CodexFormFields({
   onPromptCacheRoutingChange,
   catalogModels = [],
   onCatalogModelsChange,
+  modelAliases = [],
+  onModelAliasesChange,
   speedTestEndpoints,
   customUserAgent,
   onCustomUserAgentChange,
@@ -1399,12 +1407,29 @@ export function CodexFormFields({
               </div>
             )}
 
+            {onModelAliasesChange && (
+              <div
+                className={cn(
+                  (shouldShowSpeedTest ||
+                    (isChatFormat && canEditReasoning) ||
+                    canEditCatalog) &&
+                    "border-t border-border-default pt-3",
+                )}
+              >
+                <ModelAliasEditor
+                  entries={modelAliases}
+                  onChange={onModelAliasesChange}
+                />
+              </div>
+            )}
+
             <div
               className={cn(
                 "space-y-3",
                 (shouldShowSpeedTest ||
                   (isChatFormat && canEditReasoning) ||
-                  canEditCatalog) &&
+                  canEditCatalog ||
+                  onModelAliasesChange) &&
                   "border-t border-border-default pt-3",
               )}
             >

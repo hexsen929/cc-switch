@@ -145,4 +145,55 @@ describe("useModelState", () => {
       "deepseek-v4-pro[1M]",
     );
   });
+
+  it("hydrates model aliases from the top-level modelAliases field", () => {
+    const settingsConfig = JSON.stringify({
+      env: { ANTHROPIC_MODEL: "fallback-model" },
+      modelAliases: { "codex-auto-review": "gpt-5.6-sol" },
+    });
+
+    const { result } = renderHook(() =>
+      useModelState({ settingsConfig, onConfigChange: vi.fn() }),
+    );
+
+    expect(
+      result.current.modelAliases.map((e) => ({
+        source: e.source,
+        target: e.target,
+      })),
+    ).toEqual([{ source: "codex-auto-review", target: "gpt-5.6-sol" }]);
+  });
+
+  it("writes model aliases to the top-level field without touching env", () => {
+    let latestConfig = JSON.stringify({
+      env: { ANTHROPIC_MODEL: "fallback-model" },
+    });
+    const onConfigChange = vi.fn((config: string) => {
+      latestConfig = config;
+    });
+
+    const { result } = renderHook(() =>
+      useModelState({ settingsConfig: latestConfig, onConfigChange }),
+    );
+
+    act(() => {
+      result.current.handleModelAliasesChange([
+        { id: "a", source: "codex-auto-review", target: "gpt-5.6-sol" },
+        // 空条目应在序列化时被丢弃
+        { id: "b", source: "", target: "" },
+      ]);
+    });
+
+    let cfg = JSON.parse(latestConfig);
+    expect(cfg.modelAliases).toEqual({ "codex-auto-review": "gpt-5.6-sol" });
+    // env 未受影响
+    expect(cfg.env.ANTHROPIC_MODEL).toBe("fallback-model");
+
+    // 清空后删除该字段
+    act(() => {
+      result.current.handleModelAliasesChange([]);
+    });
+    cfg = JSON.parse(latestConfig);
+    expect(cfg.modelAliases).toBeUndefined();
+  });
 });

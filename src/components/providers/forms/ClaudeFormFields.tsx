@@ -72,6 +72,8 @@ import {
   providerPresets,
   type TemplateValueConfig,
 } from "@/config/claudeProviderPresets";
+import { ModelAliasEditor } from "./ModelAliasEditor";
+import type { ModelAliasEntry } from "@/utils/modelAliases";
 
 interface EndpointCandidate {
   url: string;
@@ -144,6 +146,8 @@ interface ClaudeFormFieldsProps {
   defaultFableModelName: string;
   subagentModel: string;
   onModelChange: (field: ClaudeModelEnvField, value: string) => void;
+  modelAliases?: ModelAliasEntry[];
+  onModelAliasesChange?: (aliases: ModelAliasEntry[]) => void;
 
   // Speed Test Endpoints
   speedTestEndpoints: EndpointCandidate[];
@@ -230,6 +234,8 @@ export function ClaudeFormFields({
   defaultFableModelName,
   subagentModel,
   onModelChange,
+  modelAliases = [],
+  onModelAliasesChange,
   speedTestEndpoints,
   apiFormat,
   onApiFormatChange,
@@ -1154,6 +1160,15 @@ export function ClaudeFormFields({
                 })}
               </p>
             </div>
+
+            {onModelAliasesChange && (
+              <div className="border-t border-border-default pt-3">
+                <ModelAliasEditor
+                  entries={modelAliases}
+                  onChange={onModelAliasesChange}
+                />
+              </div>
+            )}
 
             <CustomUserAgentField
               id="claude-custom-user-agent"

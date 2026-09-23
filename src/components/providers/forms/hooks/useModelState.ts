@@ -1,4 +1,9 @@
 import { useState, useCallback, useEffect, useRef } from "react";
+import {
+  parseModelAliasesFromValue,
+  serializeModelAliases,
+  type ModelAliasEntry,
+} from "@/utils/modelAliases";
 
 interface UseModelStateProps {
   settingsConfig: string;
@@ -116,6 +121,19 @@ function parseModelsFromConfig(settingsConfig: string) {
 }
 
 /**
+ * 从 settings config JSON 读取顶层 modelAliases 对象（精确模型别名）。
+ * 解析失败或字段缺失时返回 undefined，交由 parseModelAliasesFromValue 归一化为 []。
+ */
+function parseAliasesFromConfig(settingsConfig: string): unknown {
+  try {
+    const cfg = settingsConfig ? JSON.parse(settingsConfig) : {};
+    return cfg?.modelAliases;
+  } catch {
+    return undefined;
+  }
+}
+
+/**
  * 管理模型选择状态
  * 支持 ANTHROPIC_MODEL 和各类型默认模型
  */
@@ -142,6 +160,9 @@ export function useModelState({
     initial.fableName,
   );
   const [subagentModel, setSubagentModel] = useState(initial.subagent);
+  const [modelAliases, setModelAliases] = useState<ModelAliasEntry[]>(() =>
+    parseModelAliasesFromValue(parseAliasesFromConfig(settingsConfig)),
+  );
 
   const isUserEditingRef = useRef(false);
   const lastConfigRef = useRef(settingsConfig);
@@ -173,6 +194,9 @@ export function useModelState({
     setDefaultFableModel(parsed.fable);
     setDefaultFableModelName(parsed.fableName);
     setSubagentModel(parsed.subagent);
+    setModelAliases(
+      parseModelAliasesFromValue(parseAliasesFromConfig(settingsConfig)),
+    );
   }, [settingsConfig]);
 
   const handleModelChange = useCallback(
@@ -224,6 +248,34 @@ export function useModelState({
     [onConfigChange],
   );
 
+  // 精确模型别名写回 settings config 顶层 modelAliases 字段（不是 env）。
+  // 复用 isUserEditingRef 抑制一次回填，避免用户编辑时被外部同步覆盖。
+  const handleModelAliasesChange = useCallback(
+    (entries: ModelAliasEntry[]) => {
+      isUserEditingRef.current = true;
+      setModelAliases(entries);
+
+      try {
+        const currentConfig = latestConfigRef.current
+          ? JSON.parse(latestConfigRef.current)
+          : {};
+        const serialized = serializeModelAliases(entries);
+        if (serialized) {
+          currentConfig.modelAliases = serialized;
+        } else {
+          delete currentConfig.modelAliases;
+        }
+
+        const updatedConfig = JSON.stringify(currentConfig, null, 2);
+        latestConfigRef.current = updatedConfig;
+        onConfigChange(updatedConfig);
+      } catch (err) {
+        console.error("Failed to update model aliases:", err);
+      }
+    },
+    [onConfigChange],
+  );
+
   return {
     claudeModel,
     setClaudeModel,
@@ -246,5 +298,7 @@ export function useModelState({
     subagentModel,
     setSubagentModel,
     handleModelChange,
+    modelAliases,
+    handleModelAliasesChange,
   };
 }

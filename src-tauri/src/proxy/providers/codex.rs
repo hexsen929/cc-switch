@@ -483,6 +483,28 @@ fn codex_provider_catalog_model_ids(provider: &Provider) -> HashSet<String> {
         .unwrap_or_default()
 }
 
+/// 精确别名的目标模型名集合（`settings_config.modelAliases` 的 value 集）。
+///
+/// 请求模型在 `apply_model_mapping` 阶段已被别名改写成目标名；到了 Chat /
+/// Anthropic 转换路径的 catalog 兜底这一步，若目标名既不在 modelCatalog 也不是
+/// 默认模型，就会被兜底逻辑重写成默认模型、把用户的别名意图抹掉。把别名目标
+/// 一并纳入「保留集」，让别名在所有 Codex 路径上都权威生效。
+fn codex_provider_alias_target_ids(provider: &Provider) -> HashSet<String> {
+    provider
+        .settings_config
+        .get("modelAliases")
+        .and_then(|value| value.as_object())
+        .map(|map| {
+            map.values()
+                .filter_map(|value| value.as_str())
+                .map(str::trim)
+                .filter(|target| !target.is_empty())
+                .map(ToString::to_string)
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
 /// For Codex Chat providers, ensure the request uses the configured upstream
 /// model before converting the request to Chat Completions.
 pub fn apply_codex_chat_upstream_model(
@@ -500,13 +522,14 @@ pub fn apply_codex_chat_upstream_model(
 /// already confirmed this provider uses anthropic).
 pub fn apply_codex_upstream_model(provider: &Provider, body: &mut JsonValue) -> Option<String> {
     let catalog_model_ids = codex_provider_catalog_model_ids(provider);
+    let alias_target_ids = codex_provider_alias_target_ids(provider);
     if let Some(request_model) = body
         .get("model")
         .and_then(|value| value.as_str())
         .map(str::trim)
         .filter(|model| !model.is_empty())
     {
-        if catalog_model_ids.contains(request_model) {
+        if catalog_model_ids.contains(request_model) || alias_target_ids.contains(request_model) {
             return Some(request_model.to_string());
         }
     }
@@ -1733,6 +1756,30 @@ wire_api = "anthropic"
         assert_eq!(
             body.get("model").and_then(|v| v.as_str()),
             Some("claude-opus-4-1[1m]")
+        );
+    }
+
+    #[test]
+    fn test_apply_codex_upstream_model_preserves_alias_target() {
+        // 别名目标（modelAliases 的 value）即使不在 modelCatalog、也不是默认模型，
+        // 在 Chat/Anthropic 转换路径的 catalog 兜底这一步也要被保留，不能被重写成
+        // 默认模型——否则用户显式配置的别名意图会被抹掉。
+        let provider = create_provider(json!({
+            "config": r#"model_provider = "custom"
+model = "gpt-5.6-sol"
+
+[model_providers.custom]
+wire_api = "anthropic"
+"#,
+            "modelAliases": { "codex-auto-review": "cheap-review-model" }
+        }));
+        // 模型名此时已被 apply_model_mapping 的别名改写成目标名。
+        let mut body = json!({ "model": "cheap-review-model", "input": "hi" });
+        let result = apply_codex_upstream_model(&provider, &mut body);
+        assert_eq!(result.as_deref(), Some("cheap-review-model"));
+        assert_eq!(
+            body.get("model").and_then(|v| v.as_str()),
+            Some("cheap-review-model")
         );
     }
 

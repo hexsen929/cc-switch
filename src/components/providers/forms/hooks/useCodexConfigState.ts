@@ -13,6 +13,12 @@ import {
 } from "@/utils/providerConfigUtils";
 import { normalizeTomlText } from "@/utils/textNormalization";
 import type { CodexCatalogModel } from "@/types";
+import {
+  modelAliasesEqual,
+  parseModelAliasesFromValue,
+  serializeModelAliases,
+  type ModelAliasEntry,
+} from "@/utils/modelAliases";
 
 const PROXY_MANAGED_PLACEHOLDER = "PROXY_MANAGED";
 const MODEL_INSTRUCTIONS_FIELD = "model_instructions_file";
@@ -160,6 +166,9 @@ export function useCodexConfigState({ initialData }: UseCodexConfigStateProps) {
   const [codexCatalogModels, setCodexCatalogModels] = useState<
     CodexCatalogModel[]
   >([]);
+  const [codexModelAliases, setCodexModelAliases] = useState<
+    ModelAliasEntry[]
+  >([]);
   const [codexModelInstructionsEnabled, setCodexModelInstructionsEnabled] =
     useState(false);
   const [codexModelInstructionsFile, setCodexModelInstructionsFile] =
@@ -213,6 +222,18 @@ export function useCodexConfigState({ initialData }: UseCodexConfigStateProps) {
         catalogModelsEqual(current, nextCatalogModels)
           ? current
           : nextCatalogModels,
+      );
+
+      const nextAliases = parseModelAliasesFromValue(
+        (config as any).modelAliases,
+      );
+      setCodexModelAliases((current) =>
+        modelAliasesEqual(
+          serializeModelAliases(current),
+          serializeModelAliases(nextAliases),
+        )
+          ? current
+          : nextAliases,
       );
 
       // 提取 Base URL
@@ -432,11 +453,13 @@ export function useCodexConfigState({ initialData }: UseCodexConfigStateProps) {
       config: string,
       modelCatalogModels: CodexCatalogModel[] = [],
       modelInstructionsFiles: unknown = [],
+      modelAliases: unknown = undefined,
     ) => {
       const authString = JSON.stringify(auth, null, 2);
       setCodexAuth(authString);
       setCodexConfig(config);
       setCodexCatalogModels(normalizeCatalogModels(modelCatalogModels));
+      setCodexModelAliases(parseModelAliasesFromValue(modelAliases));
 
       const activeInstructionsFile =
         extractCodexTopLevelString(config, MODEL_INSTRUCTIONS_FIELD)?.trim() ||
@@ -456,7 +479,7 @@ export function useCodexConfigState({ initialData }: UseCodexConfigStateProps) {
 
       setCodexApiKey(pickCodexApiKey(auth, config));
     },
-    [setCodexAuth, setCodexConfig, setCodexCatalogModels],
+    [setCodexAuth, setCodexConfig, setCodexCatalogModels, setCodexModelAliases],
   );
 
   return {
@@ -466,6 +489,7 @@ export function useCodexConfigState({ initialData }: UseCodexConfigStateProps) {
     codexBaseUrl,
     codexModel,
     codexCatalogModels,
+    codexModelAliases,
     codexModelInstructionsEnabled,
     codexModelInstructionsFile,
     codexModelInstructionsFiles,
@@ -473,6 +497,7 @@ export function useCodexConfigState({ initialData }: UseCodexConfigStateProps) {
     setCodexAuth,
     setCodexConfig,
     setCodexCatalogModels,
+    setCodexModelAliases,
     setCodexModelInstructionsFiles,
     handleCodexApiKeyChange,
     handleCodexBaseUrlChange,

@@ -8,6 +8,11 @@ use serde_json::Value;
 
 /// 模型映射配置
 pub struct ModelMapping {
+    /// 精确模型别名（源模型名 → 目标模型名的等值替换表）。
+    /// 独立于 modelCatalog 与家族映射：只做严格等值改名，优先级最高。
+    /// 典型用途：把 Codex 内部审批模型 `codex-auto-review` 改写成真实上游模型，
+    /// 使中转不再收到自己不认识的模型名（原生 Responses 直通路径同样生效）。
+    pub aliases: Vec<(String, String)>,
     pub haiku_model: Option<String>,
     pub sonnet_model: Option<String>,
     pub opus_model: Option<String>,
@@ -16,12 +21,36 @@ pub struct ModelMapping {
     pub default_model: Option<String>,
 }
 
+/// 从供应商 `settings_config.modelAliases` 读取精确别名表。
+///
+/// 存储形态为 `{ "源模型名": "目标模型名" }` 的 JSON 对象。空 key / 空 value
+/// 会被丢弃。保序性依赖 serde_json 的 `preserve_order`（本项目默认开启），
+/// 让别名匹配对用户输入顺序稳定。
+fn read_model_aliases(provider: &Provider) -> Vec<(String, String)> {
+    provider
+        .settings_config
+        .get("modelAliases")
+        .and_then(|value| value.as_object())
+        .map(|map| {
+            map.iter()
+                .filter_map(|(source, target)| {
+                    let source = source.trim();
+                    let target = target.as_str()?.trim();
+                    (!source.is_empty() && !target.is_empty())
+                        .then(|| (source.to_string(), target.to_string()))
+                })
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
 impl ModelMapping {
     /// 从 Provider 配置中提取模型映射
     pub fn from_provider(provider: &Provider) -> Self {
         let env = provider.settings_config.get("env");
 
         Self {
+            aliases: read_model_aliases(provider),
             haiku_model: env
                 .and_then(|e| e.get("ANTHROPIC_DEFAULT_HAIKU_MODEL"))
                 .and_then(|v| v.as_str())
@@ -57,7 +86,8 @@ impl ModelMapping {
 
     /// 检查是否配置了任何模型映射
     pub fn has_mapping(&self) -> bool {
-        self.haiku_model.is_some()
+        !self.aliases.is_empty()
+            || self.haiku_model.is_some()
             || self.sonnet_model.is_some()
             || self.opus_model.is_some()
             || self.fable_model.is_some()
@@ -67,6 +97,19 @@ impl ModelMapping {
 
     /// 根据原始模型名称获取映射后的模型
     pub fn map_model(&self, original_model: &str) -> String {
+        // 0. 精确别名（最高优先级，独立于 modelCatalog 与家族映射）。
+        //    先按原始名严格匹配；未命中再按去掉 [1M] 本地能力标记后的名字匹配，
+        //    这样 Claude Code 发出的 `xxx[1m]` 形态也能命中同一条别名。
+        if !self.aliases.is_empty() {
+            let trimmed = original_model.trim();
+            let stripped = strip_one_m_suffix_for_upstream(original_model);
+            for (source, target) in &self.aliases {
+                if source == trimmed || source == stripped {
+                    return target.clone();
+                }
+            }
+        }
+
         let model_lower = original_model.to_lowercase();
 
         // 1. 按模型类型匹配
@@ -424,5 +467,95 @@ mod tests {
         let body = json!({"model": "deepseek-v4-pro"});
         let result = strip_one_m_suffix_for_upstream_from_body(body);
         assert_eq!(result["model"], "deepseek-v4-pro");
+    }
+
+    fn provider_with_settings(settings: Value) -> Provider {
+        Provider {
+            id: "test".to_string(),
+            name: "Test".to_string(),
+            settings_config: settings,
+            website_url: None,
+            category: None,
+            created_at: None,
+            sort_index: None,
+            notes: None,
+            meta: None,
+            icon: None,
+            icon_color: None,
+            in_failover_queue: false,
+        }
+    }
+
+    #[test]
+    fn exact_alias_rewrites_codex_auto_review() {
+        // 用户真实场景：Codex 内部审批模型 codex-auto-review 改写成真实上游模型。
+        let provider = provider_with_settings(json!({
+            "modelAliases": { "codex-auto-review": "gpt-5.6-sol" }
+        }));
+        let body = json!({"model": "codex-auto-review"});
+        let (result, original, mapped) = apply_model_mapping(body, &provider);
+        assert_eq!(result["model"], "gpt-5.6-sol");
+        assert_eq!(original, Some("codex-auto-review".to_string()));
+        assert_eq!(mapped, Some("gpt-5.6-sol".to_string()));
+    }
+
+    #[test]
+    fn exact_alias_matches_one_m_suffix_form() {
+        // Claude Code 可能发 xxx[1m] 形态，别名按去后缀名字命中同一条。
+        let provider = provider_with_settings(json!({
+            "modelAliases": { "claude-fable-5": "gpt-5.6-sol" }
+        }));
+        let body = json!({"model": "claude-fable-5[1m]"});
+        let (result, _, mapped) = apply_model_mapping(body, &provider);
+        assert_eq!(result["model"], "gpt-5.6-sol");
+        assert_eq!(mapped, Some("gpt-5.6-sol".to_string()));
+    }
+
+    #[test]
+    fn exact_alias_takes_priority_over_family_mapping() {
+        // 别名优先于 sonnet/opus/haiku 家族映射。
+        let provider = provider_with_settings(json!({
+            "modelAliases": { "claude-sonnet-4-5": "special-model" },
+            "env": { "ANTHROPIC_DEFAULT_SONNET_MODEL": "family-sonnet" }
+        }));
+        let body = json!({"model": "claude-sonnet-4-5"});
+        let (result, _, mapped) = apply_model_mapping(body, &provider);
+        assert_eq!(result["model"], "special-model");
+        assert_eq!(mapped, Some("special-model".to_string()));
+    }
+
+    #[test]
+    fn unaliased_model_falls_through_to_family_mapping() {
+        // 未命中别名时，仍走原有家族映射，别名不影响其他模型。
+        let provider = provider_with_settings(json!({
+            "modelAliases": { "codex-auto-review": "gpt-5.6-sol" },
+            "env": { "ANTHROPIC_DEFAULT_SONNET_MODEL": "family-sonnet" }
+        }));
+        let body = json!({"model": "claude-sonnet-4-5"});
+        let (result, _, mapped) = apply_model_mapping(body, &provider);
+        assert_eq!(result["model"], "family-sonnet");
+        assert_eq!(mapped, Some("family-sonnet".to_string()));
+    }
+
+    #[test]
+    fn alias_only_provider_has_mapping() {
+        // 仅配置别名（Codex 供应商无 env 家族映射）时，映射也必须生效而非空转。
+        let provider = provider_with_settings(json!({
+            "modelAliases": { "codex-auto-review": "gpt-5.6-sol" }
+        }));
+        assert!(ModelMapping::from_provider(&provider).has_mapping());
+        // 未命中别名且无默认模型 → 原样保留，不误伤主模型。
+        let body = json!({"model": "gpt-5.6-sol"});
+        let (result, _, mapped) = apply_model_mapping(body, &provider);
+        assert_eq!(result["model"], "gpt-5.6-sol");
+        assert!(mapped.is_none());
+    }
+
+    #[test]
+    fn blank_alias_entries_ignored() {
+        let provider = provider_with_settings(json!({
+            "modelAliases": { "  ": "x", "codex-auto-review": "  " }
+        }));
+        assert!(!ModelMapping::from_provider(&provider).has_mapping());
     }
 }

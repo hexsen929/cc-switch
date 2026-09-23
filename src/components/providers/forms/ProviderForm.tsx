@@ -67,6 +67,7 @@ import {
   hasApiKeyField,
 } from "@/utils/providerConfigUtils";
 import { mergeProviderMeta } from "@/utils/providerMetaUtils";
+import { serializeModelAliases } from "@/utils/modelAliases";
 import {
   codexApiFormatFromWireApi,
   extractCodexWireApi,
@@ -596,6 +597,8 @@ function ProviderFormFull({
     defaultFableModelName,
     subagentModel,
     handleModelChange,
+    modelAliases: claudeModelAliases,
+    handleModelAliasesChange: handleClaudeModelAliasesChange,
   } = useModelState({
     settingsConfig: form.getValues("settingsConfig"),
     onConfigChange: handleSettingsConfigChange,
@@ -704,6 +707,7 @@ function ProviderFormFull({
     codexBaseUrl,
     codexModel,
     codexCatalogModels,
+    codexModelAliases,
     codexModelInstructionsEnabled,
     codexModelInstructionsFile,
     codexModelInstructionsFiles,
@@ -711,6 +715,7 @@ function ProviderFormFull({
     setCodexAuth,
     setCodexConfig,
     setCodexCatalogModels,
+    setCodexModelAliases,
     setCodexModelInstructionsFiles,
     handleCodexApiKeyChange,
     handleCodexBaseUrlChange,
@@ -1620,12 +1625,17 @@ function ProviderFormFull({
           config: string;
           modelCatalog?: { models: CodexCatalogModel[] };
           modelInstructionsFiles?: string[];
+          modelAliases?: Record<string, string>;
         };
         if (normalizedCatalogModels.length > 0) {
           configObj.modelCatalog = { models: normalizedCatalogModels };
         }
         if (normalizedModelInstructionsFiles.length > 0) {
           configObj.modelInstructionsFiles = normalizedModelInstructionsFiles;
+        }
+        const serializedAliases = serializeModelAliases(codexModelAliases);
+        if (serializedAliases) {
+          configObj.modelAliases = serializedAliases;
         }
         settingsConfig = JSON.stringify(configObj);
       } catch (err) {
@@ -2535,6 +2545,8 @@ function ProviderFormFull({
               defaultFableModelName={defaultFableModelName}
               subagentModel={subagentModel}
               onModelChange={handleModelChange}
+              modelAliases={claudeModelAliases}
+              onModelAliasesChange={handleClaudeModelAliasesChange}
               speedTestEndpoints={speedTestEndpoints}
               apiFormat={localApiFormat}
               onApiFormatChange={handleApiFormatChange}
@@ -2631,6 +2643,8 @@ function ProviderFormFull({
               onPromptCacheRoutingChange={setPromptCacheRouting}
               catalogModels={codexCatalogModels}
               onCatalogModelsChange={setCodexCatalogModels}
+              modelAliases={codexModelAliases}
+              onModelAliasesChange={setCodexModelAliases}
               speedTestEndpoints={speedTestEndpoints}
               customUserAgent={customUserAgent}
               onCustomUserAgentChange={setCustomUserAgent}
