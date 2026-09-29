@@ -106,6 +106,9 @@ vi.mock("@/components/providers/forms/GeminiConfigEditor", () => ({
 }));
 
 vi.mock("@/components/providers/forms/hooks", () => ({
+  useDraftEditorProjection: () => ({
+    projectDraft: async (settings: unknown) => settings,
+  }),
   useProviderCategory: () => ({ category: "third_party" }),
   useApiKeyState: () => ({
     apiKey: "",

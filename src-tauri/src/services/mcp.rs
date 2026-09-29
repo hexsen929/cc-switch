@@ -1,7 +1,7 @@
 use indexmap::IndexMap;
 use std::collections::{HashMap, HashSet};
 
-use crate::app_config::{AppType, McpConfig, McpServer, MultiAppConfig};
+use crate::app_config::{AppType, McpServer};
 use crate::database::Database;
 use crate::error::AppError;
 use crate::mcp;
@@ -279,54 +279,6 @@ impl McpService {
         Self::sync_enabled_for_app(state, app)
     }
 
-    /// 将指定 app 的 MCP 写入已经生成好的 live 配置文本。
-    ///
-    /// 当前只有 Codex 需要这个两阶段流程：先生成 provider live config，再把
-    /// provider-bound MCP 覆盖写进同一份 TOML 文本，最后一次性落盘，避免先写入
-    /// target provider 时旧 MCP 被短暂保留/丢失。
-    pub fn apply_enabled_for_app_to_config_text_for_db(
-        db: &Database,
-        app: &AppType,
-        config_text: &str,
-    ) -> Result<String, AppError> {
-        if !matches!(app, AppType::Codex) {
-            return Ok(config_text.to_string());
-        }
-
-        let servers = db.get_all_mcp_servers()?;
-        let enabled = Self::collect_codex_enabled_server_specs(db, &servers);
-        let new_text = mcp::sync_enabled_servers_to_codex_config_text(config_text, &enabled)?;
-        Self::merge_codex_common_config_mcp_servers(db, &new_text)
-    }
-
-    /// 与 [`apply_enabled_for_app_to_config_text_for_db`] 相同，但在供应商切换事务
-    /// 尚未提交 current provider 时，显式使用目标供应商的 MCP 覆盖。
-    pub fn apply_enabled_for_app_to_config_text_for_provider(
-        db: &Database,
-        app: &AppType,
-        config_text: &str,
-        provider: &Provider,
-    ) -> Result<String, AppError> {
-        if !matches!(app, AppType::Codex) {
-            return Ok(config_text.to_string());
-        }
-
-        let servers = db.get_all_mcp_servers()?;
-        let enabled = Self::collect_codex_enabled_server_specs_for_provider(&servers, provider);
-        let new_text = mcp::sync_enabled_servers_to_codex_config_text(config_text, &enabled)?;
-        Self::merge_codex_common_config_mcp_servers(db, &new_text)
-    }
-
-    /// 在 current provider 尚未提交时，按显式目标供应商投影 Codex MCP。
-    pub fn sync_codex_enabled_for_provider(
-        state: &AppState,
-        provider: &Provider,
-    ) -> Result<(), AppError> {
-        let servers = Self::get_all_servers(state)?;
-        let enabled = Self::collect_codex_enabled_server_specs_for_provider(&servers, provider);
-        Self::sync_codex_enabled_specs(state.db.as_ref(), enabled)
-    }
-
     fn project_servers_to_app(
         state: &AppState,
         servers: &IndexMap<String, McpServer>,
@@ -337,10 +289,6 @@ impl McpService {
             AppType::OpenClaw | AppType::ClaudeDesktop | AppType::Pi
         ) {
             return Ok(());
-        }
-
-        if matches!(app, AppType::Codex) {
-            return Self::sync_codex_enabled_from_servers(state.db.as_ref(), servers);
         }
 
         for server in servers.values() {
@@ -356,132 +304,16 @@ impl McpService {
         Ok(())
     }
 
-    fn sync_codex_enabled_from_servers(
-        db: &Database,
-        servers: &IndexMap<String, McpServer>,
-    ) -> Result<(), AppError> {
-        let enabled = Self::collect_codex_enabled_server_specs(db, servers);
-        Self::sync_codex_enabled_specs(db, enabled)
-    }
-
-    fn sync_codex_enabled_specs(
-        db: &Database,
-        enabled: HashMap<String, serde_json::Value>,
-    ) -> Result<(), AppError> {
-        let mut config = MultiAppConfig::default();
-        let codex_servers = enabled
-            .into_iter()
-            .map(|(id, server)| {
-                (
-                    id,
-                    serde_json::json!({
-                        "enabled": true,
-                        "server": server,
-                    }),
-                )
-            })
-            .collect();
-        config.mcp.codex = McpConfig {
-            servers: codex_servers,
-        };
-        mcp::sync_enabled_to_codex(&config)?;
-        Self::merge_codex_common_config_mcp_servers_into_live(db)
-    }
-
-    fn merge_codex_common_config_mcp_servers_into_live(db: &Database) -> Result<(), AppError> {
-        let config_text = crate::codex_config::read_and_validate_codex_config_text()?;
-        let merged = Self::merge_codex_common_config_mcp_servers(db, &config_text)?;
-        if merged != config_text {
-            crate::codex_config::write_codex_config_text(&merged)?;
-        }
-        Ok(())
-    }
-
-    fn merge_codex_common_config_mcp_servers(
-        db: &Database,
-        config_text: &str,
-    ) -> Result<String, AppError> {
-        let Some(snippet) = db.get_config_snippet(AppType::Codex.as_str())? else {
-            return Ok(config_text.to_string());
-        };
-        if snippet.trim().is_empty() || !snippet.contains("mcp_servers") {
-            return Ok(config_text.to_string());
-        }
-
-        let source_doc = snippet
-            .parse::<toml_edit::DocumentMut>()
-            .map_err(|e| AppError::McpValidation(format!("解析 Codex 通用 MCP 配置失败: {e}")))?;
-        let Some(source_mcp_servers) = source_doc.get("mcp_servers").cloned() else {
-            return Ok(config_text.to_string());
-        };
-
-        let mut target_doc = if config_text.trim().is_empty() {
-            toml_edit::DocumentMut::new()
-        } else {
-            config_text
-                .parse::<toml_edit::DocumentMut>()
-                .map_err(|e| AppError::McpValidation(format!("解析 Codex config.toml 失败: {e}")))?
-        };
-
-        match target_doc.get_mut("mcp_servers") {
-            Some(target_mcp_servers) => {
-                if let (Some(target_table), Some(source_table)) = (
-                    target_mcp_servers.as_table_like_mut(),
-                    source_mcp_servers.as_table_like(),
-                ) {
-                    for (server_id, server_item) in source_table.iter() {
-                        if target_table.get(server_id).is_none() {
-                            target_table.insert(server_id, server_item.clone());
-                        }
-                    }
-                }
-            }
-            None => {
-                target_doc["mcp_servers"] = source_mcp_servers;
-            }
-        }
-
-        Ok(target_doc.to_string())
-    }
-
-    fn collect_codex_enabled_server_specs(
-        db: &Database,
-        servers: &IndexMap<String, McpServer>,
-    ) -> HashMap<String, serde_json::Value> {
-        let disabled = Self::disabled_server_ids_for_db(db, &AppType::Codex);
-        Self::collect_codex_enabled_server_specs_with_disabled(servers, &disabled)
-    }
-
-    fn collect_codex_enabled_server_specs_for_provider(
-        servers: &IndexMap<String, McpServer>,
-        provider: &Provider,
-    ) -> HashMap<String, serde_json::Value> {
-        let disabled = Self::disabled_server_ids_for_provider(Some(provider));
-        Self::collect_codex_enabled_server_specs_with_disabled(servers, &disabled)
-    }
-
-    fn collect_codex_enabled_server_specs_with_disabled(
-        servers: &IndexMap<String, McpServer>,
-        disabled: &HashSet<String>,
-    ) -> HashMap<String, serde_json::Value> {
-        let mut enabled = HashMap::new();
-
-        for server in servers.values() {
-            if !server.apps.codex || disabled.contains(&server.id) {
-                continue;
-            }
-            enabled.insert(server.id.clone(), server.server.clone());
-        }
-
-        enabled
-    }
-
     fn disabled_server_ids_for_db(db: &Database, app: &AppType) -> HashSet<String> {
         if app.is_additive_mode() {
             return HashSet::new();
         }
 
-        let provider_id = match crate::settings::get_effective_current_provider(db, app) {
+        let provider_id = match crate::mode::current::provider_for(
+            db,
+            app,
+            crate::mode::current::Purpose::Live,
+        ) {
             Ok(Some(id)) => id,
             _ => return HashSet::new(),
         };

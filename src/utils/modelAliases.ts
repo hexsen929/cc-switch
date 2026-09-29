@@ -42,7 +42,9 @@ export function createModelAliasEntry(
 export function parseModelAliasesFromValue(raw: unknown): ModelAliasEntry[] {
   if (!raw || typeof raw !== "object" || Array.isArray(raw)) return [];
   const entries: ModelAliasEntry[] = [];
-  for (const [source, target] of Object.entries(raw as Record<string, unknown>)) {
+  for (const [source, target] of Object.entries(
+    raw as Record<string, unknown>,
+  )) {
     if (typeof target !== "string") continue;
     entries.push(createModelAliasEntry({ source, target }));
   }

@@ -75,7 +75,11 @@ impl PromptService {
             return Ok(None);
         }
 
-        let Some(provider_id) = crate::settings::get_effective_current_provider(&state.db, app)?
+        let Some(provider_id) = crate::mode::current::provider_for(
+            &state.db,
+            app,
+            crate::mode::current::Purpose::Live,
+        )?
         else {
             return Ok(None);
         };

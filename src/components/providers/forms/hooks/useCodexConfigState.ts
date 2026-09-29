@@ -166,9 +166,9 @@ export function useCodexConfigState({ initialData }: UseCodexConfigStateProps) {
   const [codexCatalogModels, setCodexCatalogModels] = useState<
     CodexCatalogModel[]
   >([]);
-  const [codexModelAliases, setCodexModelAliases] = useState<
-    ModelAliasEntry[]
-  >([]);
+  const [codexModelAliases, setCodexModelAliases] = useState<ModelAliasEntry[]>(
+    [],
+  );
   const [codexModelInstructionsEnabled, setCodexModelInstructionsEnabled] =
     useState(false);
   const [codexModelInstructionsFile, setCodexModelInstructionsFile] =

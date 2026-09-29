@@ -519,7 +519,11 @@ impl SkillService {
             return Ok(None);
         }
 
-        let Some(provider_id) = crate::settings::get_effective_current_provider(db.as_ref(), app)?
+        let Some(provider_id) = crate::mode::current::provider_for(
+            db.as_ref(),
+            app,
+            crate::mode::current::Purpose::Live,
+        )?
         else {
             return Ok(None);
         };

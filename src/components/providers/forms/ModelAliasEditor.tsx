@@ -35,7 +35,10 @@ export function ModelAliasEditor({
   }, [entries, onChange]);
 
   const handleUpdate = useCallback(
-    (id: string, patch: Partial<Pick<ModelAliasEntry, "source" | "target">>) => {
+    (
+      id: string,
+      patch: Partial<Pick<ModelAliasEntry, "source" | "target">>,
+    ) => {
       onChange(
         entries.map((entry) =>
           entry.id === id ? { ...entry, ...patch } : entry,

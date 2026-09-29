@@ -297,7 +297,10 @@ pub fn sync_enabled_to_codex(config: &MultiAppConfig) -> Result<(), AppError> {
     let new_text = sync_enabled_servers_to_codex_config_text(&base_text, &enabled)?;
 
     // 6) 写回（仅改 TOML，不触碰 auth.json）；toml_edit 会尽量保留未改区域的注释/空白/顺序
-    crate::codex_config::write_codex_config_text(&new_text)?;
+    crate::config::write_text_file_private(
+        &crate::codex_config::get_codex_config_path(),
+        &new_text,
+    )?;
     Ok(())
 }
 
@@ -469,7 +472,10 @@ pub fn sync_single_server_to_codex(
 
     // 写回文件
     let new_text = doc.to_string();
-    crate::codex_config::write_codex_config_text(&new_text)?;
+    crate::config::write_text_file_private(
+        &crate::codex_config::get_codex_config_path(),
+        &new_text,
+    )?;
 
     Ok(())
 }
@@ -502,7 +508,10 @@ pub fn remove_server_from_codex(id: &str) -> Result<(), AppError> {
 
     // 写回文件
     let new_text = doc.to_string();
-    crate::codex_config::write_codex_config_text(&new_text)?;
+    crate::config::write_text_file_private(
+        &crate::codex_config::get_codex_config_path(),
+        &new_text,
+    )?;
 
     Ok(())
 }

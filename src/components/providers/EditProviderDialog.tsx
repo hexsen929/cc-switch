@@ -16,12 +16,14 @@ import {
   type AppId,
   type ManagedAuthProvider,
 } from "@/lib/api";
-import {
-  extractCodexBaseUrl,
-  extractCodexExperimentalBearerToken,
-} from "@/utils/providerConfigUtils";
-import { CodexToolStripPanel } from "@/components/providers/CodexToolStripPanel";
-import { resolveCodexOfficialIdentity } from "@/utils/providerCapabilities";
+import type {
+  EditorConflictPolicy,
+  ProviderEditorSave,
+  ProviderEditorView,
+} from "@/lib/api/providers";
+import { useLiveEditConflict } from "@/components/providers/LiveEditConflictDialog";
+import { toastEditorViewFailed } from "@/components/providers/forms/hooks/useDraftEditorProjection";
+import { usesEditorView } from "@/config/appConfig";
 
 interface EditProviderDialogProps {
   open: boolean;
@@ -30,147 +32,16 @@ interface EditProviderDialogProps {
   onSubmit: (payload: {
     provider: Provider;
     originalId?: string;
+    editorSave?: ProviderEditorSave;
   }) => Promise<void> | void;
   appId: AppId;
   isProxyTakeover?: boolean; // 代理接管模式下不读取 live（避免显示被接管后的代理配置）
-}
-
-const PROXY_MANAGED_PLACEHOLDER = "PROXY_MANAGED";
-
-function isLocalProxyUrl(url: string): boolean {
-  const value = url.trim();
-  if (!value.startsWith("http://")) return false;
-  const rest = value.slice("http://".length);
-  return (
-    rest.startsWith("127.0.0.1") ||
-    rest.startsWith("localhost") ||
-    rest.startsWith("0.0.0.0") ||
-    rest.startsWith("[::1]") ||
-    rest.startsWith("[::]") ||
-    rest.startsWith("::1") ||
-    rest.startsWith("::")
-  );
-}
-
-function shouldUseCodexLiveSettings(live: Record<string, unknown>): boolean {
-  const auth =
-    live.auth && typeof live.auth === "object"
-      ? (live.auth as Record<string, unknown>)
-      : {};
-
-  if (
-    typeof auth.OPENAI_API_KEY === "string" &&
-    auth.OPENAI_API_KEY.trim() === PROXY_MANAGED_PLACEHOLDER
-  ) {
-    return false;
-  }
-
-  const configText = typeof live.config === "string" ? live.config : "";
-  const bearer = extractCodexExperimentalBearerToken(configText);
-  if (
-    !bearer &&
-    (auth.auth_mode === "chatgpt" ||
-      auth.preferred_auth_method === "chatgpt" ||
-      (auth.tokens && typeof auth.tokens === "object"))
-  ) {
-    return false;
-  }
-  const baseUrl = extractCodexBaseUrl(configText);
-  return !baseUrl || !isLocalProxyUrl(baseUrl);
-}
-
-function isOfficialCodexProvider(provider: Provider | null): boolean {
-  if (!provider) return false;
-  return (
-    provider.category === "official" ||
-    resolveCodexOfficialIdentity("codex", provider) !== null
-  );
 }
 
 const asRecord = (value: unknown): Record<string, unknown> | null =>
   typeof value === "object" && value !== null && !Array.isArray(value)
     ? (value as Record<string, unknown>)
     : null;
-
-const hasAuthMaterial = (value: unknown): boolean => {
-  if (value === null || value === undefined) return false;
-  if (typeof value === "string") return value.trim().length > 0;
-  if (Array.isArray(value)) return value.length > 0;
-  if (typeof value === "object") return Object.keys(value).length > 0;
-  return true;
-};
-
-/**
- * Whether an auth payload actually carries a credential, ignoring the bare
- * `auth_mode` marker — the frontend twin of the backend
- * `codex_auth_has_login_material`.
- */
-const hasCodexAuthMaterial = (auth: Record<string, unknown> | null): boolean =>
-  auth !== null &&
-  Object.entries(auth).some(
-    ([key, value]) => key !== "auth_mode" && hasAuthMaterial(value),
-  );
-
-/**
- * Rebuild the provider auth only for a current Codex provider's live snapshot.
- *
- * In official-auth-preservation mode, live config.toml owns the active
- * provider bearer while the shared auth.json may belong to another provider or
- * contain the user's ChatGPT login. Stored provider auth remains the template:
- * this mirrors the backend switch-away backfill and avoids copying shared auth
- * material into the provider row. DB snapshots and presets must keep their
- * normal auth-first precedence.
- */
-const reconcileCodexLiveAuth = (
-  liveSettings: Record<string, unknown>,
-  storedSettings: Record<string, unknown> | null,
-  isOfficialProvider: boolean,
-): Record<string, unknown> => {
-  if (isOfficialProvider) return liveSettings;
-
-  const configText =
-    typeof liveSettings.config === "string" ? liveSettings.config : "";
-  const bearer = extractCodexExperimentalBearerToken(configText);
-  const liveAuth = asRecord(liveSettings.auth);
-  const storedAuth = asRecord(storedSettings?.auth);
-
-  if (!bearer) {
-    // Live auth.json is a single shared slot with no provider identity, and a
-    // third-party Codex route never reads it: the switch deletes the file in
-    // default mode and injects the key into config.toml instead — an injection
-    // that is skipped entirely when the provider table declares its own
-    // credential source (`env_key`, `auth`/`aws`, an explicit Authorization
-    // header). A credential-less live auth (missing file, or the bare
-    // `auth_mode` logout marker) is therefore an absent field, not an emptied
-    // one: keep the stored template so saving the form cannot silently erase
-    // the only remaining copy of the provider's key.
-    if (!hasCodexAuthMaterial(liveAuth) && hasCodexAuthMaterial(storedAuth)) {
-      return { ...liveSettings, auth: storedAuth };
-    }
-    return liveSettings;
-  }
-
-  const authTemplate = storedAuth ?? liveAuth ?? {};
-  const hasProviderApiKey =
-    typeof authTemplate.OPENAI_API_KEY === "string" &&
-    authTemplate.OPENAI_API_KEY.trim().length > 0;
-  const hasOauthLogin = Object.entries(authTemplate).some(
-    ([key, value]) =>
-      key !== "auth_mode" && key !== "OPENAI_API_KEY" && hasAuthMaterial(value),
-  );
-
-  // Match should_restore_codex_provider_token_for_backfill: an OAuth-only
-  // provider must not be silently converted into an API-key provider.
-  if (hasOauthLogin && !hasProviderApiKey) return liveSettings;
-
-  return {
-    ...liveSettings,
-    auth: {
-      ...authTemplate,
-      OPENAI_API_KEY: bearer,
-    },
-  };
-};
 
 export function EditProviderDialog({
   open,
@@ -221,6 +92,10 @@ export function EditProviderDialog({
   // 使用 ref 标记是否已经加载过，防止重复读取覆盖用户编辑
   const [hasLoadedLive, setHasLoadedLive] = useState(false);
 
+  // Claude：底部 JSON 显示「切到这个供应商之后 settings.json 的样子」，保存时拿它做三方比较。
+  const [editorView, setEditorView] = useState<ProviderEditorView | null>(null);
+  const { submitWithConflictRetry, conflictDialog } = useLiveEditConflict();
+
   const closeDialog = useCallback(() => {
     setAuthSettingsTarget(null);
     onOpenChange(false);
@@ -239,12 +114,42 @@ export function EditProviderDialog({
     const load = async () => {
       if (!open || !provider) {
         setLiveSettings(null);
+        setEditorView(null);
         setHasLoadedLive(false);
         return;
       }
 
       // 关键修复：只在首次打开时加载一次
       if (hasLoadedLive) {
+        return;
+      }
+
+      // 切换式应用：编辑任何供应商都显示切换投影（关键字段、独有字段来自这一行，其余
+      // 来自 live），代理模式下也一样，关键字段显示的是这个供应商自己的值。
+      if (usesEditorView(appId)) {
+        try {
+          const view = await providersApi.getEditorView(
+            appId,
+            asRecord(provider.settingsConfig) ?? {},
+            provider.category,
+            provider.id,
+          );
+          if (!cancelled) {
+            setEditorView(view);
+            setLiveSettings(view.settings);
+          }
+        } catch (error) {
+          // 读不了配置文件（比如手改坏了）：退回显示保存的供应商配置。
+          if (!cancelled) {
+            setEditorView(null);
+            setLiveSettings(null);
+            toastEditorViewFailed(t, error);
+          }
+        } finally {
+          if (!cancelled) {
+            setHasLoadedLive(true);
+          }
+        }
         return;
       }
 
@@ -297,19 +202,7 @@ export function EditProviderDialog({
               appId,
             )) as Record<string, unknown>;
             if (!cancelled && live && typeof live === "object") {
-              const liveAuth = asRecord(live.auth);
-              const isLogoutMarker =
-                appId === "codex" &&
-                liveAuth !== null &&
-                !hasCodexAuthMaterial(liveAuth);
-              setLiveSettings(
-                appId !== "codex" ||
-                  isOfficialCodexProvider(provider) ||
-                  isLogoutMarker ||
-                  shouldUseCodexLiveSettings(live)
-                  ? live
-                  : null,
-              );
+              setLiveSettings(live);
               setHasLoadedLive(true);
             }
           } catch {
@@ -335,48 +228,10 @@ export function EditProviderDialog({
     };
   }, [open, provider?.id, appId, hasLoadedLive, isProxyTakeover]); // 只依赖 provider.id，不依赖整个 provider 对象
 
-  // Legacy official cards may have no category; their live logout still owns auth.
-  const isCodexOfficialProvider =
-    appId === "codex" && isOfficialCodexProvider(provider);
-
-  const initialSettingsConfig = useMemo(() => {
-    const storedSettings = asRecord(provider?.settingsConfig);
-    const base =
-      appId === "codex" && liveSettings
-        ? reconcileCodexLiveAuth(
-            liveSettings,
-            storedSettings,
-            isCodexOfficialProvider,
-          )
-        : (liveSettings ?? storedSettings ?? {});
-
-    // Codex 的 modelCatalog / modelInstructionsFiles / codex_strip_tools 是
-    // cc-switch 私有字段，SSOT 在数据库。Live 只包含投影后的 config.toml；
-    // 若放任 Live 整体覆盖，编辑当前供应商并保存就会清空这些私有字段。
-    if (
-      appId === "codex" &&
-      liveSettings &&
-      provider?.settingsConfig &&
-      typeof provider.settingsConfig === "object"
-    ) {
-      const dbSettings = provider.settingsConfig as Record<string, unknown>;
-      const privateSettings: Record<string, unknown> = {};
-      for (const key of [
-        "modelCatalog",
-        "modelInstructionsFiles",
-        "codex_strip_tools",
-      ] as const) {
-        if (dbSettings[key] !== undefined) {
-          privateSettings[key] = dbSettings[key];
-        }
-      }
-      if (Object.keys(privateSettings).length > 0) {
-        return { ...base, ...privateSettings };
-      }
-    }
-
-    return base;
-  }, [liveSettings, provider?.settingsConfig, isCodexOfficialProvider, appId]); // 只依赖表单初始化所需字段，不依赖整个 provider
+  const initialSettingsConfig = useMemo(
+    () => liveSettings ?? asRecord(provider?.settingsConfig) ?? {},
+    [liveSettings, provider?.settingsConfig],
+  ); // 只依赖表单初始化所需字段，不依赖整个 provider
 
   // Codex 中转兼容性：tools 剥除清单
   // 数据源：provider.settings_config.codex_strip_tools（数组，元素是工具 type 字符串）
@@ -458,18 +313,33 @@ export function EditProviderDialog({
         ...(values.meta ? { meta: values.meta } : {}),
       };
 
-      await onSubmit({
-        provider: updatedProvider,
-        originalId: provider.id,
-      });
-      closeDialog();
+      const submit = async (onConflict: EditorConflictPolicy) => {
+        await onSubmit({
+          provider: updatedProvider,
+          originalId: provider.id,
+          ...(editorView
+            ? { editorSave: { base: editorView.settings, onConflict } }
+            : {}),
+        });
+        closeDialog();
+      };
+      await submitWithConflictRetry(submit);
     },
-    [appId, codexStripTools, onSubmit, closeDialog, provider],
+    [
+      appId,
+      onSubmit,
+      closeDialog,
+      provider,
+      editorView,
+      submitWithConflictRetry,
+    ],
   );
 
   if (!provider || !initialData) {
     return null;
   }
+
+  const waitingForEditorView = usesEditorView(appId) && !hasLoadedLive;
 
   return (
     <FullScreenPanel
@@ -489,27 +359,27 @@ export function EditProviderDialog({
         </Button>
       }
     >
-      <ProviderForm
-        appId={appId}
-        providerId={provider.id}
-        submitLabel={t("common.save")}
-        onSubmit={handleSubmit}
-        onCancel={closeDialog}
-        onManageAuthAccounts={setAuthSettingsTarget}
-        onSubmittingChange={setIsFormSubmitting}
-        onSubmitReadyChange={handleSubmitReadyChange}
-        initialData={initialData}
-        showButtons={false}
-        isProxyTakeover={isProxyTakeover}
-      />
-      {appId === "codex" && (
-        <div className="mt-4">
-          <CodexToolStripPanel
-            value={codexStripTools}
-            onChange={setCodexStripTools}
-          />
+      {waitingForEditorView ? (
+        <div className="py-12 text-center text-sm text-muted-foreground">
+          {t("common.loading")}
         </div>
+      ) : (
+        <ProviderForm
+          appId={appId}
+          providerId={provider.id}
+          submitLabel={t("common.save")}
+          onSubmit={handleSubmit}
+          onCancel={closeDialog}
+          onManageAuthAccounts={setAuthSettingsTarget}
+          onSubmittingChange={setIsFormSubmitting}
+          onSubmitReadyChange={handleSubmitReadyChange}
+          initialData={initialData}
+          showButtons={false}
+          isProxyTakeover={isProxyTakeover}
+          inactiveFields={editorView?.inactive}
+        />
       )}
+      {conflictDialog}
       <AuthSettingsPanel
         target={authSettingsTarget}
         onClose={() => setAuthSettingsTarget(null)}

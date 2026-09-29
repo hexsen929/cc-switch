@@ -224,7 +224,12 @@ pub fn system_provider_config(provider: &Provider) -> ClaudeSystemInstructionsCo
 }
 
 fn current_provider(db: &Database) -> Result<Option<Provider>, AppError> {
-    let Some(id) = crate::settings::get_effective_current_provider(db, &AppType::Claude)? else {
+    let Some(id) = crate::mode::current::provider_for(
+        db,
+        &AppType::Claude,
+        crate::mode::current::Purpose::Live,
+    )?
+    else {
         return Ok(None);
     };
     db.get_provider_by_id(&id, AppType::Claude.as_str())

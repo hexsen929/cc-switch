@@ -193,14 +193,35 @@ pub async fn auth_poll_for_account(
             {
                 Ok(result) => {
                     if let Some((account, codex_live_auth, _switch_guard)) = result {
-                        if let Err(err) = app_state
-                            .proxy_service
-                            .install_codex_chatgpt_auth_from_managed_login(codex_live_auth)
-                            .await
-                        {
-                            log::warn!(
-                                "写入 Codex ChatGPT 登录态到 Live 配置失败，稍后切换或启动时会重试: {err}"
+                        let install =
+                            crate::services::provider::codex_direct::install_managed_login(
+                                &app_state.db,
+                                &account.id,
+                                &codex_live_auth,
                             );
+                        if let Err(error) = install {
+                            log::warn!("写入 Codex ChatGPT 登录态失败: {error}");
+                        } else {
+                            let mut settings = crate::settings::get_settings();
+                            settings.preserve_codex_official_auth_on_switch = true;
+                            crate::settings::update_settings(settings)
+                                .map_err(|e| e.to_string())?;
+                            let mut config = app_state
+                                .db
+                                .get_proxy_config_for_app("codex")
+                                .await
+                                .map_err(|e| e.to_string())?;
+                            config.codex_chatgpt_auth_takeover = true;
+                            app_state
+                                .db
+                                .update_proxy_config_for_app(config)
+                                .await
+                                .map_err(|e| e.to_string())?;
+                            if let Err(error) =
+                                crate::mode::controller::refresh_codex_auth_locked(&app_state).await
+                            {
+                                log::warn!("Codex 登录已保存，但当前路由重投影失败: {error}");
+                            }
                         }
                         let default_account_id = auth_manager.get_status().await.default_account_id;
                         Ok(Some(map_account(
