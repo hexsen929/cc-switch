@@ -764,7 +764,7 @@ pub(crate) fn sync_live_for_provider_respecting_mode(
     let mode = crate::mode::current::mode_state(app_type);
     if mode.is_proxy() {
         if mode.proxy_route.as_deref() == Some(provider.id.as_str()) {
-            futures::executor::block_on(crate::mode::controller::resync_route_locked(
+            futures::executor::block_on(crate::mode::controller::resync_route_config_locked(
                 state, app_type,
             ))
             .map_err(AppError::Message)?;

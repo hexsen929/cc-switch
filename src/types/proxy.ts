@@ -154,6 +154,7 @@ export interface AppProxyConfig {
   appType: string;
   enabled: boolean;
   autoFailoverEnabled: boolean;
+  /** @deprecated Read-only mirror of settings.preserveCodexOfficialAuthOnSwitch. */
   codexChatgptAuthTakeover: boolean;
   maxRetries: number;
   streamingFirstByteTimeout: number;

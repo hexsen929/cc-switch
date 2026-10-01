@@ -1,4 +1,5 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { useProviderResourceWarnings } from "@/hooks/useProviderResourceWarnings";
 import { useTranslation } from "react-i18next";
 import { motion, AnimatePresence } from "framer-motion";
 import { toast } from "sonner";
@@ -263,6 +264,7 @@ function App() {
   const providerScrollContainerRef = useRef<HTMLDivElement>(null);
 
   useUsageCacheBridge();
+  useProviderResourceWarnings();
 
   useLayoutEffect(() => {
     if (currentView !== "providers") return;

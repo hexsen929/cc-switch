@@ -143,6 +143,8 @@ impl Database {
     ) -> Result<AppProxyConfig, AppError> {
         // 使用 block 限制 conn 的作用域，避免跨 await 持有锁
         let app_type_owned = app_type.to_string();
+        let preserve =
+            app_type == "codex" && crate::settings::preserve_codex_official_auth_on_switch();
         let result = {
             let conn = lock_conn!(self.conn);
             conn.query_row(
@@ -157,7 +159,8 @@ impl Database {
                         app_type: row.get(0)?,
                         enabled: row.get::<_, i32>(1)? != 0,
                         auto_failover_enabled: row.get::<_, i32>(2)? != 0,
-                        codex_chatgpt_auth_takeover: row.get::<_, i32>(3)? != 0,
+                        // Legacy field is a read-only mirror; device settings own this preference.
+                        codex_chatgpt_auth_takeover: preserve,
                         max_retries: row.get::<_, i32>(4)? as u32,
                         streaming_first_byte_timeout: row.get::<_, i32>(5)? as u32,
                         streaming_idle_timeout: row.get::<_, i32>(6)? as u32,
@@ -182,7 +185,7 @@ impl Database {
                     app_type: app_type_owned,
                     enabled: false,
                     auto_failover_enabled: false,
-                    codex_chatgpt_auth_takeover: false,
+                    codex_chatgpt_auth_takeover: preserve,
                     max_retries: 3,
                     streaming_first_byte_timeout: 60,
                     streaming_idle_timeout: 120,
@@ -203,6 +206,10 @@ impl Database {
         &self,
         config: AppProxyConfig,
     ) -> Result<(), AppError> {
+        // Retain the column for older backups, but never let a stale proxy form
+        // change the canonical device preference.
+        let preserve =
+            config.app_type == "codex" && crate::settings::preserve_codex_official_auth_on_switch();
         let conn = lock_conn!(self.conn);
 
         conn.execute(
@@ -225,11 +232,7 @@ impl Database {
                 config.app_type,
                 if config.enabled { 1 } else { 0 },
                 if config.auto_failover_enabled { 1 } else { 0 },
-                if config.codex_chatgpt_auth_takeover {
-                    1
-                } else {
-                    0
-                },
+                if preserve { 1 } else { 0 },
                 config.max_retries as i32,
                 config.streaming_first_byte_timeout as i32,
                 config.streaming_idle_timeout as i32,

@@ -78,6 +78,7 @@ export function useManagedAuth(
           await queryClient.invalidateQueries({
             queryKey: ["managed-auth-status", authProvider],
           });
+          await queryClient.invalidateQueries({ queryKey: ["settings"] });
         }
         return cancelled;
       } catch (e) {
@@ -170,6 +171,10 @@ export function useManagedAuth(
             setPollingState("success");
             await refetchStatus();
             await queryClient.invalidateQueries({ queryKey });
+            if (authProvider === "codex_oauth") {
+              // Device login also enables the canonical login-preservation setting.
+              await queryClient.invalidateQueries({ queryKey: ["settings"] });
+            }
             if (completionGeneration !== flowGenerationRef.current) return;
             setPollingState("idle");
             setDeviceCode(null);

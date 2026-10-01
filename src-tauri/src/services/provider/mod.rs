@@ -16,6 +16,7 @@ pub(crate) mod grok_direct;
 mod grok_editor;
 mod live;
 mod pi;
+pub(crate) mod resources;
 mod usage;
 
 use indexmap::IndexMap;
@@ -26,7 +27,6 @@ use serde_json::Value;
 use crate::app_config::AppType;
 use crate::error::AppError;
 use crate::provider::{Provider, UsageResult};
-use crate::services::mcp::McpService;
 use crate::settings::CustomEndpoint;
 use crate::store::AppState;
 
@@ -133,32 +133,6 @@ pub struct ProviderService;
 #[serde(rename_all = "camelCase")]
 pub struct SwitchResult {
     pub warnings: Vec<String>,
-}
-
-pub(crate) fn sync_provider_bound_resources(
-    state: &AppState,
-    app_type: &AppType,
-    include_mcp: bool,
-) -> Result<(), AppError> {
-    if matches!(app_type, AppType::Claude) {
-        crate::claude_append_instructions::sync_current_provider_projection(&state.db)?;
-    }
-    if include_mcp {
-        // 按当前 app 的“全局 MCP + 当前 provider 覆盖”重建目标段。
-        // 不从旧 live config 继承 MCP，避免切供应商时把上一个 provider 的 MCP 泄漏过来。
-        McpService::sync_all_enabled_for_app(state, app_type)?;
-    }
-    crate::services::skill::SkillService::sync_to_app(&state.db, app_type)
-        .map_err(|e| AppError::Message(format!("同步 Skill 失败: {e}")))?;
-    // Claude Desktop 3P profiles do not have a prompt file target. Provider saves
-    // still need to sync supported resources, but prompt sync must be a no-op.
-    if !matches!(app_type, AppType::ClaudeDesktop) {
-        crate::services::prompt::PromptService::sync_effective_prompt_to_file(
-            state,
-            app_type.clone(),
-        )?;
-    }
-    Ok(())
 }
 
 #[cfg(test)]
@@ -1364,6 +1338,182 @@ mod tests {
             live["env"]["ANTHROPIC_BASE_URL"].as_str(),
             Some("https://api.new.example")
         );
+    }
+
+    #[test]
+    #[serial]
+    fn failed_instructions_do_not_fail_committed_editor_save_or_skip_other_resources() {
+        let _home = TempHome::new();
+        crate::settings::reload_settings().unwrap();
+        let db = Arc::new(Database::memory().unwrap());
+        let state = AppState::new(db.clone());
+        let original = Provider::with_id(
+            "resource-test".into(),
+            "A".into(),
+            json!({"env": {"ANTHROPIC_BASE_URL": "https://old.example", "ANTHROPIC_AUTH_TOKEN": "fixture"}}),
+            None,
+        );
+        db.save_provider("claude", &original).unwrap();
+        ProviderService::switch(&state, AppType::Claude, &original.id).unwrap();
+        db.save_mcp_server(&McpServer {
+            id: "keep".into(),
+            name: "Keep".into(),
+            server: json!({"type":"stdio", "command":"fixture-command"}),
+            apps: McpApps {
+                claude: true,
+                ..Default::default()
+            },
+            description: None,
+            homepage: None,
+            docs: None,
+            tags: vec![],
+        })
+        .unwrap();
+        db.save_prompt(
+            "claude",
+            &serde_json::from_value(json!({
+                "id":"global", "name":"Global", "content":"fresh prompt", "enabled":true,
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+        let view =
+            ProviderService::editor_view(&state, AppType::Claude, &original.settings_config, None)
+                .unwrap();
+        let mut edited = original.clone();
+        edited.settings_config = view.settings.clone();
+        edited.settings_config["env"]["ANTHROPIC_BASE_URL"] = json!("https://new.example");
+        edited.meta = Some(ProviderMeta {
+            claude_append_instructions: Some(ClaudeAppendInstructionsConfig {
+                files: vec!["./missing-instructions.md".into()],
+                active_file: Some("./missing-instructions.md".into()),
+            }),
+            ..Default::default()
+        });
+        let before = resources::sync_count();
+        assert!(ProviderService::update_from_editor(
+            &state,
+            AppType::Claude,
+            None,
+            edited,
+            Some(EditorSave {
+                base: view.settings,
+                draft: None,
+                on_conflict: Default::default()
+            })
+        )
+        .unwrap());
+        assert_eq!(resources::sync_count() - before, 1);
+        assert_eq!(
+            db.get_provider_by_id(&original.id, "claude")
+                .unwrap()
+                .unwrap()
+                .settings_config["env"]["ANTHROPIC_BASE_URL"],
+            "https://new.example"
+        );
+        let live: Value = read_json_file(&get_claude_settings_path()).unwrap();
+        assert_eq!(live["env"]["ANTHROPIC_BASE_URL"], "https://new.example");
+        let mcp: Value = read_json_file(&crate::config::get_claude_mcp_path()).unwrap();
+        assert_eq!(mcp["mcpServers"]["keep"]["command"], "fixture-command");
+        assert_eq!(
+            fs::read_to_string(crate::prompt_files::prompt_file_path(&AppType::Claude).unwrap())
+                .unwrap(),
+            "fresh prompt"
+        );
+        let retry = resources::sync(&state, &AppType::Claude).unwrap_err();
+        assert!(
+            retry.to_string().contains("Instructions"),
+            "explicit retry still reports failure"
+        );
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn direct_switch_and_proxy_editor_save_each_sync_resources_once() {
+        let _home = TempHome::new();
+        crate::settings::reload_settings().unwrap();
+        let db = Arc::new(Database::memory().unwrap());
+        let state = AppState::new(db.clone());
+        let row = Provider::with_id(
+            "resource-count".into(),
+            "A".into(),
+            json!({"env": {"ANTHROPIC_BASE_URL": "https://fixture.example", "ANTHROPIC_AUTH_TOKEN": "fixture"}}),
+            None,
+        );
+        db.save_provider("claude", &row).unwrap();
+        let before = resources::sync_count();
+        ProviderService::switch(&state, AppType::Claude, &row.id).unwrap();
+        assert_eq!(
+            resources::sync_count() - before,
+            1,
+            "direct switch has one owner"
+        );
+        db.update_proxy_config(ProxyConfig {
+            listen_port: 0,
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+        crate::mode::controller::enter(&state, &AppType::Claude)
+            .await
+            .unwrap();
+        let view =
+            ProviderService::editor_view(&state, AppType::Claude, &row.settings_config, None)
+                .unwrap();
+        let mut edited = row.clone();
+        edited.settings_config = view.settings.clone();
+        edited.settings_config["env"]["ANTHROPIC_BASE_URL"] = json!("https://new.example");
+        let before = resources::sync_count();
+        ProviderService::update_from_editor(
+            &state,
+            AppType::Claude,
+            None,
+            edited,
+            Some(EditorSave {
+                base: view.settings,
+                draft: None,
+                on_conflict: Default::default(),
+            }),
+        )
+        .unwrap();
+        assert_eq!(
+            resources::sync_count() - before,
+            1,
+            "route sync is not repeated by editor finalization"
+        );
+        crate::mode::controller::exit(&state, &AppType::Claude)
+            .await
+            .unwrap();
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn legacy_auth_toggle_is_a_mirror_not_a_second_preference() {
+        let _home = TempHome::new();
+        crate::settings::reload_settings().unwrap();
+        let db = Database::memory().unwrap();
+        let mut stale = db.get_proxy_config_for_app("codex").await.unwrap();
+        assert!(!stale.codex_chatgpt_auth_takeover);
+        let mut settings = crate::settings::get_settings();
+        settings.preserve_codex_official_auth_on_switch = true;
+        crate::settings::update_settings(settings).unwrap();
+        stale.max_retries = 4;
+        db.update_proxy_config_for_app(stale).await.unwrap();
+        let config = db.get_proxy_config_for_app("codex").await.unwrap();
+        assert!(config.codex_chatgpt_auth_takeover);
+        assert!(crate::settings::preserve_codex_official_auth_on_switch());
+        assert_eq!(config.max_retries, 4);
+        let mut settings = crate::settings::get_settings();
+        settings.preserve_codex_official_auth_on_switch = false;
+        crate::settings::update_settings(settings).unwrap();
+        db.update_proxy_config_for_app(config).await.unwrap();
+        assert!(
+            !db.get_proxy_config_for_app("codex")
+                .await
+                .unwrap()
+                .codex_chatgpt_auth_takeover
+        );
+        assert!(!crate::settings::preserve_codex_official_auth_on_switch());
     }
 
     #[test]
@@ -6446,16 +6596,7 @@ impl ProviderService {
         written: Result<(), AppError>,
     ) -> Result<bool, AppError> {
         let Err(error) = written else {
-            if crate::mode::current::provider_for(
-                &state.db,
-                app_type,
-                crate::mode::current::Purpose::Live,
-            )?
-            .as_deref()
-                == Some(provider_id)
-            {
-                sync_provider_bound_resources(state, app_type, true)?;
-            }
+            resources::after_save(state, app_type, provider_id);
             return Ok(true);
         };
         if crate::mode::operation::has_pending(app_type.as_str()) {
@@ -6768,8 +6909,8 @@ impl ProviderService {
                 &provider,
                 existing_provider.as_ref(),
             )?;
-            if outcome == LiveSyncOutcome::WroteLive {
-                sync_provider_bound_resources(state, &app_type, true)?;
+            if outcome == LiveSyncOutcome::WroteLive || (mode.attached && is_route) {
+                resources::after_commit(state, &app_type);
             }
         }
 
@@ -6832,7 +6973,7 @@ impl ProviderService {
             return Err(error);
         }
         if !mode.is_proxy() {
-            sync_provider_bound_resources(state, &app_type, true)?;
+            resources::after_commit(state, &app_type);
         }
         Ok(true)
     }
@@ -7038,13 +7179,8 @@ impl ProviderService {
         }
 
         // Normal mode: full switch with Live config write
-        let mut result = Self::switch_normal(state, app_type.clone(), id, &providers)?;
-        if let Err(error) = sync_provider_bound_resources(state, &app_type, true) {
-            log::warn!("供应商已切换，但资源投影待重试: {error}");
-            result
-                .warnings
-                .push(format!("provider_resources_sync_failed:{error}"));
-        }
+        let result = Self::switch_normal(state, app_type.clone(), id, &providers)?;
+        resources::after_commit(state, &app_type);
         Ok(result)
     }
 
@@ -7158,17 +7294,6 @@ impl ProviderService {
             }
         }
 
-        // 切换重写了目标应用的 live，只重投影该应用的 MCP（Grok Build 的
-        // [mcp_servers] 与 live 同文件，整体替换后必须补回；其余应用的
-        // MCP 文件独立于 live，投影是幂等维护）。不用全量 sync_all_enabled：
-        // 无关应用的 live 损坏（如 ~/.claude.json 坏 JSON）不该阻断切换。
-        // 走到这里 DB is_current 与 live 都已落盘，切换事实上已成功；
-        // 投影失败上抛会让前端报"切换失败"制造分裂假象，故降级为警告
-        // （MCP 投影可自愈：下次切换 / 任一 MCP 启停都会重新投影）。
-        if let Err(err) = McpService::sync_enabled_for_app(state, &app_type) {
-            log::warn!("切换供应商后重投影 {app_type:?} MCP 失败（将在下次同步时自愈）: {err}");
-        }
-
         Ok(result)
     }
 
@@ -7191,11 +7316,6 @@ impl ProviderService {
             .and_then(|current_id| providers.get(current_id));
         claude_direct::switch_to(state.db.as_ref(), prev, provider)?;
 
-        // MCP 在 ~/.claude.json，和 settings.json 无关；重投影是幂等维护，失败只记警告
-        // （切换已经提交，下次同步会自愈）。
-        if let Err(err) = McpService::sync_enabled_for_app(state, &AppType::Claude) {
-            log::warn!("切换供应商后重投影 claude MCP 失败（将在下次同步时自愈）: {err}");
-        }
         Ok(SwitchResult::default())
     }
 
@@ -7274,12 +7394,18 @@ impl ProviderService {
         if app_type.is_additive_mode() {
             return sync_additive_app_to_live(state, &app_type);
         }
-        // 没有正在用的那家、或者在代理模式（客户端文件没按直连重写）时不重投影 MCP。
         let outcome = live::sync_current_provider_for_app_respecting_mode(state, &app_type)?;
-        if outcome != Some(LiveSyncOutcome::WroteLive) {
-            return Ok(());
+        match outcome {
+            Some(LiveSyncOutcome::WroteLive) => {
+                crate::services::mcp::McpService::sync_enabled_for_app(state, &app_type)
+            }
+            Some(LiveSyncOutcome::ProxyMode)
+                if crate::mode::current::mode_state(&app_type).attached =>
+            {
+                resources::sync(state, &app_type)
+            }
+            _ => Ok(()),
         }
-        McpService::sync_enabled_for_app(state, &app_type)
     }
 
     pub fn migrate_legacy_common_config_usage(

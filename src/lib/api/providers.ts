@@ -70,6 +70,10 @@ export interface ClaudeDesktopDefaultRoute {
 }
 
 export const providersApi = {
+  async retryResourceSync(appId: AppId): Promise<void> {
+    return await invoke("retry_provider_resources", { app: appId });
+  },
+
   async getAll(appId: AppId): Promise<Record<string, Provider>> {
     return await invoke("get_providers", { app: appId });
   },

@@ -163,22 +163,6 @@ pub async fn update_proxy_config_for_app(
     let db = &state.db;
     let app_type = config.app_type.clone();
     let app = require_proxy_app(&app_type)?;
-    let previous = if app_type == "codex" {
-        Some(
-            db.get_proxy_config_for_app("codex")
-                .await
-                .map_err(|e| e.to_string())?,
-        )
-    } else {
-        None
-    };
-    let should_sync_codex_auth_mode = previous
-        .as_ref()
-        .is_some_and(|prev| prev.codex_chatgpt_auth_takeover != config.codex_chatgpt_auth_takeover);
-    let enabling_codex_chatgpt_auth_takeover =
-        should_sync_codex_auth_mode && config.codex_chatgpt_auth_takeover;
-    let disabling_codex_chatgpt_auth_takeover =
-        should_sync_codex_auth_mode && !config.codex_chatgpt_auth_takeover;
     let circuit_config = CircuitBreakerConfig::from(&config);
     // `enabled` 是模式的镜像，只由进入 / 退出代理改写。
     let mut config = config;
@@ -188,33 +172,10 @@ pub async fn update_proxy_config_for_app(
         .await
         .map_err(|e| e.to_string())?;
 
-    if enabling_codex_chatgpt_auth_takeover
-        && !crate::settings::preserve_codex_official_auth_on_switch()
-    {
-        let mut settings = crate::settings::get_settings();
-        settings.preserve_codex_official_auth_on_switch = true;
-        crate::settings::update_settings(settings)
-            .map_err(|e| format!("开启 Codex ChatGPT 登录态保留设置失败: {e}"))?;
-    } else if disabling_codex_chatgpt_auth_takeover
-        && crate::settings::preserve_codex_official_auth_on_switch()
-    {
-        let mut settings = crate::settings::get_settings();
-        settings.preserve_codex_official_auth_on_switch = false;
-        crate::settings::update_settings(settings)
-            .map_err(|e| format!("关闭 Codex ChatGPT 登录态保留设置失败: {e}"))?;
-    }
-
     state
         .proxy_service
         .update_circuit_breaker_config_for_app(&app_type, circuit_config)
         .await?;
-
-    if should_sync_codex_auth_mode {
-        let _guard = crate::mode::controller::lock_settled(&state, &app)
-            .await
-            .map_err(|e| e.to_string())?;
-        crate::mode::controller::refresh_codex_auth_locked(&state).await?;
-    }
 
     Ok(())
 }

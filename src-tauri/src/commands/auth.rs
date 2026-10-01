@@ -206,17 +206,6 @@ pub async fn auth_poll_for_account(
                             settings.preserve_codex_official_auth_on_switch = true;
                             crate::settings::update_settings(settings)
                                 .map_err(|e| e.to_string())?;
-                            let mut config = app_state
-                                .db
-                                .get_proxy_config_for_app("codex")
-                                .await
-                                .map_err(|e| e.to_string())?;
-                            config.codex_chatgpt_auth_takeover = true;
-                            app_state
-                                .db
-                                .update_proxy_config_for_app(config)
-                                .await
-                                .map_err(|e| e.to_string())?;
                             if let Err(error) =
                                 crate::mode::controller::refresh_codex_auth_locked(&app_state).await
                             {

@@ -36,6 +36,27 @@ pub fn get_current_provider(state: State<'_, AppState>, app: String) -> Result<S
     ProviderService::current(state.inner(), app_type).map_err(|e| e.to_string())
 }
 
+/// Retry only resource projection for the current live provider. Never replay a
+/// provider save or rewrite model/endpoint/auth configuration after a warning.
+#[tauri::command]
+pub async fn retry_provider_resources(
+    app_handle: tauri::AppHandle,
+    app: String,
+) -> Result<(), String> {
+    let app_type = AppType::from_str(&app).map_err(|e| e.to_string())?;
+    tauri::async_runtime::spawn_blocking(move || {
+        let state = app_handle
+            .try_state::<AppState>()
+            .ok_or_else(|| "应用状态不可用".to_string())?;
+        let _guard = crate::mode::controller::lock_settled_blocking(state.inner(), &app_type)
+            .map_err(|e| e.to_string())?;
+        crate::services::provider::resources::sync(state.inner(), &app_type)
+            .map_err(|e| e.to_string())
+    })
+    .await
+    .map_err(|e| format!("资源同步任务执行失败: {e}"))?
+}
+
 #[tauri::command]
 pub async fn add_provider(
     app_handle: tauri::AppHandle,

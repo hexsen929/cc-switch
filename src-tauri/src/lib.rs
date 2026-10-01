@@ -1264,11 +1264,6 @@ pub fn run() {
                 // 定下各应用的直连 / 代理模式（处理旧版遗留的接管状态），再把代理模式的
                 // 应用接上。要排在通用配置片段的自动提取之后：它读的是直连的 live。
                 crate::mode::controller::startup(&state).await;
-                for app in crate::mode::controller::PROXY_APPS {
-                    if let Err(error) = crate::services::provider::sync_provider_bound_resources(&state, &app, true) {
-                        log::warn!("启动时同步 {} 供应商资源失败: {error}", app.as_str());
-                    }
-                }
 
                 // Periodic backup check (on startup)
                 if let Err(e) = state.db.periodic_backup_if_needed() {
@@ -1402,6 +1397,7 @@ pub fn run() {
             commands::add_provider,
             commands::update_provider,
             commands::get_provider_editor_view,
+            commands::retry_provider_resources,
             commands::delete_provider,
             commands::remove_provider_from_live_config,
             commands::switch_provider,

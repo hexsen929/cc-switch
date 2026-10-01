@@ -442,12 +442,7 @@ pub(crate) fn lock_settled_blocking(
 
 /// 路由/模式提交后投影 fork 的供应商级资源；资源失败不把已提交的模式伪装成回滚。
 fn sync_resources(state: &AppState, app: &AppType) {
-    if let Err(error) = crate::services::provider::sync_provider_bound_resources(state, app, true) {
-        log::warn!(
-            "{} 模式已提交，但供应商资源投影待重试: {error}",
-            app.as_str()
-        );
-    }
+    crate::services::provider::resources::after_commit(state, app);
 }
 
 /// 进入代理模式。
@@ -621,6 +616,17 @@ pub async fn switch_route_locked(
     app: &AppType,
     target: &Provider,
 ) -> Result<(), String> {
+    switch_route_config_locked(state, app, target).await?;
+    sync_resources(state, app);
+    Ok(())
+}
+
+// Config-only primitive for callers that own the subsequent resource sync.
+async fn switch_route_config_locked(
+    state: &AppState,
+    app: &AppType,
+    target: &Provider,
+) -> Result<(), String> {
     let mode = current::mode_state(app);
     if !mode.is_proxy() {
         return Err(format!("{} 不在代理模式", app.as_str()));
@@ -635,7 +641,6 @@ pub async fn switch_route_locked(
         let live_now = LiveNow::of(state, app, &mode)?;
         write_proxy(state, app, op::ROUTE, target, &live_now, new_state).await?;
     }
-    sync_resources(state, app);
     state.proxy_service.set_active_target(app, target).await;
     Ok(())
 }
@@ -702,6 +707,22 @@ pub async fn resync_route_locked(state: &AppState, app: &AppType) -> Result<(), 
         return Ok(());
     };
     switch_route_locked(state, app, &route).await
+}
+
+/// Configuration restore and provider updates own their resource sync phase.
+/// Avoid doing it inside the route write and then again in the outer operation.
+pub(crate) async fn resync_route_config_locked(
+    state: &AppState,
+    app: &AppType,
+) -> Result<(), String> {
+    let mode = current::mode_state(app);
+    if !mode.is_proxy() || !mode.attached {
+        return Ok(());
+    }
+    if let Some(route) = route_provider(state, app, &mode)? {
+        switch_route_config_locked(state, app, &route).await?;
+    }
+    Ok(())
 }
 
 pub async fn resync_route(state: &AppState, app: &AppType) -> Result<(), String> {
@@ -845,6 +866,7 @@ async fn startup_app(state: &AppState, app: &AppType) -> Result<(), String> {
             },
         )?;
     }
+    sync_resources(state, app);
     Ok(())
 }
 

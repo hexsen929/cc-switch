@@ -1,16 +1,12 @@
-/**
- * Codex ChatGPT auth takeover mode toggle.
- *
- * This is a Codex auth writing mode flag. It can be changed while routing is
- * off or on, and live Codex config is rewritten immediately with the selected
- * auth mode.
+/** Shortcut for the canonical Codex direct-switch login preservation setting.
+ * Proxy routing keeps native login independently, matching upstream behavior.
  */
 
 import { KeyRound, Loader2 } from "lucide-react";
+import { toast } from "sonner";
 import { useTranslation } from "react-i18next";
 import { Switch } from "@/components/ui/switch";
 import { useSaveSettingsMutation, useSettingsQuery } from "@/lib/query";
-import { useAppProxyConfig, useUpdateAppProxyConfig } from "@/lib/query/proxy";
 import { cn } from "@/lib/utils";
 
 interface CodexChatgptAuthToggleProps {
@@ -21,51 +17,23 @@ export function CodexChatgptAuthToggle({
   className,
 }: CodexChatgptAuthToggleProps) {
   const { t } = useTranslation();
-  const { data: codexProxyConfig, isLoading } = useAppProxyConfig("codex");
-  const { data: settings, isLoading: isSettingsLoading } = useSettingsQuery();
+  const { data: settings, isLoading } = useSettingsQuery();
   const saveSettings = useSaveSettingsMutation();
-  const updateAppProxyConfig = useUpdateAppProxyConfig();
+  const enabled = settings?.preserveCodexOfficialAuthOnSwitch ?? false;
+  const isBusy = isLoading || saveSettings.isPending;
 
-  const officialAuthPreservationEnabled =
-    settings?.preserveCodexOfficialAuthOnSwitch ?? false;
-  const enabled = codexProxyConfig?.codexChatgptAuthTakeover ?? false;
-  const isBusy =
-    isLoading ||
-    isSettingsLoading ||
-    saveSettings.isPending ||
-    updateAppProxyConfig.isPending;
-
-  const handleToggle = async (checked: boolean) => {
-    if (!codexProxyConfig) return;
-
-    if (checked && !officialAuthPreservationEnabled) {
-      await saveSettings.mutateAsync({
-        ...settings,
-        showInTray: settings?.showInTray ?? true,
-        minimizeToTrayOnClose: settings?.minimizeToTrayOnClose ?? true,
-        preserveCodexOfficialAuthOnSwitch: true,
-      });
-    }
-
-    await updateAppProxyConfig.mutateAsync({
-      ...codexProxyConfig,
-      codexChatgptAuthTakeover: checked,
-    });
+  const handleToggle = (checked: boolean) => {
+    if (!settings) return;
+    saveSettings.mutate(
+      { ...settings, preserveCodexOfficialAuthOnSwitch: checked },
+      { onError: (error) => toast.error(String(error)) },
+    );
   };
 
-  const tooltipText = enabled
-    ? officialAuthPreservationEnabled
-      ? t("proxy.takeover.codexChatgptAuth.enabledTooltip", {
-          defaultValue:
-            "Codex 将保留 ChatGPT 登录态；路由开启或关闭都会写入 chatgpt 模式",
-        })
-      : t("proxy.takeover.codexChatgptAuth.enablingTooltip", {
-          defaultValue: "Codex 将开启 ChatGPT 登录态保留模式",
-        })
-    : t("proxy.takeover.codexChatgptAuth.disabledTooltip", {
-        defaultValue:
-          "Codex 使用默认 API 认证写入逻辑；不会保留 ChatGPT 登录态",
-      });
+  const tooltipText = t("proxy.takeover.codexChatgptAuth.directSwitchHint", {
+    defaultValue:
+      "控制下次直连切换到第三方供应商时是否保留官方登录；代理模式始终保留已有原生登录。此开关不会自动登录。",
+  });
 
   return (
     <div
@@ -89,9 +57,10 @@ export function CodexChatgptAuthToggle({
         ChatGPT
       </span>
       <Switch
+        aria-label={t("settings.preserveCodexOfficialAuthOnSwitch")}
         checked={enabled}
         onCheckedChange={handleToggle}
-        disabled={isBusy || !codexProxyConfig}
+        disabled={isBusy || !settings}
       />
     </div>
   );

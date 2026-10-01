@@ -1,107 +1,86 @@
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { CodexChatgptAuthToggle } from "@/components/proxy/CodexChatgptAuthToggle";
 
-const saveSettingsMutateAsync = vi.fn();
-const updateAppProxyConfigMutateAsync = vi.fn();
-
-let settingsState: Record<string, unknown> | undefined;
-let proxyConfigState: Record<string, unknown> | undefined;
+const save = vi.fn();
+const legacyUpdate = vi.fn();
+let settings: Record<string, unknown> | undefined;
+let pending = false;
 
 vi.mock("react-i18next", () => ({
   useTranslation: () => ({
-    t: (_key: string, options?: { defaultValue?: string }) =>
-      options?.defaultValue ?? _key,
+    t: (key: string, options?: { defaultValue?: string }) =>
+      options?.defaultValue ?? key,
   }),
 }));
-
 vi.mock("@/lib/query", () => ({
-  useSettingsQuery: () => ({
-    data: settingsState,
-    isLoading: false,
-  }),
-  useSaveSettingsMutation: () => ({
-    mutateAsync: saveSettingsMutateAsync,
-    isPending: false,
-  }),
+  useSettingsQuery: () => ({ data: settings, isLoading: false }),
+  useSaveSettingsMutation: () => ({ mutate: save, isPending: pending }),
 }));
-
+// A stale legacy proxy preference must never determine the toggle or be written.
 vi.mock("@/lib/query/proxy", () => ({
   useAppProxyConfig: () => ({
-    data: proxyConfigState,
+    data: { codexChatgptAuthTakeover: false },
     isLoading: false,
   }),
   useUpdateAppProxyConfig: () => ({
-    mutateAsync: updateAppProxyConfigMutateAsync,
+    mutateAsync: legacyUpdate,
     isPending: false,
   }),
 }));
 
-function baseProxyConfig() {
-  return {
-    appType: "codex",
-    enabled: false,
-    autoFailoverEnabled: false,
-    codexChatgptAuthTakeover: false,
-    maxRetries: 2,
-    streamingFirstByteTimeout: 30,
-    streamingIdleTimeout: 120,
-    nonStreamingTimeout: 120,
-    circuitFailureThreshold: 5,
-    circuitSuccessThreshold: 2,
-    circuitTimeoutSeconds: 60,
-    circuitErrorRateThreshold: 50,
-    circuitMinRequests: 10,
-  };
-}
-
 describe("CodexChatgptAuthToggle", () => {
   beforeEach(() => {
-    saveSettingsMutateAsync.mockReset();
-    updateAppProxyConfigMutateAsync.mockReset();
-    saveSettingsMutateAsync.mockResolvedValue(true);
-    updateAppProxyConfigMutateAsync.mockResolvedValue(undefined);
-    settingsState = {
-      preserveCodexOfficialAuthOnSwitch: false,
-    };
-    proxyConfigState = baseProxyConfig();
+    save.mockReset();
+    legacyUpdate.mockReset();
+    settings = { showInTray: false, preserveCodexOfficialAuthOnSwitch: false };
+    pending = false;
   });
 
-  it("auto-enables official auth preservation when turning on ChatGPT auth mode", async () => {
-    render(<CodexChatgptAuthToggle />);
-
-    const toggle = screen.getByRole("switch");
-    expect(toggle).not.toBeDisabled();
-
-    fireEvent.click(toggle);
-
-    await waitFor(() => {
-      expect(saveSettingsMutateAsync).toHaveBeenCalledWith({
-        showInTray: true,
-        minimizeToTrayOnClose: true,
-        preserveCodexOfficialAuthOnSwitch: true,
-      });
-    });
-    expect(updateAppProxyConfigMutateAsync).toHaveBeenCalledWith({
-      ...baseProxyConfig(),
-      codexChatgptAuthTakeover: true,
-    });
-  });
-
-  it("does not require a settings-page detour when preservation is already enabled", async () => {
-    settingsState = {
-      preserveCodexOfficialAuthOnSwitch: true,
-    };
-
+  it("writes the canonical setting once without updating proxy configuration", () => {
     render(<CodexChatgptAuthToggle />);
     fireEvent.click(screen.getByRole("switch"));
+    expect(save).toHaveBeenCalledTimes(1);
+    expect(save).toHaveBeenCalledWith(
+      { showInTray: false, preserveCodexOfficialAuthOnSwitch: true },
+      expect.any(Object),
+    );
+    expect(legacyUpdate).not.toHaveBeenCalled();
+  });
 
-    await waitFor(() => {
-      expect(updateAppProxyConfigMutateAsync).toHaveBeenCalledWith({
-        ...baseProxyConfig(),
-        codexChatgptAuthTakeover: true,
-      });
-    });
-    expect(saveSettingsMutateAsync).not.toHaveBeenCalled();
+  it("reflects settings-page changes even when the legacy proxy flag disagrees", () => {
+    const { rerender } = render(<CodexChatgptAuthToggle />);
+    expect(screen.getByRole("switch")).not.toBeChecked();
+    settings = { ...settings, preserveCodexOfficialAuthOnSwitch: true };
+    rerender(<CodexChatgptAuthToggle />);
+    expect(screen.getByRole("switch")).toBeChecked();
+    fireEvent.click(screen.getByRole("switch"));
+    expect(save).toHaveBeenCalledWith(
+      { showInTray: false, preserveCodexOfficialAuthOnSwitch: false },
+      expect.any(Object),
+    );
+    expect(legacyUpdate).not.toHaveBeenCalled();
+  });
+
+  it("does not construct a partial settings snapshot before settings load", () => {
+    settings = undefined;
+    render(<CodexChatgptAuthToggle />);
+    expect(screen.getByRole("switch")).toBeDisabled();
+    fireEvent.click(screen.getByRole("switch"));
+    expect(save).not.toHaveBeenCalled();
+  });
+
+  it("disables repeated clicks while saving", () => {
+    pending = true;
+    render(<CodexChatgptAuthToggle />);
+    expect(screen.getByRole("switch")).toBeDisabled();
+  });
+
+  it("explains the direct-switch scope instead of promising proxy logout", () => {
+    render(<CodexChatgptAuthToggle />);
+    expect(screen.getByTitle(/下次直连切换/)).toHaveAttribute(
+      "title",
+      expect.stringContaining("代理模式始终保留"),
+    );
   });
 });

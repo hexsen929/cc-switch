@@ -295,7 +295,9 @@
     "windowControlFailed": "視窗控制失敗：{{error}}",
     "officialBlockedByProxy": "本地路由模式下不能切換至官方供應商，使用路由存取官方 API 可能導致帳號被封鎖",
     "proxyOfficialWarning": "目前供應商 {{name}} 是官方供應商，建議切換至第三方供應商後再使用本地路由",
-    "proxyReasonClaudeDesktop": "使用 Claude Desktop 本機路由模式"
+    "proxyReasonClaudeDesktop": "使用 Claude Desktop 本機路由模式",
+    "providerResourcesWarning": "設定已生效，但部分供應商資源同步失敗",
+    "providerResourcesSynced": "供應商資源已同步"
   },
   "confirm": {
     "deleteProvider": "刪除供應商",
@@ -699,7 +701,7 @@
     "skipClaudeOnboardingDescription": "開啟後跳過 Claude Code 初次安裝確認",
     "codexAuth": "Codex 應用增強",
     "preserveCodexOfficialAuthOnSwitch": "非接管切換時保留官方登入",
-    "preserveCodexOfficialAuthOnSwitchDescription": "控制未開啟本機路由時切換第三方供應商是否保留 Codex 官方登入；路由接管期間一律保留",
+    "preserveCodexOfficialAuthOnSwitchDescription": "控制下次直連切換至第三方供應商時是否保留官方登入；代理模式始終保留既有原生登入。此開關不會自動登入。",
     "unifyCodexSessionHistory": "統一 Codex 會話歷史",
     "unifyCodexSessionHistoryDescription": "開啟後，官方訂閱將以共享的 custom 供應商標識執行，官方與第三方會話出現在同一歷史清單中，並可選擇把現有官方會話一併遷入（遷移前自動備份）。關閉開關時可按備份恢復遷入的會話。注意：跨供應商繼續舊會話時，對方後端可能無法解密會話中的 encrypted_content 推理內容，導致繼續失敗",
     "unifyCodexHistoryRestoreCompleted": "已按備份還原官方會話歷史（{{files}} 個會話檔案、{{rows}} 條索引記錄）",
@@ -3038,6 +3040,9 @@
         "active": "{{appLabel}} 路由中 - {{address}}:{{port}}\n切換供應商只改路由，直連供應商不變",
         "broken": "{{appLabel}} 路由中，但路由服務未執行",
         "inactive": "路由 {{appLabel}} 的請求，讓該應用程式請求走本地路由"
+      },
+      "codexChatgptAuth": {
+        "directSwitchHint": "控制下次直連切換至第三方供應商時是否保留官方登入；代理模式始終保留既有原生登入。此開關不會自動登入。"
       }
     },
     "failover": {

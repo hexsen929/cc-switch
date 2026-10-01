@@ -295,7 +295,9 @@
     "windowControlFailed": "Window control failed: {{error}}",
     "officialBlockedByProxy": "Cannot switch to official provider while local routing is active. Using routing with official APIs may cause account bans.",
     "proxyOfficialWarning": "Current provider {{name}} is official. Consider switching to a third-party provider before using local routing.",
-    "proxyReasonClaudeDesktop": "Using Claude Desktop local routing mode"
+    "proxyReasonClaudeDesktop": "Using Claude Desktop local routing mode",
+    "providerResourcesWarning": "Configuration applied, but some provider resources failed to sync",
+    "providerResourcesSynced": "Provider resources synced"
   },
   "confirm": {
     "deleteProvider": "Delete Provider",
@@ -699,7 +701,7 @@
     "skipClaudeOnboardingDescription": "When enabled, Claude Code will skip the first-run confirmation",
     "codexAuth": "Codex App Enhancements",
     "preserveCodexOfficialAuthOnSwitch": "Keep official login for direct switches",
-    "preserveCodexOfficialAuthOnSwitchDescription": "Controls third-party switches when local routing is off. Takeover routing always preserves the Codex official login.",
+    "preserveCodexOfficialAuthOnSwitchDescription": "Keep the official login on the next direct switch to a third-party provider. Proxy mode always keeps an existing native login. This setting does not sign you in.",
     "unifyCodexSessionHistory": "Unified Codex session history",
     "unifyCodexSessionHistoryDescription": "When enabled, the official subscription runs under the shared \"custom\" provider id so official and third-party sessions appear in one history list, optionally migrating existing official sessions in (backed up first). When turning it off, the migrated sessions can be restored from backup. Note: resuming an old session across providers may fail because its encrypted_content reasoning can only be decrypted by the backend that created it.",
     "unifyCodexHistoryRestoreCompleted": "Official session history restored from backup ({{files}} session files, {{rows}} index rows)",
@@ -3037,6 +3039,9 @@
         "active": "{{appLabel}} is routing - {{address}}:{{port}}\nSwitching providers changes the route only; the direct provider stays",
         "broken": "{{appLabel}} is routing, but routing service is not running",
         "inactive": "Route {{appLabel}}'s requests through local routing"
+      },
+      "codexChatgptAuth": {
+        "directSwitchHint": "Keep the official login on the next direct switch to a third-party provider. Proxy mode always keeps an existing native login. This setting does not sign you in."
       }
     },
     "failover": {
