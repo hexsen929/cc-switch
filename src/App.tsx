@@ -112,6 +112,7 @@ import HermesMemoryPanel from "@/components/hermes/HermesMemoryPanel";
 import {
   APP_IDS,
   DEFAULT_VISIBLE_APPS,
+  isStackAppId,
   isProxyAppId,
 } from "@/config/appConfig";
 
@@ -822,6 +823,25 @@ function App() {
   };
 
   const handleDuplicateProvider = async (provider: Provider) => {
+    if (
+      activeApp === "opencode" &&
+      provider.category !== "omo" &&
+      provider.category !== "omo-slim"
+    ) {
+      const { npm, models } = provider.settingsConfig;
+      if (
+        typeof npm !== "string" ||
+        !npm.trim() ||
+        !models ||
+        typeof models !== "object" ||
+        Array.isArray(models) ||
+        Object.keys(models).length === 0
+      ) {
+        toast.error(t("opencode.duplicateRequiresDefinition"));
+        return;
+      }
+    }
+
     const newSortIndex =
       provider.sortIndex !== undefined ? provider.sortIndex + 1 : undefined;
 
@@ -1429,15 +1449,25 @@ function App() {
                     <ClaudeDesktopRouteToggle />
                   ) : proxyAppId ? (
                     <>
-                      {settingsData?.enableLocalProxy && (
+                      {settingsData?.enableStackMode &&
+                      isStackAppId(proxyAppId) ? (
+                        <ProxyToggle activeApp={proxyAppId} stack />
+                      ) : (
                         <>
-                          <ProxyToggle activeApp={proxyAppId} />
-                          {proxyAppId === "codex" && <CodexChatgptAuthToggle />}
+                          {(settingsData?.enableLocalProxy ||
+                            settingsData?.enableStackMode) && (
+                            <ProxyToggle activeApp={proxyAppId} />
+                          )}
+                          {settingsData?.enableFailoverToggle && (
+                            <FailoverToggle activeApp={proxyAppId} />
+                          )}
                         </>
                       )}
-                      {settingsData?.enableFailoverToggle && (
-                        <FailoverToggle activeApp={proxyAppId} />
-                      )}
+                      {proxyAppId === "codex" &&
+                        (settingsData?.enableLocalProxy ||
+                          settingsData?.enableStackMode) && (
+                          <CodexChatgptAuthToggle />
+                        )}
                     </>
                   ) : null}
                 </div>

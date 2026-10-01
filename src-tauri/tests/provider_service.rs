@@ -613,7 +613,7 @@ wire_api = "responses"
         "normal switch should inject the DeepSeek key into config.toml"
     );
 
-    cc_switch_lib::mode::controller::enter(&state, &AppType::Codex)
+    cc_switch_lib::mode::controller::enter(&state, &AppType::Codex, false)
         .await
         .expect("enter Codex routing mode");
     let proxy_status = state
@@ -749,7 +749,7 @@ experimental_bearer_token = "deepseek-key"
         .await
         .expect("use ephemeral proxy port");
 
-    cc_switch_lib::mode::controller::enter(&state, &AppType::Codex)
+    cc_switch_lib::mode::controller::enter(&state, &AppType::Codex, false)
         .await
         .expect("enable Codex takeover");
     assert!(
@@ -2165,7 +2165,7 @@ fn sync_current_provider_for_app_leaves_the_proxy_contract_alone() {
             .update_proxy_config(proxy_config)
             .await
             .expect("use ephemeral proxy port");
-        cc_switch_lib::mode::controller::enter(&state, &AppType::Claude)
+        cc_switch_lib::mode::controller::enter(&state, &AppType::Claude, false)
             .await
             .expect("enter routing mode");
     });

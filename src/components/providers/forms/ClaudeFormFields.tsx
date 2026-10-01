@@ -48,6 +48,10 @@ import {
   type FetchedModel,
 } from "@/lib/api/model-fetch";
 import { CustomUserAgentField } from "./CustomUserAgentField";
+import {
+  ClaudeStackModelsField,
+  type ClaudeStackModelRow,
+} from "./ClaudeStackModelsField";
 import { LocalProxyRequestOverridesField } from "./LocalProxyRequestOverridesField";
 import {
   ClaudeAppendInstructionsFileField,
@@ -181,6 +185,14 @@ interface ClaudeFormFieldsProps {
   onSystemInstructionsChange: (config: ClaudeSystemInstructionsConfig) => void;
   appendInstructions: ClaudeAppendInstructionsConfig;
   onAppendInstructionsChange: (config: ClaudeAppendInstructionsConfig) => void;
+  /**
+   * 布局：`classic` 是直连 / 路由用的完整表单；`stack` 是 Stack 模式的简化面板（连接 +
+   * 模型列表 + 高级），不显示模型映射。
+   */
+  variant?: "classic" | "stack";
+  /** Stack 布局的模型列表（第一行是这家的默认模型）。 */
+  stackModelRows?: ClaudeStackModelRow[];
+  onStackModelRowsChange?: (rows: ClaudeStackModelRow[]) => void;
 }
 
 export function ClaudeFormFields({
@@ -255,6 +267,9 @@ export function ClaudeFormFields({
   onSystemInstructionsChange,
   appendInstructions,
   onAppendInstructionsChange,
+  variant = "classic",
+  stackModelRows = [],
+  onStackModelRowsChange,
 }: ClaudeFormFieldsProps) {
   const { t } = useTranslation();
   const hasRequestOverrides = Boolean(
@@ -285,6 +300,14 @@ export function ClaudeFormFields({
       setAdvancedExpanded(true);
     }
   }, [hasAnyAdvancedValue, isXaiOauthPreset]);
+
+  // Stack 高级区包含请求覆盖、精确别名和工具桥接；已有自定义值时展开。
+  const [stackAdvancedExpanded, setStackAdvancedExpanded] = useState(
+    !!customUserAgent ||
+      hasRequestOverrides ||
+      toolCallBridge ||
+      modelAliases.length > 0,
+  );
 
   // Copilot 可用模型列表
   const [copilotModels, setCopilotModels] = useState<CopilotModel[]>([]);
@@ -677,7 +700,7 @@ export function ClaudeFormFields({
     handleRoleModelChange(row, setClaudeOneMMarker(row.model, enabled));
   };
 
-  return (
+  const oauthSections = (
     <>
       {/* GitHub Copilot OAuth 认证 */}
       {isCopilotPreset && (
@@ -715,7 +738,11 @@ export function ClaudeFormFields({
           onAccountSelect={onXaiAccountSelect}
         />
       )}
+    </>
+  );
 
+  const apiKeySection = (
+    <>
       {/* API Key 输入框（非 OAuth 预设时显示） */}
       {shouldShowApiKey && !usesOAuth && (
         <ApiKeySection
@@ -728,7 +755,11 @@ export function ClaudeFormFields({
           partnerPromotionKey={partnerPromotionKey}
         />
       )}
+    </>
+  );
 
+  const templateSection = (
+    <>
       {/* 模板变量输入 */}
       {templateValueEntries.length > 0 && (
         <div className="space-y-3">
@@ -763,7 +794,11 @@ export function ClaudeFormFields({
           </div>
         </div>
       )}
+    </>
+  );
 
+  const endpointSection = (
+    <>
       {/* Base URL 输入框 */}
       {shouldShowSpeedTest && (
         <EndpointField
@@ -795,7 +830,11 @@ export function ClaudeFormFields({
           onFullUrlChange={onFullUrlChange}
         />
       )}
+    </>
+  );
 
+  const speedTestModal = (
+    <>
       {/* 端点测速弹窗 */}
       {shouldShowSpeedTest && showEndpointTools && isEndpointModalOpen && (
         <EndpointSpeedTest
@@ -811,7 +850,92 @@ export function ClaudeFormFields({
           onCustomEndpointsChange={onCustomEndpointsChange}
         />
       )}
+    </>
+  );
 
+  // 上游格式、认证字段：经典布局放在高级选项里，Stack 布局放在连接区。
+  const apiFormatField = (
+    <>
+      {/* 上游格式选择（仅非云服务商显示） */}
+      {category !== "cloud_provider" && !isXaiOauthPreset && (
+        <div className="space-y-2">
+          <FormLabel htmlFor="apiFormat">
+            {t("providerForm.apiFormat", { defaultValue: "上游格式" })}
+          </FormLabel>
+          <Select value={apiFormat} onValueChange={onApiFormatChange}>
+            <SelectTrigger id="apiFormat" className="w-full">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="anthropic">
+                {t("providerForm.apiFormatAnthropic", {
+                  defaultValue: "Anthropic Messages (原生)",
+                })}
+              </SelectItem>
+              <SelectItem value="openai_chat">
+                {t("providerForm.apiFormatOpenAIChat", {
+                  defaultValue: "OpenAI Chat Completions (需转换)",
+                })}
+              </SelectItem>
+              <SelectItem value="openai_responses">
+                {t("providerForm.apiFormatOpenAIResponses", {
+                  defaultValue: "OpenAI Responses API (需转换)",
+                })}
+              </SelectItem>
+              <SelectItem value="gemini_native">
+                {t("providerForm.apiFormatGeminiNative", {
+                  defaultValue: "Gemini Native generateContent (需转换)",
+                })}
+              </SelectItem>
+            </SelectContent>
+          </Select>
+          <p className="text-xs leading-relaxed text-muted-foreground">
+            {t("providerForm.apiFormatHint", {
+              defaultValue:
+                "供应商原生为 Anthropic Messages API 就选 Anthropic Messages（直连，不转换格式）；使用 Chat Completions 协议就选 Chat；使用 Responses API 就选 Responses；使用 Gemini generateContent 协议就选 Gemini Native。Chat、Responses 与 Gemini Native 均需开启路由接管才能转换为 Anthropic Messages。",
+            })}
+          </p>
+        </div>
+      )}
+    </>
+  );
+
+  // 认证字段选择器
+  const authFieldSelect = (
+    <div className="space-y-2">
+      <FormLabel>
+        {t("providerForm.authField", { defaultValue: "认证字段" })}
+      </FormLabel>
+      <Select
+        value={apiKeyField}
+        onValueChange={(v) => onApiKeyFieldChange(v as ClaudeApiKeyField)}
+      >
+        <SelectTrigger>
+          <SelectValue />
+        </SelectTrigger>
+        <SelectContent>
+          <SelectItem value="ANTHROPIC_AUTH_TOKEN">
+            {t("providerForm.authFieldAuthToken", {
+              defaultValue: "ANTHROPIC_AUTH_TOKEN（默认）",
+            })}
+          </SelectItem>
+          <SelectItem value="ANTHROPIC_API_KEY">
+            {t("providerForm.authFieldApiKey", {
+              defaultValue: "ANTHROPIC_API_KEY",
+            })}
+          </SelectItem>
+        </SelectContent>
+      </Select>
+      <p className="text-xs text-muted-foreground">
+        {t("providerForm.authFieldHint", {
+          defaultValue: "选择写入配置的认证环境变量名",
+        })}
+      </p>
+    </div>
+  );
+
+  const instructionFields = (
+    <>
       <ClaudeSystemInstructionsFileField
         config={systemInstructions}
         onChange={onSystemInstructionsChange}
@@ -823,6 +947,145 @@ export function ClaudeFormFields({
       />
 
       <ClaudeShellWrapperCard />
+    </>
+  );
+
+  const bridgeField = (
+    <>
+      {apiFormat === "openai_chat" && category !== "cloud_provider" && (
+        <div className="flex items-start justify-between gap-4 rounded-lg border border-white/10 p-3">
+          <div className="space-y-1">
+            <FormLabel htmlFor="toolCallBridge">
+              {t("providerForm.toolCallBridge", {
+                defaultValue: "工具调用桥接",
+              })}
+            </FormLabel>
+            <p className="text-xs text-muted-foreground">
+              {t("providerForm.toolCallBridgeHint", {
+                defaultValue:
+                  "用于不支持原生 tools/tool_calls 的 OpenAI 兼容接口：把工具定义写入提示词，并把模型返回的 JSON 解析回工具调用。",
+              })}
+            </p>
+          </div>
+          <Switch
+            id="toolCallBridge"
+            checked={toolCallBridge}
+            onCheckedChange={onToolCallBridgeChange}
+          />
+        </div>
+      )}
+    </>
+  );
+
+  const aliasField = (
+    <>
+      {onModelAliasesChange && (
+        <div className="border-t border-border-default pt-3">
+          <ModelAliasEditor
+            entries={modelAliases}
+            onChange={onModelAliasesChange}
+          />
+        </div>
+      )}
+    </>
+  );
+
+  if (variant === "stack") {
+    // 批量勾选模型用当前预设对应的那份上游列表。
+    const stackFetchedModels: FetchedModel[] = isCopilotPreset
+      ? copilotModels.map((m) => ({ id: m.id, ownedBy: m.vendor || null }))
+      : isCodexOauthPreset
+        ? codexOauthModels
+        : isXaiOauthPreset
+          ? xaiOauthModels
+          : fetchedModels;
+    // 认证字段只对 Anthropic 格式、自己填 Key 的供应商有意义，放在 Key 旁边。
+    const showAuthField =
+      shouldShowApiKey &&
+      !usesOAuth &&
+      !isCodexOauthPreset &&
+      !isXaiOauthPreset &&
+      apiFormat === "anthropic";
+
+    return (
+      <>
+        {oauthSections}
+        {apiFormatField}
+        {apiKeySection}
+        {showAuthField && authFieldSelect}
+        {templateSection}
+        {endpointSection}
+        {instructionFields}
+        {speedTestModal}
+
+        {onStackModelRowsChange && (
+          <ClaudeStackModelsField
+            rows={stackModelRows}
+            onRowsChange={onStackModelRowsChange}
+            fetchedModels={stackFetchedModels}
+            onFetchModels={handleModelFetchClick}
+            isFetchingModels={modelFetchLoading}
+          />
+        )}
+
+        <Collapsible
+          open={stackAdvancedExpanded}
+          onOpenChange={setStackAdvancedExpanded}
+          className="rounded-lg border border-border-default p-4"
+        >
+          <CollapsibleTrigger asChild>
+            <Button
+              type="button"
+              variant={null}
+              size="sm"
+              className="h-8 w-full justify-start gap-1.5 px-0 text-sm font-medium text-foreground hover:opacity-70"
+            >
+              {stackAdvancedExpanded ? (
+                <ChevronDown className="h-4 w-4" />
+              ) : (
+                <ChevronRight className="h-4 w-4" />
+              )}
+              {t("providerForm.advancedOptionsToggle")}
+            </Button>
+          </CollapsibleTrigger>
+          {!stackAdvancedExpanded && (
+            <p className="text-xs text-muted-foreground mt-1 ml-1">
+              {t("providerForm.stackLayout.advancedHint", {
+                defaultValue: "自定义 User-Agent 与请求覆盖，一般无需修改。",
+              })}
+            </p>
+          )}
+          <CollapsibleContent className="space-y-4 pt-2">
+            {bridgeField}
+            {aliasField}
+            <CustomUserAgentField
+              id="claude-custom-user-agent"
+              value={customUserAgent}
+              onChange={onCustomUserAgentChange}
+            />
+            <div className="border-t border-border-default pt-3">
+              <LocalProxyRequestOverridesField
+                headersJson={localProxyHeadersOverride}
+                bodyJson={localProxyBodyOverride}
+                onHeadersJsonChange={onLocalProxyHeadersOverrideChange}
+                onBodyJsonChange={onLocalProxyBodyOverrideChange}
+              />
+            </div>
+          </CollapsibleContent>
+        </Collapsible>
+      </>
+    );
+  }
+
+  return (
+    <>
+      {oauthSections}
+      {apiKeySection}
+      {templateSection}
+      {endpointSection}
+      {speedTestModal}
+
+      {instructionFields}
 
       {shouldShowModelSelector && (
         <Collapsible
@@ -851,104 +1114,11 @@ export function ClaudeFormFields({
             </p>
           )}
           <CollapsibleContent className="space-y-4 pt-2">
-            {/* 上游格式选择（仅非云服务商显示） */}
-            {category !== "cloud_provider" && !isXaiOauthPreset && (
-              <div className="space-y-2">
-                <FormLabel htmlFor="apiFormat">
-                  {t("providerForm.apiFormat", { defaultValue: "上游格式" })}
-                </FormLabel>
-                <Select value={apiFormat} onValueChange={onApiFormatChange}>
-                  <SelectTrigger id="apiFormat" className="w-full">
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="anthropic">
-                      {t("providerForm.apiFormatAnthropic", {
-                        defaultValue: "Anthropic Messages (原生)",
-                      })}
-                    </SelectItem>
-                    <SelectItem value="openai_chat">
-                      {t("providerForm.apiFormatOpenAIChat", {
-                        defaultValue: "OpenAI Chat Completions (需转换)",
-                      })}
-                    </SelectItem>
-                    <SelectItem value="openai_responses">
-                      {t("providerForm.apiFormatOpenAIResponses", {
-                        defaultValue: "OpenAI Responses API (需转换)",
-                      })}
-                    </SelectItem>
-                    <SelectItem value="gemini_native">
-                      {t("providerForm.apiFormatGeminiNative", {
-                        defaultValue: "Gemini Native generateContent (需转换)",
-                      })}
-                    </SelectItem>
-                  </SelectContent>
-                </Select>
-                <p className="text-xs leading-relaxed text-muted-foreground">
-                  {t("providerForm.apiFormatHint", {
-                    defaultValue:
-                      "供应商原生为 Anthropic Messages API 就选 Anthropic Messages（直连，不转换格式）；使用 Chat Completions 协议就选 Chat；使用 Responses API 就选 Responses；使用 Gemini generateContent 协议就选 Gemini Native。Chat、Responses 与 Gemini Native 均需开启路由接管才能转换为 Anthropic Messages。",
-                  })}
-                </p>
-              </div>
-            )}
+            {apiFormatField}
 
-            {apiFormat === "openai_chat" && category !== "cloud_provider" && (
-              <div className="flex items-start justify-between gap-4 rounded-lg border border-white/10 p-3">
-                <div className="space-y-1">
-                  <FormLabel htmlFor="toolCallBridge">
-                    {t("providerForm.toolCallBridge", {
-                      defaultValue: "工具调用桥接",
-                    })}
-                  </FormLabel>
-                  <p className="text-xs text-muted-foreground">
-                    {t("providerForm.toolCallBridgeHint", {
-                      defaultValue:
-                        "用于不支持原生 tools/tool_calls 的 OpenAI 兼容接口：把工具定义写入提示词，并把模型返回的 JSON 解析回工具调用。",
-                    })}
-                  </p>
-                </div>
-                <Switch
-                  id="toolCallBridge"
-                  checked={toolCallBridge}
-                  onCheckedChange={onToolCallBridgeChange}
-                />
-              </div>
-            )}
+            {bridgeField}
 
-            {/* 认证字段选择器 */}
-            <div className="space-y-2">
-              <FormLabel>
-                {t("providerForm.authField", { defaultValue: "认证字段" })}
-              </FormLabel>
-              <Select
-                value={apiKeyField}
-                onValueChange={(v) =>
-                  onApiKeyFieldChange(v as ClaudeApiKeyField)
-                }
-              >
-                <SelectTrigger>
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="ANTHROPIC_AUTH_TOKEN">
-                    {t("providerForm.authFieldAuthToken", {
-                      defaultValue: "ANTHROPIC_AUTH_TOKEN（默认）",
-                    })}
-                  </SelectItem>
-                  <SelectItem value="ANTHROPIC_API_KEY">
-                    {t("providerForm.authFieldApiKey", {
-                      defaultValue: "ANTHROPIC_API_KEY",
-                    })}
-                  </SelectItem>
-                </SelectContent>
-              </Select>
-              <p className="text-xs text-muted-foreground">
-                {t("providerForm.authFieldHint", {
-                  defaultValue: "选择写入配置的认证环境变量名",
-                })}
-              </p>
-            </div>
+            {authFieldSelect}
 
             {/* 模型映射 */}
             <div className="space-y-1 border-t border-border-default pt-2">
@@ -1161,14 +1331,7 @@ export function ClaudeFormFields({
               </p>
             </div>
 
-            {onModelAliasesChange && (
-              <div className="border-t border-border-default pt-3">
-                <ModelAliasEditor
-                  entries={modelAliases}
-                  onChange={onModelAliasesChange}
-                />
-              </div>
-            )}
+            {aliasField}
 
             <CustomUserAgentField
               id="claude-custom-user-agent"
