@@ -834,12 +834,12 @@ mod tests {
         use crate::{database::Database, store::AppState};
         use std::sync::Arc;
 
-        let temp = tempdir().unwrap();
+        let temp = tempfile::tempdir().unwrap();
         let path = temp.path().join("AGENTS.md");
         let state = AppState::new(Arc::new(Database::memory().unwrap()));
         state
             .db
-            .save_prompt("mcode", &prompt("active", "original", true))
+            .save_prompt("mcode", &prompt_with_content("active", "original", true))
             .unwrap();
         std::fs::write(&path, "native original").unwrap();
         state
@@ -850,8 +850,8 @@ mod tests {
             .execute_batch("PRAGMA query_only = ON")
             .unwrap();
         for changed in [
-            prompt("active", "edited", true),
-            prompt("active", "original", false),
+            prompt_with_content("active", "edited", true),
+            prompt_with_content("active", "original", false),
         ] {
             assert!(upsert_mcode_prompt(&state, "active", changed, &path).is_err());
             assert_eq!(std::fs::read_to_string(&path).unwrap(), "native original");
@@ -860,9 +860,13 @@ mod tests {
             assert_eq!(saved["active"].content, "original");
         }
         std::fs::remove_file(&path).unwrap();
-        assert!(
-            upsert_mcode_prompt(&state, "new", prompt("new", "new content", true), &path).is_err()
-        );
+        assert!(upsert_mcode_prompt(
+            &state,
+            "new",
+            prompt_with_content("new", "new content", true),
+            &path
+        )
+        .is_err());
         assert!(!path.exists());
         assert!(!state.db.get_prompts("mcode").unwrap().contains_key("new"));
         state
@@ -872,9 +876,21 @@ mod tests {
             .unwrap()
             .execute_batch("PRAGMA query_only = OFF")
             .unwrap();
-        upsert_mcode_prompt(&state, "active", prompt("active", "edited", true), &path).unwrap();
+        upsert_mcode_prompt(
+            &state,
+            "active",
+            prompt_with_content("active", "edited", true),
+            &path,
+        )
+        .unwrap();
         assert_eq!(std::fs::read_to_string(&path).unwrap(), "edited");
-        upsert_mcode_prompt(&state, "active", prompt("active", "edited", false), &path).unwrap();
+        upsert_mcode_prompt(
+            &state,
+            "active",
+            prompt_with_content("active", "edited", false),
+            &path,
+        )
+        .unwrap();
         assert_eq!(std::fs::read_to_string(&path).unwrap(), "");
         assert!(!state.db.get_prompts("mcode").unwrap()["active"].enabled);
     }
@@ -885,16 +901,16 @@ mod tests {
         use crate::{database::Database, store::AppState};
         use std::sync::Arc;
 
-        let temp = tempdir().unwrap();
+        let temp = tempfile::tempdir().unwrap();
         let path = temp.path().join("AGENTS.md");
         let state = AppState::new(Arc::new(Database::memory().unwrap()));
         state
             .db
-            .save_prompt("mcode", &prompt("a-current", "stored", true))
+            .save_prompt("mcode", &prompt_with_content("a-current", "stored", true))
             .unwrap();
         state
             .db
-            .save_prompt("mcode", &prompt("z-target", "target", false))
+            .save_prompt("mcode", &prompt_with_content("z-target", "target", false))
             .unwrap();
         std::fs::write(&path, "native edit").unwrap();
         state
@@ -935,12 +951,12 @@ mod tests {
         use crate::{database::Database, store::AppState};
         use std::sync::Arc;
 
-        let temp = tempdir().unwrap();
+        let temp = tempfile::tempdir().unwrap();
         let path = temp.path().join("AGENTS.md");
         let state = AppState::new(Arc::new(Database::memory().unwrap()));
         state
             .db
-            .save_prompt("mcode", &prompt("target", "managed", false))
+            .save_prompt("mcode", &prompt_with_content("target", "managed", false))
             .unwrap();
         std::fs::write(&path, "unmanaged").unwrap();
         state
