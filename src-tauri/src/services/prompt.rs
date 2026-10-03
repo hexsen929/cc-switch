@@ -203,7 +203,7 @@ impl PromptService {
             } else {
                 content.clone()
             };
-            if !(next_memory.trim().is_empty() && !target_path.exists())
+            if (!next_memory.trim().is_empty() || target_path.exists())
                 && next_memory != current_memory
             {
                 write_text_file(&target_path, &next_memory)?;

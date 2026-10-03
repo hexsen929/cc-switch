@@ -691,7 +691,7 @@ describe("PiProviderForm", () => {
     expect(config).not.toHaveProperty("authHeader");
     expect(config.headers).not.toHaveProperty("authorization");
     expect(config.headers).not.toHaveProperty("x-api-key");
-  });
+  }, 15_000); // Full form interaction can exceed 5s on shared CI runners.
 
   it("echoes existing Pi headers and preserves them when saving", async () => {
     const onSubmit = vi.fn().mockResolvedValue(undefined);

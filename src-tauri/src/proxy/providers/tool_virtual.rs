@@ -111,16 +111,14 @@ fn build_openai_tool_instruction(
         Value::String(value) if value == "none" => {
             instructions.push("- You must not call any tool.".to_string());
         }
-        Value::Object(obj) => {
-            if obj.get("type").and_then(Value::as_str) == Some("function") {
-                if let Some(name) = obj
-                    .get("function")
-                    .and_then(|f| f.get("name"))
-                    .and_then(Value::as_str)
-                    .filter(|name| !name.trim().is_empty())
-                {
-                    instructions.push(format!("- You must call the tool `{}`.", name.trim()));
-                }
+        Value::Object(obj) if obj.get("type").and_then(Value::as_str) == Some("function") => {
+            if let Some(name) = obj
+                .get("function")
+                .and_then(|f| f.get("name"))
+                .and_then(Value::as_str)
+                .filter(|name| !name.trim().is_empty())
+            {
+                instructions.push(format!("- You must call the tool `{}`.", name.trim()));
             }
         }
         _ => {}

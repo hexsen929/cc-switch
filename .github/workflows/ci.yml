@@ -218,9 +218,12 @@ jobs:
         run: |
           $testBinary = cargo test --lib --manifest-path src-tauri/Cargo.toml --no-run --message-format=json |
             ForEach-Object {
-              if ($_ -match '"reason":"compiler-artifact"') {
+              if ($_ -match '"reason":"compiler-(artifact|message)"') {
                 $artifact = $_ | ConvertFrom-Json
-                if ($artifact.executable -and $artifact.profile.test -and $artifact.target.name -eq 'cc_switch_lib') {
+                if ($artifact.reason -eq 'compiler-message') {
+                  # Keep diagnostics visible without mixing them into the executable path pipeline.
+                  Write-Host $artifact.message.rendered
+                } elseif ($artifact.executable -and $artifact.profile.test -and $artifact.target.name -eq 'cc_switch_lib') {
                   $artifact.executable
                 }
               }

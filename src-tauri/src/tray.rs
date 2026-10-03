@@ -313,6 +313,7 @@ fn managed_codex_account_id(provider: &crate::provider::Provider) -> Option<Stri
     None
 }
 
+#[cfg(test)]
 fn provider_has_managed_codex_account(provider: &crate::provider::Provider) -> bool {
     managed_codex_account_id(provider).is_some()
 }
@@ -335,6 +336,7 @@ fn provider_uses_official_subscription(provider: &crate::provider::Provider) -> 
         .unwrap_or(false)
 }
 
+#[cfg(test)]
 fn provider_has_official_usage_route(provider: &crate::provider::Provider) -> bool {
     provider.category.as_deref() == Some("official")
         || (provider_has_managed_codex_account(provider)
