@@ -477,6 +477,9 @@ jobs:
       - name: Install frontend deps
         run: pnpm install --frozen-lockfile
 
+      - name: Verify DMG arguments under macOS Bash
+        run: pnpm vitest run tests/workflows/releaseDmgArguments.test.ts
+
       - name: Prepare Tauri signing key
         uses: ./.github/actions/prepare-tauri-signing-key
         with:
@@ -648,11 +651,6 @@ jobs:
           echo "macOS zip ready: $NEW_ZIP"
 
           # 3) Create styled DMG with create-dmg (Tauri's built-in DMG styling doesn't work on CI)
-          DMG_CODESIGN_ARGS=()
-          if [ -n "${APPLE_SIGNING_IDENTITY:-}" ]; then
-            DMG_CODESIGN_ARGS=(--codesign "$APPLE_SIGNING_IDENTITY")
-          fi
-
           HOMEBREW_NO_AUTO_UPDATE=1 brew install create-dmg
           NEW_DMG="CC-Switch-${VERSION}-macOS.dmg"
           DMG_STAGE_DIR="$RUNNER_TEMP/dmg-stage"
@@ -660,7 +658,9 @@ jobs:
           mkdir -p "$DMG_STAGE_DIR"
           ditto "$APP_PATH" "$DMG_STAGE_DIR/CC Switch.app"
 
-          create-dmg \
+          # Build the argument vector with positional parameters: Bash 3.2 treats
+          # an empty array as unset under nounset. Preserve spaces in signing identities.
+          set -- \
             --volname "CC Switch" \
             --background "src-tauri/icons/dmg-background.png" \
             --window-size 660 400 \
@@ -668,8 +668,11 @@ jobs:
             --icon-size 80 \
             --icon "CC Switch.app" 180 220 \
             --hide-extension "CC Switch.app" \
-            --app-drop-link 480 220 \
-            "${DMG_CODESIGN_ARGS[@]}" \
+            --app-drop-link 480 220
+          if [ -n "${APPLE_SIGNING_IDENTITY:-}" ]; then
+            set -- "$@" --codesign "$APPLE_SIGNING_IDENTITY"
+          fi
+          create-dmg "$@" \
             --no-internet-enable \
             "release-assets/$NEW_DMG" \
             "$DMG_STAGE_DIR"
