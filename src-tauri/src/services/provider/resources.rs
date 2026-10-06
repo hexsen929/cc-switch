@@ -62,8 +62,21 @@ pub(crate) fn sync(state: &AppState, app: &AppType) -> Result<(), AppError> {
                 .map(|_| ())
         }
         Resource::Mcp => crate::services::mcp::McpService::sync_enabled_for_app(state, app),
-        Resource::Skills => crate::services::skill::SkillService::sync_to_app(&state.db, app)
-            .map_err(|error| AppError::Message(error.to_string())),
+        Resource::Skills => {
+            let failed = crate::services::skill::SkillService::sync_to_app_report(&state.db, app)
+                .map_err(|error| AppError::Message(error.to_string()))?;
+            if failed.is_empty() {
+                Ok(())
+            } else {
+                Err(AppError::Message(
+                    failed
+                        .iter()
+                        .map(|failure| format!("{}: {}", failure.directory, failure.error))
+                        .collect::<Vec<_>>()
+                        .join("; "),
+                ))
+            }
+        }
         Resource::Prompt => crate::services::prompt::PromptService::sync_effective_prompt_to_file(
             state,
             app.clone(),

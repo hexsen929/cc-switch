@@ -861,11 +861,8 @@ impl SkillService {
                 let mut updated = existing.clone();
                 updated.apps.set_enabled_for(current_app, true);
                 db.save_skill(&updated)?;
-                let sync_result = if matches!(current_app, AppType::Pi) {
-                    Self::sync_to_app_dir(&updated.directory, current_app)
-                } else {
-                    Self::sync_to_app_unlocked(db, current_app)
-                };
+                let sync_result =
+                    Self::sync_skill_with_overrides_unlocked(db, current_app, &updated.directory);
                 if let Err(error) = sync_result {
                     if let Err(rollback_error) = db.save_skill(existing) {
                         log::error!(
@@ -1747,7 +1744,9 @@ impl SkillService {
             if matches!(app, AppType::Pi | AppType::Mcode) {
                 continue;
             }
-            if let Err(e) = Self::sync_to_app_unlocked(db, &app) {
+            if let Err(e) =
+                Self::sync_skill_with_overrides_unlocked(db, &app, &updated_skill.directory)
+            {
                 log::warn!("同步更新后的 skill 到 {:?} 失败: {e}", app);
             }
         }
@@ -2146,11 +2145,11 @@ impl SkillService {
         }
 
         if !restored_skill.apps.is_empty() {
-            let sync_result = if matches!(current_app, AppType::Pi) {
-                Self::sync_to_app_dir(&restored_skill.directory, current_app)
-            } else {
-                Self::sync_to_app_unlocked(db, current_app)
-            };
+            let sync_result = Self::sync_skill_with_overrides_unlocked(
+                db,
+                current_app,
+                &restored_skill.directory,
+            );
             if let Err(err) = sync_result {
                 let _ = db.delete_skill(&restored_skill.id);
                 let _ = fs::remove_dir_all(&restore_path);
@@ -2193,7 +2192,7 @@ impl SkillService {
             // Persist desired state first so provider-specific disabled IDs are
             // applied while rebuilding the complete application projection.
             db.update_skill_apps(id, &skill.apps)?;
-            Self::sync_to_app_unlocked(db, app)?;
+            Self::sync_skill_with_overrides_unlocked(db, app, &skill.directory)?;
         }
 
         log::info!("Skill {} 的 {:?} 状态已更新为 {}", skill.name, app, enabled);
@@ -2485,11 +2484,7 @@ impl SkillService {
         let source = Self::get_ssot_dir()?.join(&skill.directory);
         Self::preflight_install_destination(&source, &skill.directory, app)?;
         db.save_skill(skill)?;
-        let sync_result = if matches!(app, AppType::Pi) {
-            Self::sync_to_app_dir(&skill.directory, app)
-        } else {
-            Self::sync_to_app_unlocked(db, app)
-        };
+        let sync_result = Self::sync_skill_with_overrides_unlocked(db, app, &skill.directory);
         if let Err(error) = sync_result {
             if let Err(rollback_error) = db.delete_skill(&skill.id) {
                 log::error!(
@@ -2848,8 +2843,41 @@ impl SkillService {
 
     /// 同步所有已启用的 Skills 到指定应用
     pub fn sync_to_app(db: &Arc<Database>, app: &AppType) -> Result<()> {
+        Self::sync_to_app_report(db, app).map(|_| ())
+    }
+
+    /// Like sync_to_app, but retain per-Skill failures for provider resource warnings/retries.
+    pub(crate) fn sync_to_app_report(
+        db: &Arc<Database>,
+        app: &AppType,
+    ) -> Result<Vec<SkillSyncFailure>> {
         let _state_guard = skill_state_read_guard();
-        Self::sync_to_app_unlocked(db, app).map(|_| ())
+        Self::sync_to_app_unlocked(db, app)
+    }
+
+    /// Install/restore/toggle a single Skill while respecting the current provider's
+    /// overrides. Unrelated broken Skills are reported by the projection loop, but
+    /// must not roll back this Skill's successful installation. Caller owns the write guard.
+    fn sync_skill_with_overrides_unlocked(
+        db: &Arc<Database>,
+        app: &AppType,
+        directory: &str,
+    ) -> Result<()> {
+        if matches!(app, AppType::Pi) {
+            return Self::sync_to_app_dir(directory, app);
+        }
+        let failed = Self::sync_to_app_unlocked(db, app)?;
+        if let Some(failure) = failed
+            .into_iter()
+            .find(|failure| failure.directory == directory)
+        {
+            return Err(anyhow!(
+                "同步 Skill {} 到 {app:?} 失败: {}",
+                directory,
+                failure.error
+            ));
+        }
+        Ok(())
     }
 
     /// Skills 不由 `sync_to_app` 投影的应用：Claude Desktop、OpenClaw 不支持 Skills，
@@ -2890,9 +2918,8 @@ impl SkillService {
     /// Caller must hold either the Skills state read or write guard.
     /// 返回同步失败、被跳过的 Skill（整个应用失败时返回 Err）。
     fn sync_to_app_unlocked(db: &Arc<Database>, app: &AppType) -> Result<Vec<SkillSyncFailure>> {
-        let mut failed = Vec::new();
         if !Self::is_sync_managed_app(app) {
-            return Ok(failed);
+            return Ok(Vec::new());
         }
         let current_provider = Self::get_current_provider_for_app(db, app)?;
         Self::sync_to_app_for_provider(db, app, current_provider.as_ref())
@@ -2903,9 +2930,10 @@ impl SkillService {
         db: &Arc<Database>,
         app: &AppType,
         current_provider: Option<&Provider>,
-    ) -> Result<()> {
-        if matches!(app, AppType::ClaudeDesktop | AppType::Pi) {
-            return Ok(());
+    ) -> Result<Vec<SkillSyncFailure>> {
+        let mut failed = Vec::new();
+        if !Self::is_sync_managed_app(app) {
+            return Ok(failed);
         }
 
         let skills = db.get_all_installed_skills()?;
@@ -6808,6 +6836,77 @@ mod tests {
         );
     }
 
+    #[test]
+    #[serial_test::serial]
+    fn provider_sync_reports_failures_without_skipping_healthy_overrides() {
+        let temp = tempdir().unwrap();
+        let _home = TestHomeGuard::set(temp.path());
+        let _location = StorageLocationGuard::set(SkillStorageLocation::CcSwitch);
+        let db = Arc::new(Database::memory().unwrap());
+        let good = poisoned_skill("local:good", "healthy");
+        let bad = poisoned_skill("local:bad", "missing");
+        db.save_skill(&good).unwrap();
+        db.save_skill(&bad).unwrap();
+        write_skill(
+            &SkillService::get_ssot_dir().unwrap().join("healthy"),
+            "healthy",
+        );
+        let provider = provider_with_skill_overrides(&[], &[&good.id, &bad.id]);
+        let failed =
+            SkillService::sync_to_app_for_provider(&db, &AppType::Claude, Some(&provider)).unwrap();
+        assert_eq!(failed.len(), 1);
+        assert_eq!(failed[0].directory, "missing");
+        assert!(!failed[0].error.is_empty());
+        assert!(SkillService::get_app_skills_dir(&AppType::Claude)
+            .unwrap()
+            .join("healthy/SKILL.md")
+            .exists());
+        let disabled = provider_with_skill_overrides(&[&bad.id], &[&good.id, &bad.id]);
+        assert!(
+            SkillService::sync_to_app_for_provider(&db, &AppType::Claude, Some(&disabled))
+                .unwrap()
+                .is_empty()
+        );
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn single_install_only_rolls_back_when_its_own_projection_fails() {
+        let temp = tempdir().unwrap();
+        let _home = TestHomeGuard::set(temp.path());
+        let _location = StorageLocationGuard::set(SkillStorageLocation::CcSwitch);
+        let db = Arc::new(Database::memory().unwrap());
+        let mut unrelated = poisoned_skill("local:broken", "missing-other");
+        unrelated.apps = SkillApps::only(&AppType::Claude);
+        db.save_skill(&unrelated).unwrap();
+        let mut good = poisoned_skill("local:good", "healthy");
+        good.apps = SkillApps::only(&AppType::Claude);
+        write_skill(
+            &SkillService::get_ssot_dir().unwrap().join("healthy"),
+            "healthy",
+        );
+        SkillService::persist_and_sync_new_skill(&db, &good, &AppType::Claude).unwrap();
+        assert!(db.get_installed_skill(&good.id).unwrap().is_some());
+        assert!(SkillService::get_app_skills_dir(&AppType::Claude)
+            .unwrap()
+            .join("healthy/SKILL.md")
+            .exists());
+
+        let mut missing = poisoned_skill("local:missing-target", "missing-target");
+        missing.apps = SkillApps::only(&AppType::Claude);
+        let error =
+            SkillService::persist_and_sync_new_skill(&db, &missing, &AppType::Claude).unwrap_err();
+        assert!(error.to_string().contains("missing-target"));
+        assert!(db.get_installed_skill(&missing.id).unwrap().is_none());
+        assert!(db.get_installed_skill(&good.id).unwrap().is_some());
+
+        let state = crate::store::AppState::new(db.clone());
+        let error =
+            crate::services::provider::resources::sync(&state, &AppType::Claude).unwrap_err();
+        assert!(error.to_string().contains("Skills"));
+        assert!(error.to_string().contains("missing-other"));
+    }
+
     /// 构造只带 Skill 覆盖的 provider。
     fn provider_with_skill_overrides(
         disabled_skill_ids: &[&str],
@@ -7593,6 +7692,15 @@ mod tests {
 
         // 切换供应商走的同一条同步也不能碰它
         SkillService::sync_to_app(&db, &AppType::OpenClaw).expect("no-op sync");
-        assert!(own_skill.exists());
+        let overrides = provider_with_skill_overrides(&[&skill.id], &[]);
+        assert!(
+            SkillService::sync_to_app_for_provider(&db, &AppType::OpenClaw, Some(&overrides))
+                .expect("explicit provider sync must also be a no-op")
+                .is_empty()
+        );
+        assert_eq!(
+            fs::read_to_string(&own_skill).unwrap(),
+            "openclaw's own skill"
+        );
     }
 }
