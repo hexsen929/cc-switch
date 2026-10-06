@@ -6,6 +6,7 @@ import {
   type ProviderFormValues,
 } from "@/components/providers/forms/ProviderForm";
 import type { ProviderCategory, ProviderMeta } from "@/types";
+import type { AppMode } from "@/types/proxy";
 import { createTestQueryClient } from "../utils/testQueryClient";
 
 vi.mock("@/components/claude/ClaudeShellWrapperCard", () => ({
@@ -31,14 +32,17 @@ vi.mock("@/components/providers/forms/ModelAliasEditor", () => ({
 
 const settingsState = vi.hoisted(() => ({ enableStackMode: true }));
 
-vi.mock("@/lib/query", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("@/lib/query")>();
+// 聚合版式只看应用当前是不是聚合模式（和应用页同一份 get_app_mode 数据）
+vi.mock("@/lib/query/proxy", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/lib/query/proxy")>();
   return {
     ...actual,
-    useSettingsQuery: () => ({
+    useAppMode: () => ({
       data: {
-        commonConfigConfirmed: true,
-        enableStackMode: settingsState.enableStackMode,
+        mode: settingsState.enableStackMode ? "stack" : "direct",
+        attached: false,
+        routeProviderId: null,
+        directProviderId: null,
       },
     }),
   };
@@ -84,6 +88,8 @@ function renderForm(
     modelAliases?: Record<string, string>;
     category?: ProviderCategory;
     codexCatalog?: Array<{ model: string; displayName?: string }>;
+    modeView?: AppMode;
+    onStackLayoutChange?: (stackLayout: boolean) => void;
   } = {},
 ) {
   const settingsConfig =
@@ -105,6 +111,8 @@ function renderForm(
         submitLabel="save-provider"
         onSubmit={onSubmit}
         onCancel={vi.fn()}
+        modeView={options.modeView}
+        onStackLayoutChange={options.onStackLayoutChange}
         initialData={{
           name: "Relay",
           category: options.category ?? "third_party",
@@ -187,7 +195,7 @@ describe("ProviderForm Stack layout (Claude Code)", () => {
 
     expect(screen.getByDisplayValue("m-b")).toBeInTheDocument();
     expect(screen.queryByDisplayValue("m-a")).toBeNull();
-    fireEvent.click(screen.getByRole("button", { name: "添加模型" }));
+    fireEvent.click(screen.getByRole("button", { name: "手动添加" }));
     const inputs = screen.getAllByPlaceholderText("例如 deepseek-v4-pro");
     fireEvent.change(inputs[1], { target: { value: "m-c[1M]" } });
 
@@ -197,22 +205,6 @@ describe("ProviderForm Stack layout (Claude Code)", () => {
       { model: "m-c", oneM: true },
     ]);
     expect(settings.env.ANTHROPIC_MODEL).toBe("m-a");
-  });
-
-  it("在简化表单换了默认，切到完整表单保存时 ANTHROPIC_MODEL 也跟着", async () => {
-    const onSubmit = vi.fn();
-    renderForm("claude", onSubmit);
-
-    fireEvent.click(screen.getByRole("button", { name: "设为默认模型" }));
-    fireEvent.click(screen.getByRole("button", { name: "显示完整表单" }));
-
-    const { values, settings } = await save(onSubmit);
-    expect(values.meta?.stackModels?.[0]).toEqual({
-      model: "m-s",
-      displayName: "Model S",
-      oneM: true,
-    });
-    expect(settings.env.ANTHROPIC_MODEL).toBe("m-s[1M]");
   });
 
   it("清空列表后保存为空列表，不再回落到模型映射", async () => {
@@ -235,26 +227,6 @@ describe("ProviderForm Stack layout (Claude Code)", () => {
     expect(JSON.parse(values.settingsConfig).env.ANTHROPIC_MODEL).toBe("m-a");
   });
 
-  it("可以切到完整表单再切回来，改过的列表还在", () => {
-    renderForm("claude", vi.fn());
-
-    fireEvent.click(screen.getByRole("button", { name: "设为默认模型" }));
-    fireEvent.click(screen.getByRole("button", { name: "显示完整表单" }));
-    expect(
-      screen.getByText("providerForm.modelMappingLabel"),
-    ).toBeInTheDocument();
-    expect(screen.queryByText("模型列表")).toBeNull();
-
-    fireEvent.click(
-      screen.getByRole("button", { name: "返回叠加模式的简化表单" }),
-    );
-    const inputs = screen.getAllByPlaceholderText("例如 deepseek-v4-pro");
-    expect(inputs.map((input) => (input as HTMLInputElement).value)).toEqual([
-      "m-s",
-      "m-a",
-    ]);
-  });
-
   it("没开 Stack 设置时用完整表单，保存时原样保留列表", async () => {
     settingsState.enableStackMode = false;
     const onSubmit = vi.fn();
@@ -263,7 +235,6 @@ describe("ProviderForm Stack layout (Claude Code)", () => {
     });
 
     expect(screen.queryByText("模型列表")).toBeNull();
-    expect(screen.queryByRole("button", { name: "显示完整表单" })).toBeNull();
     const { values, settings } = await save(onSubmit);
     expect(values.meta?.stackModels).toEqual([{ model: "m-b", oneM: true }]);
     expect(settings.env.ANTHROPIC_MODEL).toBe("m-a");
@@ -271,8 +242,43 @@ describe("ProviderForm Stack layout (Claude Code)", () => {
 
   it("官方供应商不用简化面板", () => {
     renderForm("claude", vi.fn(), { category: "official" });
-    expect(screen.queryByRole("button", { name: "显示完整表单" })).toBeNull();
     expect(screen.queryByText("模型列表")).toBeNull();
+  });
+
+  it("直连生效时从聚合那格打开：用简化面板", async () => {
+    settingsState.enableStackMode = false;
+    const onSubmit = vi.fn();
+    renderForm("claude", onSubmit, { modeView: "stack" });
+
+    expect(screen.getByText("模型列表")).toBeInTheDocument();
+    expect(screen.queryByText("默认兜底模型")).toBeNull();
+    // 没显示的模型映射原样保存
+    const { settings } = await save(onSubmit);
+    expect(settings.env.ANTHROPIC_DEFAULT_SONNET_MODEL).toBe("m-s[1M]");
+    expect(settings.env.ANTHROPIC_MODEL).toBe("m-a");
+  });
+
+  it("聚合生效时从直连那格打开：用完整表单", () => {
+    renderForm("claude", vi.fn(), { modeView: "direct" });
+    expect(screen.queryByText("模型列表")).toBeNull();
+  });
+
+  it("把用不用简化面板报给页头，卸载时报 false", () => {
+    const onStackLayoutChange = vi.fn();
+    const { unmount } = renderForm("claude", vi.fn(), {
+      modeView: "stack",
+      onStackLayoutChange,
+    });
+    expect(onStackLayoutChange).toHaveBeenLastCalledWith(true);
+    unmount();
+    expect(onStackLayoutChange).toHaveBeenLastCalledWith(false);
+
+    const fullForm = vi.fn();
+    renderForm("claude", vi.fn(), {
+      modeView: "direct",
+      onStackLayoutChange: fullForm,
+    });
+    expect(fullForm).toHaveBeenLastCalledWith(false);
   });
 });
 
@@ -287,7 +293,7 @@ describe("ProviderForm Stack layout (Codex)", () => {
     expect(screen.getByText("模型列表")).toBeInTheDocument();
     expect(
       screen.getByText(
-        "未配置模型：叠加模式下只发布这家的默认模型（config.toml 的 model）。",
+        "未配置模型：聚合模式下只发布这家的默认模型（config.toml 的 model）。",
       ),
     ).toBeInTheDocument();
     expect(document.getElementById("codexDefaultModel")).toBeNull();
@@ -333,7 +339,7 @@ describe("ProviderForm Stack layout (Codex)", () => {
     expect(settings.config).toContain('model = "m-1"');
   });
 
-  it("在简化表单换了默认，切到完整表单保存时 model 也跟着", async () => {
+  it("在简化表单换了默认，保存时 model 也跟着", async () => {
     const onSubmit = vi.fn();
     renderForm("codex", onSubmit, {
       codexCatalog: [
@@ -343,10 +349,6 @@ describe("ProviderForm Stack layout (Codex)", () => {
     });
 
     fireEvent.click(screen.getByRole("button", { name: "设为默认模型" }));
-    fireEvent.click(screen.getByRole("button", { name: "显示完整表单" }));
-    expect(
-      (document.getElementById("codexDefaultModel") as HTMLInputElement).value,
-    ).toBe("m-2");
 
     const { settings } = await save(onSubmit);
     expect(settings.config).toContain('model = "m-2"');
@@ -448,4 +450,11 @@ describe("ProviderForm Stack layout (Codex)", () => {
       }
     },
   );
+
+  it("直连生效时从聚合那格打开：用简化面板", () => {
+    settingsState.enableStackMode = false;
+    renderForm("codex", vi.fn(), { modeView: "stack" });
+    expect(screen.getByText("模型列表")).toBeInTheDocument();
+    expect(screen.queryByTestId("codex-config-editor")).toBeNull();
+  });
 });

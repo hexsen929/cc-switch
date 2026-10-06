@@ -61,6 +61,8 @@ pub struct McpApps {
     pub opencode: bool,
     #[serde(default)]
     pub hermes: bool,
+    #[serde(default)]
+    pub pi: bool,
 }
 
 impl McpApps {
@@ -75,7 +77,7 @@ impl McpApps {
             AppType::OpenClaw => false, // OpenClaw doesn't support MCP
             AppType::Hermes => self.hermes,
             AppType::Mcode => self.mcode,
-            AppType::Pi => false, // Pi core has no native MCP registry.
+            AppType::Pi => self.pi,
             AppType::ClaudeDesktop => false,
         }
     }
@@ -91,7 +93,7 @@ impl McpApps {
             AppType::OpenClaw => {} // OpenClaw doesn't support MCP, ignore
             AppType::Hermes => self.hermes = enabled,
             AppType::Mcode => self.mcode = enabled,
-            AppType::Pi => {}            // Pi core has no native MCP registry.
+            AppType::Pi => self.pi = enabled,
             AppType::ClaudeDesktop => {} // Claude Desktop 3P provider config doesn't support MCP here
         }
     }
@@ -120,6 +122,9 @@ impl McpApps {
         if self.hermes {
             apps.push(AppType::Hermes);
         }
+        if self.pi {
+            apps.push(AppType::Pi);
+        }
         apps
     }
 
@@ -132,6 +137,7 @@ impl McpApps {
             && !self.opencode
             && !self.hermes
             && !self.mcode
+            && !self.pi
     }
 }
 

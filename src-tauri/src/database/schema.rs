@@ -70,7 +70,8 @@ impl Database {
             enabled_gemini BOOLEAN NOT NULL DEFAULT 0, enabled_grokbuild BOOLEAN NOT NULL DEFAULT 0,
             enabled_opencode BOOLEAN NOT NULL DEFAULT 0,
             enabled_mcode BOOLEAN NOT NULL DEFAULT 0,
-            enabled_hermes BOOLEAN NOT NULL DEFAULT 0
+            enabled_hermes BOOLEAN NOT NULL DEFAULT 0,
+            enabled_pi BOOLEAN NOT NULL DEFAULT 0
         )",
             [],
         )
@@ -662,6 +663,14 @@ impl Database {
                     19 => {
                         log::info!("迁移数据库从 v19 到 v20（对齐 fork 与上游分叉迁移）");
                         Self::migrate_v19_to_v20(conn)?;
+                        if Self::table_exists(conn, "mcp_servers")? {
+                            Self::add_column_if_missing(
+                                conn,
+                                "mcp_servers",
+                                "enabled_pi",
+                                "BOOLEAN NOT NULL DEFAULT 0",
+                            )?;
+                        }
                         Self::set_user_version(conn, 20)?;
                     }
                     _ => {
@@ -675,6 +684,16 @@ impl Database {
             // 迁移收尾统一补 fork 私有列：见 ensure_fork_owned_columns 的说明，
             // 已经停在最新版本的库不会再进上面的 while，只能靠这一步兜住。
             Self::ensure_fork_owned_columns(conn)?;
+            // Both old fork and upstream used schema v20 for different changes.
+            // A v20 fork database still needs upstream's Pi MCP column.
+            if Self::table_exists(conn, "mcp_servers")? {
+                Self::add_column_if_missing(
+                    conn,
+                    "mcp_servers",
+                    "enabled_pi",
+                    "BOOLEAN NOT NULL DEFAULT 0",
+                )?;
+            }
             Ok(())
         })();
 
@@ -4045,6 +4064,31 @@ mod tests {
     }
 
     #[test]
+    fn migrate_v19_to_v20_adds_pi_mcp_flag_and_keeps_existing_flags() -> Result<(), AppError> {
+        let conn = Connection::open_in_memory()?;
+        conn.execute_batch(
+            "CREATE TABLE mcp_servers (
+                id TEXT PRIMARY KEY,
+                enabled_codex BOOLEAN NOT NULL DEFAULT 0,
+                enabled_mcode BOOLEAN NOT NULL DEFAULT 0
+            );
+            INSERT INTO mcp_servers (id, enabled_codex, enabled_mcode) VALUES ('mcp-1', 1, 1);",
+        )?;
+        Database::set_user_version(&conn, 19)?;
+
+        Database::apply_schema_migrations_on_conn(&conn)?;
+
+        assert_eq!(Database::get_user_version(&conn)?, SCHEMA_VERSION);
+        let values: (i64, i64, i64) = conn.query_row(
+            "SELECT enabled_codex, enabled_mcode, enabled_pi FROM mcp_servers WHERE id = 'mcp-1'",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        )?;
+        assert_eq!(values, (1, 1, 0));
+        Ok(())
+    }
+
+    #[test]
     fn migrate_v14_to_v15_adds_grokbuild_skill_and_mcp_flags() -> Result<(), AppError> {
         let conn = Connection::open_in_memory()?;
         conn.execute_batch(
@@ -4220,6 +4264,32 @@ mod tests {
              VALUES ('pi_session', 'request', 'semantic', 1)",
             [],
         )?;
+        Ok(())
+    }
+
+    #[test]
+    fn existing_fork_v20_adds_pi_mcp_without_losing_flags() -> Result<(), AppError> {
+        let conn = Connection::open_in_memory()?;
+        conn.execute_batch(
+            "CREATE TABLE mcp_servers (
+                id TEXT PRIMARY KEY,
+                enabled_claude BOOLEAN NOT NULL DEFAULT 0,
+                enabled_codex BOOLEAN NOT NULL DEFAULT 0
+             );
+             INSERT INTO mcp_servers (id, enabled_claude, enabled_codex)
+             VALUES ('existing', 1, 1);",
+        )?;
+        Database::set_user_version(&conn, 20)?;
+        for _ in 0..2 {
+            Database::apply_schema_migrations_on_conn(&conn)?;
+            let flags: (bool, bool, bool) = conn.query_row(
+                "SELECT enabled_claude, enabled_codex, enabled_pi FROM mcp_servers WHERE id = 'existing'",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )?;
+            assert_eq!(flags, (true, true, false));
+            assert_eq!(Database::get_user_version(&conn)?, 20);
+        }
         Ok(())
     }
 

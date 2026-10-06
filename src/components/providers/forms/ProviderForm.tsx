@@ -3,7 +3,7 @@ import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { useQuery } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
-import { toast } from "sonner";
+import { toast } from "@/lib/toast";
 import { Button } from "@/components/ui/button";
 import { Form, FormField, FormItem, FormMessage } from "@/components/ui/form";
 import { ImeSafeInput } from "@/components/ui/ime-safe-input";
@@ -91,7 +91,7 @@ import {
   type ClaudeStackModelRow,
 } from "./ClaudeStackModelsField";
 import { setClaudeOneMMarker } from "./hooks/useModelState";
-import { useSettingsQuery } from "@/lib/query";
+import { useAppMode } from "@/lib/query/proxy";
 import { ClaudeDesktopProviderForm } from "./ClaudeDesktopProviderForm";
 import { GrokBuildProviderForm } from "./GrokBuildProviderForm";
 import { CodexFormFields } from "./CodexFormFields";
@@ -102,6 +102,7 @@ import { OmoFormFields } from "./OmoFormFields";
 import { ProviderResourceOverridesConfig } from "./ProviderResourceOverridesConfig";
 import { normalizeProviderResourceOverrides } from "./providerResourceOverrides";
 import { parseOmoOtherFieldsObject } from "@/types/omo";
+import type { AppMode } from "@/types/proxy";
 import {
   useProviderCategory,
   useDraftEditorProjection,
@@ -333,6 +334,13 @@ export interface ProviderFormProps {
    * 作为三方比较的底；投影进行中或失败时为 `null`。
    */
   onEditorBaseChange?: EditorBaseChange;
+  /**
+   * 从供应商页哪一格（直连 / 路由 / 聚合）打开的：Claude Code、Codex 按它选布局，在聚合那格
+   * 打开就用聚合的简化表单。不传时按应用实际生效的模式。
+   */
+  modeView?: AppMode;
+  /** 用不用聚合的简化表单：页头据此在应用名后标「聚合模式」。卸载时报 false */
+  onStackLayoutChange?: (stackLayout: boolean) => void;
 }
 
 export function ProviderForm(props: ProviderFormProps) {
@@ -366,6 +374,8 @@ function ProviderFormFull({
   inactiveFields,
   claudeLiveBase,
   onEditorBaseChange,
+  modeView,
+  onStackLayoutChange,
 }: ProviderFormProps) {
   if (appId === "claude-desktop") {
     throw new Error("ProviderFormFull should not receive claude-desktop");
@@ -725,8 +735,8 @@ function ProviderFormFull({
     );
   }, [claudeSettingsConfig]);
   const shownClaudeStackRows = claudeStackRows ?? mappedClaudeStackRows;
-  // 列表的第一个就是默认模型：它一变（设为默认、删掉、改名），`ANTHROPIC_MODEL` 当场跟着变，
-  // 两种布局共用这份状态，切到完整表单也看得到；没动第一个就不碰。删光了也不碰。
+  // 列表的第一个就是默认模型：它一变（设为默认、删掉、改名），`ANTHROPIC_MODEL` 当场跟着变；
+  // 没动第一个就不碰。删光了也不碰。
   const handleClaudeStackRowsChange = (rows: ClaudeStackModelRow[]) => {
     setClaudeStackRows(rows);
     const next = claudeStackDefaultModel(rows);
@@ -735,10 +745,12 @@ function ProviderFormFull({
     }
   };
 
-  // 设置里开了 Stack 模式时，Claude Code / Codex 的第三方供应商默认用简化面板（连接 + 模型
-  // 列表 + 高级）；可以切到完整表单，两种布局共用同一份表单状态。
-  const { data: settingsData } = useSettingsQuery();
-  const [preferFullForm, setPreferFullForm] = useState(false);
+  // 聚合模式下 Claude Code / Codex 的第三方供应商用简化面板（连接 + 模型列表 + 高级）；
+  // 两种布局共用同一份表单状态，完整表单从直连 / 路由那格打开。
+  const { data: appModeView } = useAppMode(
+    appId,
+    appId === "claude" || appId === "codex",
+  );
 
   const {
     codexAuth,
@@ -949,12 +961,16 @@ function ProviderFormFull({
         selectedPresetEntry?.preset.category === "official"));
   const isCodexOfficialManagedOauthBound =
     isCodexOfficialProvider && Boolean(selectedCodexAccountId);
-  const stackLayoutAvailable =
-    settingsData?.enableStackMode === true &&
+  // 在聚合那格打开（没给就看应用实际是否在聚合模式）时，新增 / 编辑用聚合的简化表单
+  const useStackLayout =
+    (modeView ?? appModeView?.mode) === "stack" &&
     (appId === "claude" || appId === "codex") &&
     category !== "official" &&
     !isCodexOfficialProvider;
-  const useStackLayout = stackLayoutAvailable && !preferFullForm;
+  useEffect(() => {
+    onStackLayoutChange?.(useStackLayout);
+    return () => onStackLayoutChange?.(false);
+  }, [useStackLayout, onStackLayoutChange]);
   const requiresExplicitCodexOfficialSelection =
     isCodexOfficialProvider && !hasValidCodexOfficialSelection;
   const requiresCodexOauthLogin =
@@ -1569,7 +1585,7 @@ function ProviderFormFull({
           issues.push(
             t("providerForm.stackLayout.noModels", {
               defaultValue:
-                "模型列表为空：叠加这家后，模型选择器里不会多出它的模型",
+                "模型列表为空：把这家加入聚合后，模型选择器里不会多出它的模型",
             }),
           );
         }
@@ -2320,7 +2336,7 @@ function ProviderFormFull({
         <form
           id="provider-form"
           onSubmit={form.handleSubmit(handleSubmit)}
-          className="space-y-6 glass rounded-xl p-6 border border-white/10"
+          className="space-y-6"
         >
           {!initialData && (
             <ProviderPresetSelector
@@ -2390,7 +2406,7 @@ function ProviderFormFull({
                       /^[a-z0-9]+(-[a-z0-9]+)*$/.test(
                         opencodeForm.opencodeProviderKey,
                       )) && (
-                      <p className="text-xs text-muted-foreground">
+                      <p className="text-xs text-fg-2">
                         {isProviderKeyLocked
                           ? t("opencode.providerKeyLockedHint", {
                               defaultValue:
@@ -2453,7 +2469,7 @@ function ProviderFormFull({
                       /^[a-z0-9]+(-[a-z0-9]+)*$/.test(
                         openclawForm.openclawProviderKey,
                       )) && (
-                      <p className="text-xs text-muted-foreground">
+                      <p className="text-xs text-fg-2">
                         {isProviderKeyLocked
                           ? t("openclaw.providerKeyLockedHint", {
                               defaultValue:
@@ -2520,7 +2536,7 @@ function ProviderFormFull({
                       /^[a-z0-9]+(-[a-z0-9]+)*$/.test(
                         hermesForm.hermesProviderKey,
                       )) && (
-                      <p className="text-xs text-muted-foreground">
+                      <p className="text-xs text-fg-2">
                         {isProviderKeyLocked
                           ? t("hermes.form.providerKeyLockedHint", {
                               defaultValue:
@@ -2536,26 +2552,6 @@ function ProviderFormFull({
               ) : undefined
             }
           />
-
-          {stackLayoutAvailable && (
-            <div className="-mt-2 flex justify-end">
-              <Button
-                type="button"
-                variant="link"
-                size="sm"
-                className="h-auto p-0 text-xs text-muted-foreground"
-                onClick={() => setPreferFullForm((value) => !value)}
-              >
-                {useStackLayout
-                  ? t("providerForm.stackLayout.fullForm", {
-                      defaultValue: "显示完整表单",
-                    })
-                  : t("providerForm.stackLayout.simpleForm", {
-                      defaultValue: "返回叠加模式的简化表单",
-                    })}
-              </Button>
-            </div>
-          )}
 
           {appId === "claude" && (
             <ClaudeFormFields
