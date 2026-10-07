@@ -2180,13 +2180,19 @@ impl SkillService {
         // 更新状态
         skill.apps.set_enabled_for(app, enabled);
 
-        if matches!(app, AppType::Pi) {
-            // Pi derives state from native directory presence and validates a
-            // same-name destination before replacing or removing it.
+        if matches!(app, AppType::Pi | AppType::Mcode) {
+            // Pi derives state from native presence. MCode's full projection
+            // preserves unselected native directories, so an explicit toggle
+            // must validate and update this deployment directly too.
             if enabled {
                 Self::sync_to_app_dir(&skill.directory, app)?;
             } else {
                 Self::remove_from_app(&skill.directory, app)?;
+            }
+            if matches!(app, AppType::Mcode) {
+                // Keep the saved flag unchanged when ownership checks reject
+                // an external or locally modified native deployment.
+                db.update_skill_apps(id, &skill.apps)?;
             }
         } else {
             // Persist desired state first so provider-specific disabled IDs are
@@ -5662,6 +5668,66 @@ mod tests {
         assert_eq!(fs::read(native.join("SKILL.md")).unwrap(), original);
         SkillService::uninstall(&db, &skill.id).unwrap();
         assert_eq!(fs::read(native.join("SKILL.md")).unwrap(), original);
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn mcode_toggle_rejects_external_changes_before_persisting_state() {
+        let temp = tempdir().unwrap();
+        let _home = TestHomeGuard::set(temp.path());
+        let _location = StorageLocationGuard::set(SkillStorageLocation::CcSwitch);
+        let _pi_dir = crate::pi_config::test_support::TestAgentDir::new();
+        let db = Arc::new(Database::memory().unwrap());
+        let mut skill = poisoned_skill("owner/repo:skill", "test-skill");
+        skill.apps.mcode = true;
+        db.save_skill(&skill).unwrap();
+        let source = SkillService::get_ssot_dir().unwrap().join(&skill.directory);
+        let native = SkillService::get_app_skills_dir(&AppType::Mcode)
+            .unwrap()
+            .join(&skill.directory);
+        write_skill(&source, "managed");
+        SkillService::copy_dir_recursive(&source, &native).unwrap();
+        fs::write(native.join("local.txt"), "user-owned").unwrap();
+
+        assert!(SkillService::toggle_app(&db, &skill.id, &AppType::Mcode, false).is_err());
+        assert!(
+            db.get_installed_skill(&skill.id)
+                .unwrap()
+                .unwrap()
+                .apps
+                .mcode
+        );
+        assert_eq!(
+            fs::read_to_string(native.join("local.txt")).unwrap(),
+            "user-owned"
+        );
+
+        fs::remove_file(native.join("local.txt")).unwrap();
+        SkillService::toggle_app(&db, &skill.id, &AppType::Mcode, false).unwrap();
+        assert!(!native.exists());
+        assert!(
+            !db.get_installed_skill(&skill.id)
+                .unwrap()
+                .unwrap()
+                .apps
+                .mcode
+        );
+
+        write_skill(&native, "external");
+        assert!(SkillService::toggle_app(&db, &skill.id, &AppType::Mcode, true).is_err());
+        assert!(
+            !db.get_installed_skill(&skill.id)
+                .unwrap()
+                .unwrap()
+                .apps
+                .mcode
+        );
+        assert!(fs::read_to_string(native.join("SKILL.md"))
+            .unwrap()
+            .contains("external"));
+        assert!(fs::read_to_string(source.join("SKILL.md"))
+            .unwrap()
+            .contains("managed"));
     }
 
     #[test]

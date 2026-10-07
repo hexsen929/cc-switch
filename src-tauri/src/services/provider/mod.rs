@@ -1022,12 +1022,11 @@ mod tests {
 
             let mut bound = managed_codex_provider(provider_id, "acct-managed");
             bound.name = unbound.name.clone();
-            // Early managed-account rows could lack `category` while carrying
-            // the live-only unified-session route from a previous switch.
+            // Early managed-account rows could lack `category`. A custom route
+            // with an explicit base URL is user config, not a managed injection.
             bound.category = None;
-            bound.settings_config["config"] = Value::String(
-                "model_provider = \"custom\"\n[model_providers.custom]\nname = \"OpenAI\"\nbase_url = \"https://api.openai.com/v1\"\n".to_string(),
-            );
+            let custom_config = "model_provider = \"custom\"\n[model_providers.custom]\nname = \"OpenAI\"\nbase_url = \"https://api.openai.com/v1\"\n";
+            bound.settings_config["config"] = Value::String(custom_config.to_string());
             ProviderService::update(state, AppType::Codex, Some(provider_id), bound)
                 .expect("bind managed account");
 
@@ -1040,7 +1039,7 @@ mod tests {
                 ProviderService::managed_codex_oauth_account_id(&saved_bound).as_deref(),
                 Some("acct-managed")
             );
-            assert_eq!(saved_bound.settings_config["config"], json!(""));
+            assert_eq!(saved_bound.settings_config["config"], json!(custom_config));
             assert_eq!(
                 state
                     .db
@@ -1054,8 +1053,26 @@ mod tests {
                 Some(provider_id)
             );
 
+            // Exact legacy unified-session artifacts must also be removed from
+            // managed cards without a category, while retaining their binding.
+            let injected_config = "model_provider = \"custom\"\n\n[model_providers.custom]\nname = \"OpenAI\"\nrequires_openai_auth = true\nsupports_websockets = true\nwire_api = \"responses\"\n";
+            let mut injected_bound = saved_bound.clone();
+            injected_bound.settings_config["config"] = Value::String(injected_config.to_string());
+            ProviderService::update(state, AppType::Codex, Some(provider_id), injected_bound)
+                .expect("remove legacy injection from category-less managed card");
+            let saved_clean_bound = state
+                .db
+                .get_provider_by_id(provider_id, AppType::Codex.as_str())
+                .unwrap()
+                .unwrap();
+            assert_eq!(saved_clean_bound.settings_config["config"], json!(""));
+            assert_eq!(
+                ProviderService::managed_codex_oauth_account_id(&saved_clean_bound).as_deref(),
+                Some("acct-managed")
+            );
+
             // 旧版「统一会话历史」注入进 live、又被回填进行里的形态，保存时剥掉。
-            unbound.settings_config["config"] = Value::String("model_provider = \"custom\"\n\n[model_providers.custom]\nname = \"OpenAI\"\nrequires_openai_auth = true\nsupports_websockets = true\nwire_api = \"responses\"\n".to_string());
+            unbound.settings_config["config"] = Value::String(injected_config.to_string());
             ProviderService::update(state, AppType::Codex, Some(provider_id), unbound)
                 .expect("unbind managed account");
 
@@ -7138,7 +7155,7 @@ impl ProviderService {
         // Normalize Claude model keys
         Self::normalize_provider_if_claude(&app_type, &mut provider);
         Self::validate_provider_settings(&app_type, &provider)?;
-        if matches!(app_type, AppType::Codex) && provider.category.as_deref() == Some("official") {
+        if matches!(app_type, AppType::Codex) && codex_direct::is_official(&provider) {
             crate::codex_config::strip_codex_unified_session_bucket_from_settings(
                 &mut provider.settings_config,
             )?;
@@ -8158,6 +8175,9 @@ impl ProviderService {
 
         // Remove entire model_providers table (provider-specific configuration)
         root.remove("model_providers");
+        // This exclusive field points at the selected provider's instructions;
+        // sharing it would inject those instructions into other provider rows.
+        root.remove("model_instructions_file");
 
         // MCP 服务器归 DB mcp_servers 表所有：进了共享片段会绕过按应用的
         // 启用状态被合并进所有勾选通用配置的供应商，且在通用配置编辑框里

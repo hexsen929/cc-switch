@@ -793,22 +793,44 @@ experimental_bearer_token = "deepseek-key"
     let auth_after_switch: serde_json::Value =
         read_json_file(&cc_switch_lib::get_codex_auth_path()).expect("read auth after switch");
     assert_eq!(
-        auth_after_switch
-            .pointer("/tokens/access_token")
-            .and_then(|v| v.as_str()),
-        Some("official-oauth-token"),
-        "the official route must reuse the user's native ChatGPT OAuth token"
+        auth_after_switch, oauth_auth,
+        "the official route must preserve the user's complete native ChatGPT OAuth login"
     );
 
     let config_after_switch =
         std::fs::read_to_string(cc_switch_lib::get_codex_config_path()).expect("read config");
+    let doc: toml::Table = toml::from_str(&config_after_switch).expect("parse official contract");
+    let proxy_status = state
+        .proxy_service
+        .get_status()
+        .await
+        .expect("proxy status");
+    let proxy_base_url = format!("http://127.0.0.1:{}/v1", proxy_status.port);
+    // Official takeover keeps the built-in openai session bucket. Only the
+    // top-level base URL changes; the client continues to use native OAuth.
     assert!(
-        cc_switch_lib::codex_config_has_official_proxy_route(&config_after_switch),
-        "official takeover must project the dedicated official proxy route, got:\n{config_after_switch}"
+        doc.get("model_provider").is_none(),
+        "official takeover must keep the built-in openai route: {config_after_switch}"
     );
+    assert_eq!(
+        doc.get("openai_base_url").and_then(|value| value.as_str()),
+        Some(proxy_base_url.as_str())
+    );
+    let providers = doc["model_providers"].as_table().expect("provider table");
+    assert!(providers.get("cc-switch-official").is_none());
+    // Keep the former third-party bucket available for resuming old sessions,
+    // but retire its credentials to an unselected local proxy placeholder.
+    let dormant = &providers["custom"];
+    assert_eq!(dormant["base_url"].as_str(), Some(proxy_base_url.as_str()));
+    assert_eq!(
+        dormant["experimental_bearer_token"].as_str(),
+        Some("PROXY_MANAGED")
+    );
+    assert!(dormant.get("requires_openai_auth").is_none());
     assert!(
-        !config_after_switch.contains("PROXY_MANAGED"),
-        "the official route forwards native auth, so it must not carry the managed token placeholder"
+        !config_after_switch.contains("deepseek-key")
+            && !config_after_switch.contains("official-oauth-token"),
+        "the dormant route must carry neither provider credentials nor native OAuth: {config_after_switch}"
     );
 }
 

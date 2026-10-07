@@ -204,8 +204,8 @@ fn non_tool_block_events(
     events
 }
 
-/// 创建 Anthropic SSE 流
-pub fn create_anthropic_sse_stream<E: std::error::Error + Send + 'static>(
+/// Convert upstream chunks incrementally before the public usage-backfill buffer.
+fn create_anthropic_sse_stream_inner<E: std::error::Error + Send + 'static>(
     stream: impl Stream<Item = Result<Bytes, E>> + Send + 'static,
 ) -> impl Stream<Item = Result<Bytes, std::io::Error>> + Send {
     // Inner generator: emits Anthropic SSE in real time as upstream Chat
@@ -213,8 +213,8 @@ pub fn create_anthropic_sse_stream<E: std::error::Error + Send + 'static>(
     // providers (e.g. cyhgyl.filegear-sg.me, generic OpenAI), `usage` only
     // arrives in the FINAL chunk (with `stream_options.include_usage=true`),
     // so the `message_start` it emits has zeroed input/cache tokens. The
-    // outer wrapper below back-fills those from message_delta.
-    let inner = async_stream::stream! {
+    // public wrapper back-fills those from message_delta.
+    async_stream::stream! {
         let mut buffer = String::new();
         let mut utf8_remainder: Vec<u8> = Vec::new();
         let mut message_id = None;
@@ -781,7 +781,14 @@ pub fn create_anthropic_sse_stream<E: std::error::Error + Send + 'static>(
                 yield Ok(Bytes::from(sse_data));
             }
         }
-    };
+    }
+}
+
+/// 创建 Anthropic SSE 流：完整缓冲后回填输入/缓存 usage，再按原顺序下发。
+pub fn create_anthropic_sse_stream<E: std::error::Error + Send + 'static>(
+    stream: impl Stream<Item = Result<Bytes, E>> + Send + 'static,
+) -> impl Stream<Item = Result<Bytes, std::io::Error>> + Send {
+    let inner = create_anthropic_sse_stream_inner(stream);
 
     // Outer wrapper: buffers all Anthropic SSE events from `inner`, then
     // back-fills `message_start.usage` with real input/cache token counts
@@ -953,6 +960,7 @@ fn map_stop_reason(finish_reason: Option<&str>) -> Option<String> {
 mod tests {
     use super::*;
     use futures::stream;
+    use futures::FutureExt;
     use futures::StreamExt;
     use serde_json::Value;
     use std::collections::HashMap;
@@ -1790,10 +1798,9 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn review_progress_during_continuous_reasoning() {
-        // P1 回归：Reasoning 态必须逐增量下发思考内容。闭合标签迟迟未到时，
-        // 上游持续推送的每一条增量都应让转换流立即产生输出；修复前整段缓冲，
-        // 外层 failover 对转换后的 next() 计时会误判空闲并中断活跃流。
+    async fn public_stream_waits_for_tail_usage_and_backfills_start_at_eof() {
+        // Fork policy: retain all events until upstream EOF so usage arriving
+        // after content can populate message_start for the Anthropic SDK.
         let (tx, mut rx) = tokio::sync::mpsc::channel::<Result<Bytes, std::io::Error>>(4);
         let upstream = async_stream::stream! {
             while let Some(item) = rx.recv().await {
@@ -1801,6 +1808,74 @@ mod tests {
             }
         };
         let converted = create_anthropic_sse_stream(upstream);
+        tokio::pin!(converted);
+
+        tx.send(Ok(Bytes::from(content_chunk("backfill", "hello"))))
+            .await
+            .unwrap();
+        assert!(
+            converted.next().now_or_never().is_none(),
+            "public stream must retain content while final usage is unavailable"
+        );
+
+        tx.send(Ok(Bytes::from(concat!(
+            "data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"stop\"}]}\n\n",
+            "data: {\"choices\":[],\"usage\":{\"prompt_tokens\":100,\"completion_tokens\":7,\"prompt_tokens_details\":{\"cached_tokens\":40,\"cache_write_tokens\":10}}}\n\n",
+            "data: [DONE]\n\n"
+        ))))
+        .await
+        .unwrap();
+        assert!(
+            converted.next().now_or_never().is_none(),
+            "public stream must preserve its existing EOF flush policy"
+        );
+
+        drop(tx);
+        let chunks: Vec<_> = converted.collect().await;
+        let events: Vec<Value> = chunks
+            .into_iter()
+            .map(|chunk| parse_event(&chunk.unwrap()))
+            .collect();
+        assert_eq!(
+            events.iter().filter_map(event_type).collect::<Vec<_>>(),
+            vec![
+                "message_start",
+                "content_block_start",
+                "content_block_delta",
+                "content_block_stop",
+                "message_delta",
+                "message_stop",
+            ]
+        );
+        assert_eq!(
+            events[0]["message"]["usage"],
+            json!({
+                "input_tokens": 50,
+                "output_tokens": 0,
+                "cache_read_input_tokens": 40,
+                "cache_creation_input_tokens": 10,
+            })
+        );
+        assert_eq!(events[4]["usage"]["input_tokens"], 50);
+        assert_eq!(events[4]["usage"]["output_tokens"], 7);
+        assert_eq!(
+            collect_delta_text(&events, "text_delta", "/delta/text"),
+            "hello"
+        );
+    }
+
+    #[tokio::test]
+    async fn inner_conversion_progresses_during_continuous_reasoning() {
+        // InlineThinkSplitter 的 Reasoning 态必须逐增量产出思考内容，不等闭合标签。
+        // 本测试只验证内部转换器；public 流另有完整缓冲策略，以便在结束时
+        // 回填 message_start 的输入/缓存 usage，不承诺逐增量对客户端下发。
+        let (tx, mut rx) = tokio::sync::mpsc::channel::<Result<Bytes, std::io::Error>>(4);
+        let upstream = async_stream::stream! {
+            while let Some(item) = rx.recv().await {
+                yield item;
+            }
+        };
+        let converted = create_anthropic_sse_stream_inner(upstream);
         tokio::pin!(converted);
 
         // 流首开标签：确立 Reasoning 态，本身不产生输出。

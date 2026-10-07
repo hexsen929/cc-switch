@@ -3314,7 +3314,7 @@ mod tests {
                 serde_json::from_value(serde_json::json!({
                     "id": provider_id,
                     "name": "Managed Codex",
-                    "settingsConfig": {},
+                    "settingsConfig": {"auth": {}, "config": ""},
                     "category": category,
                     "meta": {
                         "authBinding": account_id.map(|id| serde_json::json!({

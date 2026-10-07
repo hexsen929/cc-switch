@@ -1,3 +1,5 @@
+.claude/cc-switch/append-prompt.md 644
+.claude/cc-switch/system-prompt.md 644
 .claude/settings.json 600
 .codex/cc-switch-model-catalog.json 644
 .codex/config.toml 600

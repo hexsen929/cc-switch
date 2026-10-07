@@ -154,6 +154,14 @@ fn switch_keeps_private_modes_of_existing_files() {
     let _guard = test_mutex().lock().unwrap_or_else(|e| e.into_inner());
     reset_test_fs();
     for (path, content) in [
+        (
+            ".claude/cc-switch/append-prompt.md",
+            "existing append prompt",
+        ),
+        (
+            ".claude/cc-switch/system-prompt.md",
+            "existing system prompt",
+        ),
         (".claude/settings.json", "{}"),
         (".codex/config.toml", ""),
         (".codex/auth.json", "{}"),
