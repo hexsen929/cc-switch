@@ -2276,6 +2276,7 @@ impl SkillService {
         let agents_lock = parse_agents_lock();
         let mut imported = Vec::new();
         let mut skipped_mcode = Vec::new();
+        let mut projection_failures = Vec::new();
 
         // 将 lock 文件中发现的仓库保存到 skill_repos
         save_repos_from_lock(
@@ -2394,7 +2395,7 @@ impl SkillService {
             let content_hash = Self::compute_dir_hash(&ssot_skill_dir).ok();
 
             // 创建记录
-            let skill = InstalledSkill {
+            let mut skill = InstalledSkill {
                 id,
                 name,
                 description,
@@ -2409,6 +2410,63 @@ impl SkillService {
                 updated_at: 0,
             };
 
+            // ID 确定后再按当前供应商的覆盖投影：全局开关是用户的选择，
+            // provider 禁用不能把它改成关闭，provider 启用也可放开未勾选的应用。
+            // 有效且已存在的原目录保持原样；明确禁用的投影可移除，源已复制到 SSOT。
+            // 没勾选且没有 provider 禁用时，保留既有的导入源目录语义。
+            for app in AppType::all() {
+                if !Self::is_sync_managed_app(&app) || matches!(app, AppType::Mcode) {
+                    continue;
+                }
+                let provider = match Self::get_current_provider_for_app(db, &app) {
+                    Ok(provider) => provider,
+                    Err(error) => {
+                        log::warn!(
+                            "导入 Skill {} 时读取 {app:?} 供应商失败: {error:#}",
+                            skill.directory
+                        );
+                        projection_failures.push(format!(
+                            "{} ({}): {error:#}",
+                            skill.directory,
+                            app.as_str()
+                        ));
+                        continue;
+                    }
+                };
+                let enabled = Self::is_effectively_enabled_for_app(&skill, &app, provider.as_ref());
+                let projection = if enabled {
+                    if Self::skill_exists_in_app(&skill.directory, &app) {
+                        continue;
+                    }
+                    Self::sync_to_app_dir(&skill.directory, &app)
+                } else if provider
+                    .as_ref()
+                    .and_then(|provider| provider.meta.as_ref())
+                    .and_then(|meta| meta.resource_overrides.as_ref())
+                    .and_then(|overrides| overrides.skills.as_ref())
+                    .filter(|overrides| overrides.enabled)
+                    .is_some_and(|overrides| overrides.disabled_skill_ids.contains(&skill.id))
+                {
+                    Self::remove_from_app(&skill.directory, &app)
+                } else {
+                    continue;
+                };
+                if let Err(error) = projection {
+                    log::warn!(
+                        "导入 Skill {} 时同步到 {app:?} 失败: {error:#}",
+                        skill.directory
+                    );
+                    if enabled {
+                        skill.apps.set_enabled_for(&app, false);
+                    }
+                    projection_failures.push(format!(
+                        "{} ({}): {error:#}",
+                        skill.directory,
+                        app.as_str()
+                    ));
+                }
+            }
+
             // 保存到数据库
             db.save_skill(&skill)?;
 
@@ -2417,13 +2475,27 @@ impl SkillService {
 
         log::info!("成功导入 {} 个 Skills", imported.len());
 
-        if skipped_mcode.is_empty() {
+        let mut problems = Vec::new();
+        if !skipped_mcode.is_empty() {
+            problems.push(format!(
+                "skipped MiniMax Code entries: {}",
+                skipped_mcode.join("; ")
+            ));
+        }
+        if !projection_failures.is_empty() {
+            problems.push(format!(
+                "could not apply app projection: {}",
+                projection_failures.join("; ")
+            ));
+        }
+
+        if problems.is_empty() {
             Ok(imported)
         } else {
             Err(anyhow!(
-                "Imported {} Skills; skipped MiniMax Code entries: {}",
+                "Imported {} Skills; {}",
                 imported.len(),
-                skipped_mcode.join("; ")
+                problems.join("; ")
             ))
         }
     }
@@ -5741,6 +5813,181 @@ mod tests {
         assert!(fs::read_to_string(native.join("conflict/SKILL.md"))
             .unwrap()
             .contains("external"));
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn import_deploys_the_skill_to_selected_apps_that_do_not_have_it() {
+        let temp = tempdir().unwrap();
+        let _home = TestHomeGuard::set(temp.path());
+        let _location = StorageLocationGuard::set(SkillStorageLocation::CcSwitch);
+        let _pi_dir = crate::pi_config::test_support::TestAgentDir::new();
+        let db = Arc::new(Database::memory().unwrap());
+        let app_copy = |app: AppType| {
+            SkillService::get_app_skills_dir(&app)
+                .unwrap()
+                .join("test-skill")
+        };
+        // 只在 Claude 里发现，导入时另外勾了 Codex 和 Gemini。
+        write_skill(&app_copy(AppType::Claude), "found-in-claude");
+
+        let imported = SkillService::import_from_apps(
+            &db,
+            vec![ImportSkillSelection {
+                directory: "test-skill".into(),
+                apps: SkillApps {
+                    claude: true,
+                    codex: true,
+                    gemini: true,
+                    ..Default::default()
+                },
+            }],
+        )
+        .unwrap();
+
+        assert!(imported[0].apps.codex && imported[0].apps.gemini);
+        for app in [AppType::Codex, AppType::Gemini] {
+            assert!(
+                fs::read_to_string(app_copy(app.clone()).join("SKILL.md"))
+                    .unwrap()
+                    .contains("found-in-claude"),
+                "{app:?} must have the skill right after import"
+            );
+        }
+        // 没勾的应用不写；发现它的地方保持原样（仍是真实目录，不换成链接）。
+        assert!(!app_copy(AppType::OpenCode).exists());
+        assert!(!SkillService::is_symlink(&app_copy(AppType::Claude)));
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn import_keeps_global_flags_when_current_providers_disable_the_skill() {
+        let temp = tempdir().unwrap();
+        let _home = TestHomeGuard::set(temp.path());
+        let _location = StorageLocationGuard::set(SkillStorageLocation::CcSwitch);
+        let _pi_dir = crate::pi_config::test_support::TestAgentDir::new();
+        let db = Arc::new(Database::memory().unwrap());
+        let app_copy = |app: AppType| {
+            SkillService::get_app_skills_dir(&app)
+                .unwrap()
+                .join("test-skill")
+        };
+        write_skill(&app_copy(AppType::Claude), "found-in-claude");
+        for app in [AppType::Claude, AppType::Codex] {
+            let provider = provider_with_skill_overrides(&["local:test-skill"], &[]);
+            db.save_provider(app.as_str(), &provider).unwrap();
+            db.set_current_provider(app.as_str(), &provider.id).unwrap();
+        }
+
+        let imported = SkillService::import_from_apps(
+            &db,
+            vec![ImportSkillSelection {
+                directory: "test-skill".into(),
+                apps: SkillApps {
+                    claude: true,
+                    codex: true,
+                    ..Default::default()
+                },
+            }],
+        )
+        .unwrap();
+
+        assert_eq!(imported.len(), 1);
+        assert!(imported[0].apps.claude && imported[0].apps.codex);
+        let saved = db.get_installed_skill("local:test-skill").unwrap().unwrap();
+        assert!(saved.apps.claude && saved.apps.codex);
+        assert!(!app_copy(AppType::Claude).exists());
+        assert!(!app_copy(AppType::Codex).exists());
+        assert!(fs::read_to_string(
+            SkillService::get_ssot_dir()
+                .unwrap()
+                .join("test-skill/SKILL.md")
+        )
+        .unwrap()
+        .contains("found-in-claude"));
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn import_deploys_provider_enabled_skill_without_changing_global_flags() {
+        let temp = tempdir().unwrap();
+        let _home = TestHomeGuard::set(temp.path());
+        let _location = StorageLocationGuard::set(SkillStorageLocation::CcSwitch);
+        let _pi_dir = crate::pi_config::test_support::TestAgentDir::new();
+        let db = Arc::new(Database::memory().unwrap());
+        let app_copy = |app: AppType| {
+            SkillService::get_app_skills_dir(&app)
+                .unwrap()
+                .join("test-skill")
+        };
+        write_skill(&app_copy(AppType::Claude), "found-in-claude");
+        for app in [AppType::Claude, AppType::Codex] {
+            let provider = provider_with_skill_overrides(&[], &["local:test-skill"]);
+            db.save_provider(app.as_str(), &provider).unwrap();
+            db.set_current_provider(app.as_str(), &provider.id).unwrap();
+        }
+
+        let imported = SkillService::import_from_apps(
+            &db,
+            vec![ImportSkillSelection {
+                directory: "test-skill".into(),
+                apps: SkillApps::default(),
+            }],
+        )
+        .unwrap();
+
+        assert_eq!(imported.len(), 1);
+        assert!(!imported[0].apps.claude && !imported[0].apps.codex);
+        let saved = db.get_installed_skill("local:test-skill").unwrap().unwrap();
+        assert!(!saved.apps.claude && !saved.apps.codex);
+        for app in [AppType::Claude, AppType::Codex] {
+            assert!(fs::read_to_string(app_copy(app).join("SKILL.md"))
+                .unwrap()
+                .contains("found-in-claude"));
+        }
+        assert!(!SkillService::is_symlink(&app_copy(AppType::Claude)));
+        assert!(!app_copy(AppType::Gemini).exists());
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn import_does_not_record_an_app_the_skill_could_not_be_deployed_to() {
+        let temp = tempdir().unwrap();
+        let _home = TestHomeGuard::set(temp.path());
+        let _location = StorageLocationGuard::set(SkillStorageLocation::CcSwitch);
+        let _pi_dir = crate::pi_config::test_support::TestAgentDir::new();
+        let db = Arc::new(Database::memory().unwrap());
+        write_skill(
+            &SkillService::get_app_skills_dir(&AppType::Claude)
+                .unwrap()
+                .join("test-skill"),
+            "found-in-claude",
+        );
+        // Codex 的 skills 路径被一个文件占着，目录建不出来。
+        let codex_skills = SkillService::get_app_skills_dir(&AppType::Codex).unwrap();
+        fs::create_dir_all(codex_skills.parent().unwrap()).unwrap();
+        fs::write(&codex_skills, "not a directory").unwrap();
+
+        let error = SkillService::import_from_apps(
+            &db,
+            vec![ImportSkillSelection {
+                directory: "test-skill".into(),
+                apps: SkillApps {
+                    claude: true,
+                    codex: true,
+                    ..Default::default()
+                },
+            }],
+        )
+        .unwrap_err()
+        .to_string();
+
+        assert!(error.contains("Imported 1 Skills"), "{error}");
+        assert!(error.contains("test-skill (codex)"), "{error}");
+        let installed = db.get_all_installed_skills().unwrap();
+        assert_eq!(installed.len(), 1);
+        assert!(installed[0].apps.claude);
+        assert!(!installed[0].apps.codex);
     }
 
     #[tokio::test]
