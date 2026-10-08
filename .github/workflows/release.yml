@@ -70,7 +70,7 @@ jobs:
         run: pnpm install --frozen-lockfile
 
       - name: Validate all summaries
-        run: pnpm vitest run tests/config/whatsNewEntries.test.ts
+        run: pnpm vitest run tests/config/whatsNewEntries.test.ts tests/workflows/releaseUpdater.test.ts
 
   release:
     needs: whats-new-check
@@ -965,7 +965,10 @@ jobs:
         with:
           tag_name: ${{ github.ref_name }}
           name: CC Switch ${{ github.ref_name }}
-          prerelease: true
+          # The fork updater reads /releases/latest/download/latest.json.
+          # GitHub excludes prereleases from that endpoint, leaving clients on an old build.
+          prerelease: false
+          make_latest: true
           body: |
             ## CC Switch ${{ github.ref_name }}
 
