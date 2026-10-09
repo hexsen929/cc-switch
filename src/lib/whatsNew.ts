@@ -32,12 +32,20 @@ export const WHATS_NEW_ENTRIES: WhatsNewEntry[] = Object.values(modules).sort(
   (a, b) => compareVersions(b.version, a.version),
 );
 
+// Fork builds embed their full tag, while summaries remain grouped by the
+// three-part application version. Genuine prereleases keep SemVer behavior.
+function summaryVersion(version: string): string {
+  return version.replace(/-codex-auth-\d+$/, "");
+}
+
 /** 当前版本比记录的已看版本新（或从没记录过）：需要处理一次 */
 export function isNewerThanSeen(
   current: string,
   seen: string | undefined,
 ): boolean {
-  return !seen || compareVersions(current, seen) > 0;
+  return (
+    !seen || compareVersions(summaryVersion(current), summaryVersion(seen)) > 0
+  );
 }
 
 /**
@@ -49,6 +57,8 @@ export function entriesSince(
   seen: string | undefined,
   current: string,
 ): WhatsNewEntry[] {
+  current = summaryVersion(current);
+  seen = seen ? summaryVersion(seen) : undefined;
   return entries.filter((entry) => {
     if (entry.items.length === 0) return false;
     if (!seen) return entry.version === current;
@@ -64,6 +74,7 @@ export function entriesUpTo(
   entries: WhatsNewEntry[],
   current: string,
 ): WhatsNewEntry[] {
+  current = summaryVersion(current);
   return entries.filter(
     (entry) =>
       entry.items.length > 0 && compareVersions(entry.version, current) <= 0,
@@ -79,6 +90,8 @@ export function markSeen(
   current: string | undefined,
 ): string | undefined {
   if (!current) return seen;
+  current = summaryVersion(current);
+  seen = seen ? summaryVersion(seen) : undefined;
   return seen && compareVersions(seen, current) > 0 ? seen : current;
 }
 

@@ -1,0 +1,19 @@
+{
+  "version": "4.0.6",
+  "items": [
+    {
+      "type": "fix",
+      "zh": "修复 fork 发行版无法在线更新到后续 tag",
+      "zh-TW": "修復 fork 發行版無法線上更新到後續 tag",
+      "en": "Fixed online updates between fork releases",
+      "ja": "fork リリース間のオンライン更新を修正"
+    },
+    {
+      "type": "fix",
+      "zh": "修复 Codex 工具调用桥接丢失命名空间及自定义工具类型",
+      "zh-TW": "修復 Codex 工具呼叫橋接遺失命名空間及自訂工具類型",
+      "en": "Fixed Codex tool bridging losing namespaces and custom tool types",
+      "ja": "Codex ツール橋渡しで名前空間とカスタム型が失われる問題を修正"
+    }
+  ]
+}

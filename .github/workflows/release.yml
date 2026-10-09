@@ -70,7 +70,7 @@ jobs:
         run: pnpm install --frozen-lockfile
 
       - name: Validate all summaries
-        run: pnpm vitest run tests/config/whatsNewEntries.test.ts tests/workflows/releaseUpdater.test.ts
+        run: pnpm vitest run tests/config/whatsNewEntries.test.ts tests/workflows/releaseUpdater.test.ts tests/workflows/releaseVersion.test.ts tests/lib/whatsNew.test.ts
 
   release:
     needs: whats-new-check
@@ -186,6 +186,9 @@ jobs:
 
       - name: Install frontend deps
         run: pnpm install --frozen-lockfile
+
+      - name: Embed release version
+        run: node scripts/prepare-release-version.mjs
 
       - name: Prepare Tauri signing key
         uses: ./.github/actions/prepare-tauri-signing-key
@@ -423,6 +426,9 @@ jobs:
       - name: Install frontend deps
         run: pnpm install --frozen-lockfile
 
+      - name: Embed release version
+        run: node scripts/prepare-release-version.mjs
+
       # 编译只做一次：编译失败是确定性的，重试没有意义。签名和公证依赖 Apple 的服务，
       # 在 macos-release 里单独重试，不会再重编。
       - name: Build Tauri App (${{ matrix.target }})
@@ -490,6 +496,9 @@ jobs:
 
       - name: Install frontend deps
         run: pnpm install --frozen-lockfile
+
+      - name: Embed release version
+        run: node scripts/prepare-release-version.mjs
 
       - name: Verify DMG arguments under macOS Bash
         run: pnpm vitest run tests/workflows/releaseDmgArguments.test.ts

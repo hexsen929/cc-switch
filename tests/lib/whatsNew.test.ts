@@ -52,11 +52,33 @@ describe("entriesSince", () => {
       "4.0.2",
     ]);
   });
+
+  it("includes the upstream summary for a fully stamped fork build", () => {
+    expect(
+      versions(entriesSince(ENTRIES, undefined, "4.0.4-codex-auth-72")),
+    ).toEqual(["4.0.4"]);
+    expect(
+      versions(
+        entriesSince(ENTRIES, "4.0.2-codex-auth-69", "4.0.4-codex-auth-72"),
+      ),
+    ).toEqual(["4.0.4"]);
+    expect(
+      entriesSince(ENTRIES, "4.0.4-codex-auth-72", "4.0.4-codex-auth-73"),
+    ).toEqual([]);
+  });
 });
 
 describe("entriesUpTo", () => {
   it("lists non-empty versions up to the current one", () => {
     expect(versions(entriesUpTo(ENTRIES, "4.0.4"))).toEqual([
+      "4.0.4",
+      "4.0.2",
+      "4.0.1",
+    ]);
+  });
+
+  it("keeps the current summary visible with a fork suffix", () => {
+    expect(versions(entriesUpTo(ENTRIES, "4.0.4-codex-auth-72"))).toEqual([
       "4.0.4",
       "4.0.2",
       "4.0.1",
@@ -77,6 +99,19 @@ describe("seen version", () => {
     expect(isNewerThanSeen("4.0.2", "4.0.1")).toBe(true);
     expect(isNewerThanSeen("4.0.2", "4.0.2")).toBe(false);
     expect(isNewerThanSeen("4.0.2", "4.0.4")).toBe(false);
+  });
+
+  it("tracks summaries by core version without reopening them for each fork tag", () => {
+    expect(markSeen("4.0.4-codex-auth-72", "4.0.4-codex-auth-73")).toBe(
+      "4.0.4",
+    );
+    expect(markSeen("4.0.4-codex-auth-72", "4.0.2-codex-auth-69")).toBe(
+      "4.0.4",
+    );
+    expect(isNewerThanSeen("4.0.4-codex-auth-73", "4.0.4-codex-auth-72")).toBe(
+      false,
+    );
+    expect(isNewerThanSeen("4.0.4-codex-auth-73", "4.0.2")).toBe(true);
   });
 });
 

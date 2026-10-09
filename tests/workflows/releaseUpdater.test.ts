@@ -49,4 +49,25 @@ describe("fork updater release routing", () => {
     expect(body).toContain(`${forkReleases}/latest`);
     expect(body).not.toContain("farion1231/cc-switch");
   });
+
+  it("uses the same revision-aware comparator for UI checks and backend installs", () => {
+    expect(readRepoFile("src-tauri/src/lib.rs")).toContain(
+      ".plugin(app_updater::builder().build())",
+    );
+    expect(readRepoFile("src-tauri/src/app_updater.rs")).toContain(
+      ".default_version_comparator(",
+    );
+    const backend = readRepoFile("src-tauri/src/commands/settings.rs");
+    for (const command of [
+      "install_update_and_restart",
+      "check_app_update_available",
+    ]) {
+      const body = backend.match(
+        new RegExp(`pub async fn ${command}\\b[\\s\\S]*?\\n\\}`),
+      )?.[0];
+      expect(body).toContain(".updater_builder()");
+      expect(body).not.toContain(".version_comparator(");
+    }
+    expect(readRepoFile("src/lib/updater.ts")).not.toContain("allowDowngrades");
+  });
 });

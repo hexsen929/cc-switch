@@ -43,6 +43,7 @@ jobs:
             frontend:
               - "src/**"
               - "tests/**"
+              - "scripts/**"
               - "index.html"
               - "package.json"
               - "pnpm-lock.yaml"
@@ -57,6 +58,7 @@ jobs:
               - ".github/workflows/**"
             backend:
               - "src-tauri/**"
+              - "scripts/**"
               - "rust-toolchain.toml"
               - ".github/workflows/**"
 
