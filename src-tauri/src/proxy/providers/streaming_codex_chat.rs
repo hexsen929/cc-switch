@@ -949,8 +949,13 @@ fn extract_chat_sse_error(value: &Value) -> (String, Option<String>) {
 /// response. Used by virtual tool-call bridging: the upstream must be called
 /// non-streaming so the proxy can parse the model's JSON tool-call envelope,
 /// but Codex clients may still request `stream: true`.
-pub fn build_responses_sse_from_chat_completion(body: &Value) -> Result<Vec<u8>, ProxyError> {
-    let mut state = ChatToResponsesState::default();
+/// The original request's context restores namespace, custom and tool-search
+/// identities just as on the native Chat streaming path.
+pub(crate) fn build_responses_sse_from_chat_completion(
+    body: &Value,
+    tool_context: &CodexToolContext,
+) -> Result<Vec<u8>, ProxyError> {
+    let mut state = ChatToResponsesState::with_tool_context(tool_context.clone());
     let mut events = state.handle_chat_completion_value(body);
     events.extend(state.finalize());
     Ok(events
@@ -1600,9 +1605,11 @@ mod tests {
                     "finish_reason": "stop"
                 }]
             });
-            let output =
-                String::from_utf8(build_responses_sse_from_chat_completion(&chat).unwrap())
-                    .unwrap();
+            let output = String::from_utf8(
+                build_responses_sse_from_chat_completion(&chat, &CodexToolContext::default())
+                    .unwrap(),
+            )
+            .unwrap();
             let events = parse_sse_events(&output);
             let completed = events
                 .iter()
@@ -1643,8 +1650,10 @@ mod tests {
             "usage": {"prompt_tokens": 10, "completion_tokens": 3, "total_tokens": 13}
         });
 
-        let output =
-            String::from_utf8(build_responses_sse_from_chat_completion(&chat).unwrap()).unwrap();
+        let output = String::from_utf8(
+            build_responses_sse_from_chat_completion(&chat, &CodexToolContext::default()).unwrap(),
+        )
+        .unwrap();
 
         assert!(output.contains("event: response.created"));
         assert!(output.contains("event: response.function_call_arguments.done"));

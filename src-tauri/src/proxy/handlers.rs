@@ -1938,8 +1938,15 @@ async fn handle_codex_chat_to_responses_transform(
     }
 
     if use_virtual_tools && is_stream && !response.is_sse() {
-        return handle_codex_virtual_tool_stream(response, ctx, state, status, connection_guard)
-            .await;
+        return handle_codex_virtual_tool_stream(
+            response,
+            ctx,
+            state,
+            status,
+            connection_guard,
+            tool_context,
+        )
+        .await;
     }
 
     if is_stream || response.is_sse() {
@@ -2169,6 +2176,7 @@ async fn handle_codex_virtual_tool_stream(
     state: &ProxyState,
     status: axum::http::StatusCode,
     connection_guard: Option<ActiveConnectionGuard>,
+    tool_context: transform_codex_chat::CodexToolContext,
 ) -> Result<axum::response::Response, ProxyError> {
     let body_timeout =
         if ctx.app_config.auto_failover_enabled && ctx.app_config.non_streaming_timeout > 0 {
@@ -2187,11 +2195,14 @@ async fn handle_codex_virtual_tool_stream(
         super::providers::tool_virtual::apply_virtual_tool_response_to_openai_chat_response(
             chat_response,
         );
-    let responses_response =
-        transform_codex_chat::chat_completion_to_response(chat_response.clone()).map_err(|e| {
-            log::error!("[Codex] 虚拟工具桥接 Chat → Responses 响应转换失败: {e}");
-            e
-        })?;
+    let responses_response = transform_codex_chat::chat_completion_to_response_with_context(
+        chat_response.clone(),
+        &tool_context,
+    )
+    .map_err(|e| {
+        log::error!("[Codex] 虚拟工具桥接 Chat → Responses 响应转换失败: {e}");
+        e
+    })?;
     state
         .codex_chat_history
         .record_response(&responses_response)
@@ -2235,7 +2246,7 @@ async fn handle_codex_virtual_tool_stream(
 
     strip_entity_headers_for_rebuilt_body(&mut response_headers);
     strip_hop_by_hop_response_headers(&mut response_headers);
-    let sse_body = build_responses_sse_from_chat_completion(&chat_response)?;
+    let sse_body = build_responses_sse_from_chat_completion(&chat_response, &tool_context)?;
     drop(connection_guard);
 
     let mut builder = axum::response::Response::builder().status(status);
@@ -3673,6 +3684,142 @@ mod tests {
         atomic::{AtomicUsize, Ordering},
         Arc,
     };
+
+    #[tokio::test]
+    async fn codex_virtual_tool_stream_preserves_namespaces_custom_tools_and_history() {
+        use crate::app_config::AppType;
+        use crate::database::Database;
+        use crate::mode::stack::StackTarget;
+        use crate::provider::{Provider, ProviderMeta};
+        use crate::proxy::handler_context::RequestContext;
+        use crate::proxy::hyper_client::ProxyResponse;
+        use crate::proxy::providers::transform_codex_chat::build_codex_tool_context_from_request;
+        use crate::proxy::server::ProxyState;
+        use http_body_util::BodyExt;
+        use serde_json::{json, Value};
+
+        let request = json!({
+            "model": "bridge-model",
+            "stream": true,
+            "tools": [
+                {"type": "namespace", "name": "functions", "tools": [{
+                    "type": "function", "name": "exec_command",
+                    "parameters": {"type": "object", "properties": {"cmd": {"type": "string"}}}
+                }]},
+                {"type": "custom", "name": "apply_patch"},
+                {"type": "tool_search"}
+            ]
+        });
+        let mut provider = Provider::with_id(
+            "bridge-provider".into(),
+            "Bridge provider".into(),
+            json!({}),
+            None,
+        );
+        provider.meta = Some(ProviderMeta {
+            api_format: Some("openai_chat".into()),
+            tool_call_bridge: Some(true),
+            ..Default::default()
+        });
+        let state = ProxyState::for_test(Arc::new(Database::memory().unwrap()));
+        let ctx = RequestContext::new(
+            &state,
+            &request,
+            &axum::http::HeaderMap::new(),
+            AppType::Codex,
+            "Codex",
+            "codex",
+            Some(StackTarget {
+                provider,
+                upstream_model: "bridge-model".into(),
+                original_model: "bridge-model".into(),
+            }),
+        )
+        .await
+        .unwrap();
+        let bridge_content = json!({
+            "assistant_response": "Checking the requested files.",
+            "tool_calls": [
+                {"name": "functions__exec_command", "arguments": {"cmd": "pwd"}},
+                {"name": "apply_patch", "arguments": {"input": "*** Begin Patch\n*** End Patch"}},
+                {"name": "tool_search", "arguments": {"query": "files"}}
+            ]
+        });
+        let upstream = axum::http::Response::builder()
+            .header("content-type", "application/json")
+            .body(
+                json!({
+                    "id": "chatcmpl_bridge_identity",
+                    "model": "bridge-model",
+                    "choices": [{"message": {"role": "assistant", "content": bridge_content.to_string()}}]
+                })
+                .to_string(),
+            )
+            .unwrap();
+        let response = super::handle_codex_chat_to_responses_transform(
+            ProxyResponse::Reqwest(reqwest::Response::from(upstream)),
+            &ctx,
+            &state,
+            true,
+            None,
+            build_codex_tool_context_from_request(&request),
+        )
+        .await
+        .unwrap();
+        assert_eq!(response.headers()["content-type"], "text/event-stream");
+        let bytes = response.into_body().collect().await.unwrap().to_bytes();
+        let events: Vec<Value> = std::str::from_utf8(&bytes)
+            .unwrap()
+            .lines()
+            .filter_map(|line| line.strip_prefix("data: "))
+            .map(|line| serde_json::from_str(line).unwrap())
+            .collect();
+        let completed = &events
+            .iter()
+            .find(|event| event["type"] == "response.completed")
+            .unwrap()["response"];
+        let output = completed["output"].as_array().unwrap();
+        assert_eq!(output.len(), 4);
+        let command = &output[1];
+        assert_eq!(command["type"], "function_call");
+        assert_eq!(command["namespace"], "functions");
+        assert_eq!(command["name"], "exec_command");
+        assert_eq!(command["arguments"], r#"{"cmd":"pwd"}"#);
+        assert_eq!(output[2]["type"], "custom_tool_call");
+        assert_eq!(output[2]["name"], "apply_patch");
+        assert_eq!(output[2]["input"], "*** Begin Patch\n*** End Patch");
+        assert_eq!(output[3]["type"], "tool_search_call");
+        assert_eq!(output[3]["arguments"]["query"], "files");
+
+        let done: Vec<&Value> = events
+            .iter()
+            .filter(|event| event["type"] == "response.output_item.done")
+            .map(|event| &event["item"])
+            .collect();
+        assert_eq!(done, output.iter().collect::<Vec<_>>());
+
+        // A follow-up may contain only tool results; history must restore the
+        // same namespace/custom identities that were delivered to the client.
+        let mut follow_up = json!({
+            "previous_response_id": completed["id"],
+            "input": [{"type": "function_call_output", "call_id": command["call_id"], "output": "probe"}]
+        });
+        assert!(
+            state
+                .codex_chat_history
+                .enrich_request(&mut follow_up)
+                .await
+                > 0
+        );
+        let restored = follow_up["input"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|item| item["type"] == "function_call" && item["call_id"] == command["call_id"])
+            .unwrap();
+        assert_eq!(restored["namespace"], command["namespace"]);
+        assert_eq!(restored["name"], command["name"]);
+    }
 
     /// 补发了压缩条目的 SSE 比上游声明的长：留着上游的 Content-Length，客户端读到那个
     /// 长度就停，补上的 compaction 条目和 response.completed 都收不到。
