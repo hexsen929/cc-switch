@@ -294,8 +294,9 @@ impl Database {
         // 9.6 局域网网关密钥表（Fork 扩展）
         // 开启「局域网共享」后，非环回入站必须携带这里某个 enabled 的 token 才放行。
         // token 以明文存于 forkdb（本地文件），列表只回末 4 位。
-        // allowed_* 为 per-key caps（Slice C）：JSON 数组，空数组 `[]` = 不限；
-        // allowed_models 支持 `*` glob。limit_* 列为 Slice D（配额）预留，当前未用、可空。
+        // allowed_* 为 per-key caps（Slice C）：JSON 数组，空数组 `[]` = 不限；allowed_models 支持 `*` glob。
+        // limit_* 为 per-key 配额窗口（Slice D）：limit_window = none|day|week|month（本地日历窗口），
+        // limit_tokens / limit_cost_usd 可空（NULL = 该维度不限）；超限在转发前回 429。
         conn.execute(
             "CREATE TABLE IF NOT EXISTS forkdb.gateway_keys (
                 id TEXT PRIMARY KEY,
@@ -305,12 +306,15 @@ impl Database {
                 created_at TEXT NOT NULL DEFAULT (datetime('now')),
                 allowed_apps TEXT NOT NULL DEFAULT '[]',
                 allowed_providers TEXT NOT NULL DEFAULT '[]',
-                allowed_models TEXT NOT NULL DEFAULT '[]'
+                allowed_models TEXT NOT NULL DEFAULT '[]',
+                limit_window TEXT NOT NULL DEFAULT 'none',
+                limit_tokens INTEGER,
+                limit_cost_usd TEXT
             )",
             [],
         )
         .map_err(|e| AppError::Database(e.to_string()))?;
-        // 为 Slice B 已建表（无 caps 列）的本地库补列；重复执行时忽略「列已存在」错误。
+        // 为既有本地库补列；重复执行时忽略「列已存在」错误。
         let _ = conn.execute(
             "ALTER TABLE forkdb.gateway_keys ADD COLUMN allowed_apps TEXT NOT NULL DEFAULT '[]'",
             [],
@@ -321,6 +325,18 @@ impl Database {
         );
         let _ = conn.execute(
             "ALTER TABLE forkdb.gateway_keys ADD COLUMN allowed_models TEXT NOT NULL DEFAULT '[]'",
+            [],
+        );
+        let _ = conn.execute(
+            "ALTER TABLE forkdb.gateway_keys ADD COLUMN limit_window TEXT NOT NULL DEFAULT 'none'",
+            [],
+        );
+        let _ = conn.execute(
+            "ALTER TABLE forkdb.gateway_keys ADD COLUMN limit_tokens INTEGER",
+            [],
+        );
+        let _ = conn.execute(
+            "ALTER TABLE forkdb.gateway_keys ADD COLUMN limit_cost_usd TEXT",
             [],
         );
 
@@ -340,12 +356,16 @@ impl Database {
             duration_ms INTEGER, status_code INTEGER NOT NULL, error_message TEXT, session_id TEXT,
             provider_type TEXT, is_streaming INTEGER NOT NULL DEFAULT 0,
             cost_multiplier TEXT NOT NULL DEFAULT '1.0', created_at INTEGER NOT NULL,
-            data_source TEXT NOT NULL DEFAULT 'proxy'
+            data_source TEXT NOT NULL DEFAULT 'proxy',
+            gateway_key_id TEXT
         )", []).map_err(|e| AppError::Database(e.to_string()))?;
 
         conn.execute("CREATE INDEX IF NOT EXISTS idx_request_logs_provider ON proxy_request_logs(provider_id, app_type)", [])
             .map_err(|e| AppError::Database(e.to_string()))?;
         conn.execute("CREATE INDEX IF NOT EXISTS idx_request_logs_created_at ON proxy_request_logs(created_at)", [])
+            .map_err(|e| AppError::Database(e.to_string()))?;
+        // Fork：局域网网关 per-key 配额窗口按 (gateway_key_id, created_at) 聚合用量，建索引加速。
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_request_logs_gateway_key ON proxy_request_logs(gateway_key_id, created_at)", [])
             .map_err(|e| AppError::Database(e.to_string()))?;
         conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_request_logs_model ON proxy_request_logs(model)",
@@ -929,6 +949,8 @@ impl Database {
         )?;
         Self::add_column_if_missing(conn, "proxy_request_logs", "first_token_ms", "INTEGER")?;
         Self::add_column_if_missing(conn, "proxy_request_logs", "duration_ms", "INTEGER")?;
+        // Fork：局域网网关 per-key 配额归因列（旧库补列；NULL = 非网关密钥流量）。
+        Self::add_column_if_missing(conn, "proxy_request_logs", "gateway_key_id", "TEXT")?;
 
         // model_pricing 表
         conn.execute(

@@ -3952,7 +3952,20 @@
       "capModels": "Allowed model globs (comma-separated, e.g. anthropic/*, empty = unrestricted)",
       "saveCaps": "Save permissions",
       "capsSaved": "Permissions saved",
-      "capsSaveFailed": "Failed to save permissions"
+      "capsSaveFailed": "Failed to save permissions",
+      "limitsHint": "Cap usage per local calendar window; over the limit returns 429. Each cap \"empty = unlimited\".",
+      "limitWindow": "Window",
+      "limitTokens": "Token cap (empty = unlimited)",
+      "limitCost": "Cost cap (USD, empty = unlimited)",
+      "saveLimits": "Save quota",
+      "limitsSaved": "Quota saved",
+      "limitsSaveFailed": "Failed to save quota",
+      "window": {
+        "none": "No limit",
+        "day": "Per day",
+        "week": "Per week",
+        "month": "Per month"
+      }
     },
     "autoFailover": {
       "info": "When the failover queue has multiple providers, the system will try them in priority order when requests fail. When a provider reaches the consecutive failure threshold, the circuit breaker will open and skip it temporarily.",

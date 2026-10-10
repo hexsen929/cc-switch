@@ -577,6 +577,8 @@ impl Database {
         let parse_arr = |s: String| -> Vec<String> {
             serde_json::from_str::<Vec<String>>(&s).unwrap_or_default()
         };
+        // limit_cost_usd 以 TEXT 存（对齐其它 cost 列）；坏数据 → None。
+        let cost: Option<String> = row.get(10)?;
         Ok(crate::proxy::gateway_auth::GatewayKey {
             id: row.get(0)?,
             name: row.get(1)?,
@@ -586,6 +588,9 @@ impl Database {
             allowed_apps: parse_arr(row.get::<_, String>(5)?),
             allowed_providers: parse_arr(row.get::<_, String>(6)?),
             allowed_models: parse_arr(row.get::<_, String>(7)?),
+            limit_window: row.get(8)?,
+            limit_tokens: row.get(9)?,
+            limit_cost_usd: cost.and_then(|s| s.trim().parse::<f64>().ok()),
         })
     }
 
@@ -595,7 +600,7 @@ impl Database {
     ) -> Result<Vec<crate::proxy::gateway_auth::GatewayKey>, AppError> {
         let conn = lock_conn!(self.conn);
         let mut stmt = conn
-            .prepare("SELECT id, name, token, enabled, created_at, allowed_apps, allowed_providers, allowed_models FROM forkdb.gateway_keys ORDER BY created_at ASC, id ASC")
+            .prepare("SELECT id, name, token, enabled, created_at, allowed_apps, allowed_providers, allowed_models, limit_window, limit_tokens, limit_cost_usd FROM forkdb.gateway_keys ORDER BY created_at ASC, id ASC")
             .map_err(|e| AppError::Database(e.to_string()))?;
         let rows = stmt
             .query_map([], Self::map_gateway_key_row)
@@ -614,7 +619,7 @@ impl Database {
     ) -> Result<Option<crate::proxy::gateway_auth::GatewayKey>, AppError> {
         let conn = lock_conn!(self.conn);
         let mut stmt = conn
-            .prepare("SELECT id, name, token, enabled, created_at, allowed_apps, allowed_providers, allowed_models FROM forkdb.gateway_keys WHERE token = ?1 LIMIT 1")
+            .prepare("SELECT id, name, token, enabled, created_at, allowed_apps, allowed_providers, allowed_models, limit_window, limit_tokens, limit_cost_usd FROM forkdb.gateway_keys WHERE token = ?1 LIMIT 1")
             .map_err(|e| AppError::Database(e.to_string()))?;
         let mut rows = stmt
             .query_map(rusqlite::params![token], Self::map_gateway_key_row)
@@ -722,6 +727,52 @@ impl Database {
         )
         .map_err(|e| AppError::Database(e.to_string()))?;
         Ok(())
+    }
+
+    /// 设置某条密钥的 per-key 配额窗口（Slice D）。window = none|day|week|month；
+    /// tokens / cost 为 None 时该维度不限（写 NULL）。window 归一到合法集合，非法→'none'。
+    pub fn set_gateway_key_limits(
+        &self,
+        id: &str,
+        window: &str,
+        limit_tokens: Option<i64>,
+        limit_cost_usd: Option<f64>,
+    ) -> Result<(), AppError> {
+        let window = match window {
+            "day" | "week" | "month" => window,
+            _ => "none",
+        };
+        let cost_text = limit_cost_usd.map(|c| c.to_string());
+        let conn = lock_conn!(self.conn);
+        conn.execute(
+            "UPDATE forkdb.gateway_keys
+             SET limit_window = ?2, limit_tokens = ?3, limit_cost_usd = ?4
+             WHERE id = ?1",
+            rusqlite::params![id, window, limit_tokens, cost_text],
+        )
+        .map_err(|e| AppError::Database(e.to_string()))?;
+        Ok(())
+    }
+
+    /// 汇总某网关密钥在 [since_epoch, 现在] 内的用量（Slice D 配额判定）。
+    /// 返回 (计费 token 总量, 美元花费总额)。计费 token = 输入 + 输出 + 缓存写（不含缓存读）。
+    /// 花费直接取 total_cost_usd（已含各维度）。无记录/读取失败由调用方 fail-open。
+    pub fn sum_gateway_key_usage(
+        &self,
+        key_id: &str,
+        since_epoch: i64,
+    ) -> Result<(i64, f64), AppError> {
+        let conn = lock_conn!(self.conn);
+        conn.query_row(
+            "SELECT
+                 COALESCE(SUM(input_tokens + output_tokens + cache_creation_tokens), 0),
+                 COALESCE(SUM(CAST(total_cost_usd AS REAL)), 0.0)
+             FROM proxy_request_logs
+             WHERE gateway_key_id = ?1 AND created_at >= ?2",
+            rusqlite::params![key_id, since_epoch],
+            |row| Ok((row.get::<_, i64>(0)?, row.get::<_, f64>(1)?)),
+        )
+        .map_err(|e| AppError::Database(e.to_string()))
     }
 }
 
@@ -844,5 +895,87 @@ mod gateway_key_tests {
         assert!(got.allowed_apps.is_empty());
         assert!(got.allowed_providers.is_empty());
         assert!(got.allowed_models.is_empty());
+    }
+
+    #[test]
+    fn limits_default_none_and_round_trip() {
+        let db = db();
+        let k = db.add_gateway_key("quota", None).unwrap();
+        assert_eq!(k.limit_window, "none");
+        assert!(k.limit_tokens.is_none());
+        assert!(k.limit_cost_usd.is_none());
+
+        db.set_gateway_key_limits(&k.id, "day", Some(1000), Some(2.5))
+            .unwrap();
+        let got = db.find_gateway_key_by_token(&k.token).unwrap().unwrap();
+        assert_eq!(got.limit_window, "day");
+        assert_eq!(got.limit_tokens, Some(1000));
+        assert_eq!(got.limit_cost_usd, Some(2.5));
+
+        // 非法窗口归一为 none；上限置空。
+        db.set_gateway_key_limits(&k.id, "year", None, None).unwrap();
+        let got = db.find_gateway_key_by_token(&k.token).unwrap().unwrap();
+        assert_eq!(got.limit_window, "none");
+        assert!(got.limit_tokens.is_none());
+        assert!(got.limit_cost_usd.is_none());
+    }
+
+    fn insert_log(
+        db: &Database,
+        request_id: &str,
+        gateway_key_id: Option<&str>,
+        created_at: i64,
+        input: i64,
+        output: i64,
+        cache_creation: i64,
+        total_cost_usd: &str,
+    ) {
+        let conn = db.conn.lock().expect("conn lock");
+        conn.execute(
+            "INSERT INTO proxy_request_logs (
+                request_id, provider_id, app_type, model,
+                input_tokens, output_tokens, cache_creation_tokens,
+                total_cost_usd, latency_ms, status_code, created_at, gateway_key_id
+             ) VALUES (?1, 'p', 'claude', 'm', ?2, ?3, ?4, ?5, 0, 200, ?6, ?7)",
+            rusqlite::params![
+                request_id,
+                input,
+                output,
+                cache_creation,
+                total_cost_usd,
+                created_at,
+                gateway_key_id,
+            ],
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn sum_gateway_key_usage_attributes_and_windows() {
+        let db = db();
+        // key k1：窗口内两条（tokens 10+20+... / cost 0.5+0.25）、窗口外一条、以及别的 key 一条。
+        insert_log(&db, "r1", Some("k1"), 1_000, 10, 5, 2, "0.50"); // 17 tokens
+        insert_log(&db, "r2", Some("k1"), 1_500, 20, 10, 0, "0.25"); // 30 tokens
+        insert_log(&db, "r3", Some("k1"), 500, 100, 100, 0, "9.00"); // 窗口外
+        insert_log(&db, "r4", Some("k2"), 1_200, 7, 7, 0, "1.00"); // 别的 key
+        insert_log(&db, "r5", None, 1_200, 99, 99, 0, "9.00"); // 无归因
+
+        let (tokens, cost) = db.sum_gateway_key_usage("k1", 1_000).unwrap();
+        assert_eq!(tokens, 17 + 30);
+        assert!((cost - 0.75).abs() < 1e-9);
+
+        // 不同 key 互不串账。
+        let (t2, c2) = db.sum_gateway_key_usage("k2", 1_000).unwrap();
+        assert_eq!(t2, 14);
+        assert!((c2 - 1.0).abs() < 1e-9);
+
+        // 窗口起点抬高后排除早期记录。
+        let (t3, _) = db.sum_gateway_key_usage("k1", 1_400).unwrap();
+        assert_eq!(t3, 30);
+
+        // 未知 key → 0。
+        let (t4, c4) = db.sum_gateway_key_usage("nobody", 0).unwrap();
+        assert_eq!(t4, 0);
+        assert!(c4.abs() < 1e-9);
     }
 }

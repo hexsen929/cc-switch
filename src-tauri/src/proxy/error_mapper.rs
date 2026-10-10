@@ -55,6 +55,9 @@ pub fn map_proxy_error_to_status(error: &ProxyError) -> u16 {
         // 网关密钥 caps 拒绝：403 Forbidden
         ProxyError::Forbidden(_) => 403,
 
+        // 网关密钥配额超限：429 Too Many Requests
+        ProxyError::RateLimited { .. } => 429,
+
         // 数据库错误：500 Internal Server Error
         ProxyError::DatabaseError(_) => 500,
 

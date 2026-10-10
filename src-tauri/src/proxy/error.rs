@@ -78,6 +78,10 @@ pub enum ProxyError {
     #[error("网关密钥无权访问: {0}")]
     Forbidden(String),
 
+    /// 局域网网关 per-key 配额窗口超限：429 Too Many Requests（带 Retry-After）。
+    #[error("网关密钥配额超限: {message}")]
+    RateLimited { retry_after_secs: u64, message: String },
+
     #[allow(dead_code)]
     #[error("内部错误: {0}")]
     Internal(String),
@@ -85,6 +89,28 @@ pub enum ProxyError {
 
 impl IntoResponse for ProxyError {
     fn into_response(self) -> Response {
+        // 配额超限单独处理：需要在 429 响应上附带 Retry-After 头。
+        if let ProxyError::RateLimited {
+            retry_after_secs,
+            message,
+        } = &self
+        {
+            let error_body = json!({
+                "error": {
+                    "message": message,
+                    "type": "rate_limit_error",
+                }
+            });
+            let mut response =
+                (StatusCode::TOO_MANY_REQUESTS, Json(error_body)).into_response();
+            if let Ok(value) = axum::http::HeaderValue::from_str(&retry_after_secs.to_string()) {
+                response
+                    .headers_mut()
+                    .insert(axum::http::header::RETRY_AFTER, value);
+            }
+            return response;
+        }
+
         let (status, body) = match &self {
             ProxyError::UpstreamError {
                 status: upstream_status,
@@ -168,6 +194,7 @@ impl IntoResponse for ProxyError {
                         (StatusCode::BAD_GATEWAY, self.to_string())
                     }
                     ProxyError::UpstreamError { .. } => unreachable!(),
+                    ProxyError::RateLimited { .. } => unreachable!(),
                 };
 
                 let error_body = json!({

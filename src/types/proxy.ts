@@ -362,6 +362,10 @@ export interface GatewayKeyView {
   allowedApps: string[];
   allowedProviders: string[];
   allowedModels: string[];
+  /** per-key 配额窗口：none|day|week|month；limitTokens/limitCostUsd 为 null = 该维度不限。 */
+  limitWindow: string;
+  limitTokens: number | null;
+  limitCostUsd: number | null;
 }
 
 /** 完整密钥：仅在「新增 / 轮换」后一次性返回，含明文 token。 */
@@ -372,3 +376,7 @@ export interface GatewayKey {
   enabled: boolean;
   createdAt: string;
 }
+
+/** 配额窗口可选值。 */
+export const GATEWAY_LIMIT_WINDOWS = ["none", "day", "week", "month"] as const;
+export type GatewayLimitWindow = (typeof GATEWAY_LIMIT_WINDOWS)[number];

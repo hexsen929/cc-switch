@@ -11,13 +11,24 @@ import {
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import { SettingsSwitchRow } from "@/components/settings/SettingsLayout";
 import { ConfirmDialog } from "@/components/ConfirmDialog";
 import { toast } from "@/lib/toast";
 import { proxyApi } from "@/lib/api/proxy";
 import { PROXY_APP_IDS } from "@/config/appConfig";
 import { APP_DISPLAY_NAME } from "@/components/shell/AppGlyph";
-import type { GatewayKey, GatewayKeyView } from "@/types/proxy";
+import {
+  GATEWAY_LIMIT_WINDOWS,
+  type GatewayKey,
+  type GatewayKeyView,
+} from "@/types/proxy";
 
 /** 把逗号/换行分隔的输入解析为去空白、去空项的字符串数组。 */
 function parseList(raw: string): string[] {
@@ -195,6 +206,25 @@ export function GatewayKeysPanel() {
     }
   };
 
+  const saveLimits = async (
+    id: string,
+    window: string,
+    limitTokens: number | null,
+    limitCostUsd: number | null,
+  ) => {
+    try {
+      await proxyApi.setGatewayKeyLimits(id, window, limitTokens, limitCostUsd);
+      await refreshKeys();
+      toast.success(t("proxy.lanGateway.limitsSaved", "配额已保存"));
+    } catch (e) {
+      toast.error(
+        t("proxy.lanGateway.limitsSaveFailed", "配额保存失败") +
+          ":" +
+          String(e),
+      );
+    }
+  };
+
   // PANEL_RENDER_PLACEHOLDER
   return (
     <div className="space-y-4">
@@ -307,6 +337,9 @@ export function GatewayKeysPanel() {
                   onSaveCaps={(apps, providers, models) =>
                     void saveCaps(k.id, apps, providers, models)
                   }
+                  onSaveLimits={(window, tokens, cost) =>
+                    void saveLimits(k.id, window, tokens, cost)
+                  }
                 />
               ))}
             </div>
@@ -360,6 +393,11 @@ interface KeyRowProps {
   onRemove: () => void;
   onCopyMasked: () => void;
   onSaveCaps: (apps: string[], providers: string[], models: string[]) => void;
+  onSaveLimits: (
+    window: string,
+    tokens: number | null,
+    cost: number | null,
+  ) => void;
 }
 
 function KeyRow({
@@ -371,6 +409,7 @@ function KeyRow({
   onRemove,
   onCopyMasked,
   onSaveCaps,
+  onSaveLimits,
 }: KeyRowProps) {
   const { t } = useTranslation();
   const [name, setName] = useState(item.name);
@@ -378,6 +417,13 @@ function KeyRow({
   const [apps, setApps] = useState<string[]>(item.allowedApps);
   const [providers, setProviders] = useState(item.allowedProviders.join(", "));
   const [models, setModels] = useState(item.allowedModels.join(", "));
+  const [limitWindow, setLimitWindow] = useState(item.limitWindow || "none");
+  const [limitTokens, setLimitTokens] = useState(
+    item.limitTokens == null ? "" : String(item.limitTokens),
+  );
+  const [limitCost, setLimitCost] = useState(
+    item.limitCostUsd == null ? "" : String(item.limitCostUsd),
+  );
 
   const commitName = () => {
     const trimmed = name.trim();
@@ -389,10 +435,23 @@ function KeyRow({
       cur.includes(app) ? cur.filter((a) => a !== app) : [...cur, app],
     );
 
+  const saveLimits = () => {
+    const tokens = limitTokens.trim() ? Number(limitTokens.trim()) : null;
+    const cost = limitCost.trim() ? Number(limitCost.trim()) : null;
+    onSaveLimits(
+      limitWindow,
+      tokens != null && Number.isFinite(tokens) ? tokens : null,
+      cost != null && Number.isFinite(cost) ? cost : null,
+    );
+  };
+
   const hasCaps =
     item.allowedApps.length > 0 ||
     item.allowedProviders.length > 0 ||
-    item.allowedModels.length > 0;
+    item.allowedModels.length > 0 ||
+    (item.limitWindow && item.limitWindow !== "none") ||
+    item.limitTokens != null ||
+    item.limitCostUsd != null;
 
   return (
     <div className="space-y-2 rounded-md border border-border bg-surface p-2">
@@ -514,6 +573,68 @@ function KeyRow({
             >
               {t("proxy.lanGateway.saveCaps", "保存权限")}
             </Button>
+          </div>
+
+          <div className="space-y-2 border-t border-border pt-2">
+            <p className="text-xs text-fg-2">
+              {t(
+                "proxy.lanGateway.limitsHint",
+                "按本地日历窗口限制用量，超限返回 429；两个上限各自「留空=不限」。",
+              )}
+            </p>
+            <div className="flex items-center gap-2">
+              <span className="shrink-0 text-xs text-fg-3">
+                {t("proxy.lanGateway.limitWindow", "窗口")}
+              </span>
+              <Select
+                value={limitWindow}
+                disabled={disabled}
+                onValueChange={setLimitWindow}
+              >
+                <SelectTrigger className="text-xs">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  {GATEWAY_LIMIT_WINDOWS.map((w) => (
+                    <SelectItem key={w} value={w}>
+                      {t(`proxy.lanGateway.window.${w}`, w)}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+            <Input
+              type="number"
+              value={limitTokens}
+              onChange={(e) => setLimitTokens(e.target.value)}
+              disabled={disabled || limitWindow === "none"}
+              placeholder={t(
+                "proxy.lanGateway.limitTokens",
+                "token 上限（留空不限）",
+              )}
+              className="font-mono text-xs"
+            />
+            <Input
+              type="number"
+              value={limitCost}
+              onChange={(e) => setLimitCost(e.target.value)}
+              disabled={disabled || limitWindow === "none"}
+              placeholder={t(
+                "proxy.lanGateway.limitCost",
+                "花费上限（美元，留空不限）",
+              )}
+              className="font-mono text-xs"
+            />
+            <div className="flex justify-end">
+              <Button
+                variant="solid"
+                size="sm"
+                disabled={disabled}
+                onClick={saveLimits}
+              >
+                {t("proxy.lanGateway.saveLimits", "保存配额")}
+              </Button>
+            </div>
           </div>
         </div>
       )}

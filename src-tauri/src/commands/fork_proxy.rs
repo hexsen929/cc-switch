@@ -265,6 +265,9 @@ pub struct GatewayKeyView {
     pub allowed_apps: Vec<String>,
     pub allowed_providers: Vec<String>,
     pub allowed_models: Vec<String>,
+    pub limit_window: String,
+    pub limit_tokens: Option<i64>,
+    pub limit_cost_usd: Option<f64>,
 }
 
 fn mask_token(token: &str) -> String {
@@ -312,6 +315,9 @@ pub async fn list_gateway_keys(
             allowed_apps: k.allowed_apps,
             allowed_providers: k.allowed_providers,
             allowed_models: k.allowed_models,
+            limit_window: k.limit_window,
+            limit_tokens: k.limit_tokens,
+            limit_cost_usd: k.limit_cost_usd,
         })
         .collect())
 }
@@ -385,5 +391,21 @@ pub async fn set_gateway_key_caps(
     state
         .db
         .set_gateway_key_caps(&id, &allowed_apps, &allowed_providers, &allowed_models)
+        .map_err(|e| e.to_string())
+}
+
+/// 设置某条网关密钥的 per-key 配额窗口（Slice D）。window = none|day|week|month；
+/// tokens / cost 为 None 时该维度不限。超限在转发前回 429。
+#[tauri::command]
+pub async fn set_gateway_key_limits(
+    state: tauri::State<'_, AppState>,
+    id: String,
+    window: String,
+    limit_tokens: Option<i64>,
+    limit_cost_usd: Option<f64>,
+) -> Result<(), String> {
+    state
+        .db
+        .set_gateway_key_limits(&id, &window, limit_tokens, limit_cost_usd)
         .map_err(|e| e.to_string())
 }

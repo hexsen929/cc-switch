@@ -351,6 +351,21 @@ export const proxyApi = {
     });
   },
 
+  /** 设置 per-key 配额窗口：window = none|day|week|month；上限为 null = 该维度不限。 */
+  async setGatewayKeyLimits(
+    id: string,
+    window: string,
+    limitTokens: number | null,
+    limitCostUsd: number | null,
+  ): Promise<void> {
+    return invoke("set_gateway_key_limits", {
+      id,
+      window,
+      limitTokens,
+      limitCostUsd,
+    });
+  },
+
   // ========== 计费默认配置 API ==========
 
   // 获取计费模式来源

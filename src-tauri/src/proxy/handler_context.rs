@@ -81,6 +81,9 @@ pub struct RequestContext {
     pub subscription_account_failover: bool,
     /// Stack 模型的请求（`mode::stack`）：直达 Stack 里的那一家，不读也不写任何路由状态。
     pub is_stack: bool,
+    /// Fork：命中的局域网网关密钥 id（非环回且带有效 key 时存在）。用于把本次请求的用量
+    /// 归因到该密钥，供 per-key 配额窗口（Slice D）统计。环回免 key 请求为 None。
+    pub gateway_key_id: Option<String>,
 }
 
 /// 意图路由命中且带模型改写时：复用「声明式请求改写」的 model-map 把上游模型改写成目标。
@@ -386,6 +389,40 @@ impl RequestContext {
                     }
                 }
             }
+
+            // Fork 扩展：per-key 配额窗口（Slice D）。仅当配置了窗口 + 至少一个上限时才查库。
+            // 判定「本窗口已累计用量 >= 上限」→ 429（带 Retry-After = 距窗口重置的秒数）。
+            // 读库失败 fail-open（不阻断正常请求）。当前请求的用量在其完成后才记账，故这是
+            // 「达到上限后拦截后续请求」的语义，跨界的那一次请求仍放行。
+            if ak.limit_tokens.is_some() || ak.limit_cost_usd.is_some() {
+                if let Some((window_start, window_reset)) =
+                    crate::proxy::gateway_auth::quota_window_bounds_now(&ak.limit_window)
+                {
+                    let (used_tokens, used_cost) = state
+                        .db
+                        .sum_gateway_key_usage(&ak.id, window_start)
+                        .unwrap_or((0, 0.0));
+                    let over_tokens = ak.limit_tokens.is_some_and(|lim| used_tokens >= lim);
+                    let over_cost = ak.limit_cost_usd.is_some_and(|lim| used_cost >= lim);
+                    if over_tokens || over_cost {
+                        let now = chrono::Utc::now().timestamp();
+                        let retry_after_secs = (window_reset - now).max(1) as u64;
+                        let dimension = if over_tokens { "token" } else { "cost" };
+                        log::warn!(
+                            "[{tag}] 网关密钥 {} 配额超限（{dimension}，窗口 {}）→ 429",
+                            ak.id,
+                            ak.limit_window
+                        );
+                        return Err(ProxyError::RateLimited {
+                            retry_after_secs,
+                            message: format!(
+                                "gateway key quota exceeded ({dimension} limit, window '{}')",
+                                ak.limit_window
+                            ),
+                        });
+                    }
+                }
+            }
         }
 
         Ok(Self {
@@ -409,6 +446,7 @@ impl RequestContext {
             response_middleware,
             subscription_account_failover,
             is_stack,
+            gateway_key_id: authed.map(|ak| ak.id.clone()),
         })
     }
 

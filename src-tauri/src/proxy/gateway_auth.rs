@@ -32,8 +32,11 @@ pub struct PeerAddr(pub SocketAddr);
 /// 一条局域网网关密钥（token 明文仅存于本地 forkdb）。
 ///
 /// caps（allowed_apps / allowed_providers / allowed_models）为 per-key 允许表：
-/// 空数组 = 不限；allowed_models 支持 `*` glob。`#[serde(default)]` 让旧数据/旧前端平滑兼容。
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
+/// 空数组 = 不限；allowed_models 支持 `*` glob。
+/// limit_*（Slice D）为 per-key 配额窗口：limit_window = none|day|week|month（本地日历窗口），
+/// limit_tokens / limit_cost_usd 为该窗口内上限（None = 该维度不限）。
+/// `#[serde(default)]` 让旧数据/旧前端平滑兼容。
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct GatewayKey {
     pub id: String,
@@ -50,9 +53,16 @@ pub struct GatewayKey {
     pub allowed_providers: Vec<String>,
     #[serde(default)]
     pub allowed_models: Vec<String>,
+    #[serde(default)]
+    pub limit_window: String,
+    #[serde(default)]
+    pub limit_tokens: Option<i64>,
+    #[serde(default)]
+    pub limit_cost_usd: Option<f64>,
 }
 
-/// 鉴权通过后的身份 + 允许表（供下游 caps 校验读取；环回免 key 请求不带此扩展 = 不受限）。
+/// 鉴权通过后的身份 + 允许表 + 配额（供下游 caps/quota 校验读取；
+/// 环回免 key 请求不带此扩展 = 不受限）。
 #[derive(Debug, Clone)]
 pub struct AuthedKey {
     pub id: String,
@@ -61,6 +71,9 @@ pub struct AuthedKey {
     pub allowed_apps: Vec<String>,
     pub allowed_providers: Vec<String>,
     pub allowed_models: Vec<String>,
+    pub limit_window: String,
+    pub limit_tokens: Option<i64>,
+    pub limit_cost_usd: Option<f64>,
 }
 
 impl From<&GatewayKey> for AuthedKey {
@@ -71,6 +84,9 @@ impl From<&GatewayKey> for AuthedKey {
             allowed_apps: k.allowed_apps.clone(),
             allowed_providers: k.allowed_providers.clone(),
             allowed_models: k.allowed_models.clone(),
+            limit_window: k.limit_window.clone(),
+            limit_tokens: k.limit_tokens,
+            limit_cost_usd: k.limit_cost_usd,
         }
     }
 }
@@ -86,6 +102,55 @@ fn model_allow(list: &[String], model: &str) -> bool {
         || list
             .iter()
             .any(|pat| crate::proxy::intent_routing::glob_match(pat, model))
+}
+
+/// 配额窗口边界：给定窗口名与「当前本地时间」，返回 (窗口起点 epoch 秒, 窗口重置点 epoch 秒)。
+/// 窗口为本地日历：day = 本地今日 00:00；week = 本地本周一 00:00；month = 本地本月 1 日 00:00。
+/// 非法/none → None（= 无配额）。纯函数，便于单测（传入固定 now）。
+pub fn quota_window_bounds(
+    window: &str,
+    now: chrono::DateTime<chrono::Local>,
+) -> Option<(i64, i64)> {
+    use chrono::{Datelike, Duration, NaiveDate};
+    let today = now.date_naive();
+    let (start_date, end_date) = match window {
+        "day" => (today, today + Duration::days(1)),
+        "week" => {
+            let back = today.weekday().num_days_from_monday() as i64;
+            let monday = today - Duration::days(back);
+            (monday, monday + Duration::days(7))
+        }
+        "month" => {
+            let first = NaiveDate::from_ymd_opt(today.year(), today.month(), 1)?;
+            let next = if today.month() == 12 {
+                NaiveDate::from_ymd_opt(today.year() + 1, 1, 1)?
+            } else {
+                NaiveDate::from_ymd_opt(today.year(), today.month() + 1, 1)?
+            };
+            (first, next)
+        }
+        _ => return None,
+    };
+    Some((
+        local_midnight_epoch(start_date)?,
+        local_midnight_epoch(end_date)?,
+    ))
+}
+
+/// 把某个本地日期的 00:00 解释为 epoch 秒（DST 边界取 earliest / 回退 UTC，容错不 panic）。
+fn local_midnight_epoch(date: chrono::NaiveDate) -> Option<i64> {
+    use chrono::{LocalResult, TimeZone};
+    let naive = date.and_hms_opt(0, 0, 0)?;
+    match chrono::Local.from_local_datetime(&naive) {
+        LocalResult::Single(dt) => Some(dt.timestamp()),
+        LocalResult::Ambiguous(dt, _) => Some(dt.timestamp()),
+        LocalResult::None => Some(chrono::Local.from_utc_datetime(&naive).timestamp()),
+    }
+}
+
+/// 便捷包装：按「此刻」计算配额窗口边界。
+pub fn quota_window_bounds_now(window: &str) -> Option<(i64, i64)> {
+    quota_window_bounds(window, chrono::Local::now())
 }
 
 impl AuthedKey {
@@ -384,12 +449,18 @@ mod tests {
             allowed_apps: vec!["claude".into()],
             allowed_providers: vec![],
             allowed_models: vec!["anthropic/*".into()],
+            limit_window: "day".into(),
+            limit_tokens: Some(1000),
+            limit_cost_usd: Some(5.0),
         };
         let a = AuthedKey::from(&k);
         assert_eq!(a.id, "id1");
         assert_eq!(a.name, "laptop");
         assert_eq!(a.allowed_apps, vec!["claude".to_string()]);
         assert_eq!(a.allowed_models, vec!["anthropic/*".to_string()]);
+        assert_eq!(a.limit_window, "day");
+        assert_eq!(a.limit_tokens, Some(1000));
+        assert_eq!(a.limit_cost_usd, Some(5.0));
     }
 
     fn authed(apps: &[&str], providers: &[&str], models: &[&str]) -> AuthedKey {
@@ -399,6 +470,9 @@ mod tests {
             allowed_apps: apps.iter().map(|s| s.to_string()).collect(),
             allowed_providers: providers.iter().map(|s| s.to_string()).collect(),
             allowed_models: models.iter().map(|s| s.to_string()).collect(),
+            limit_window: "none".into(),
+            limit_tokens: None,
+            limit_cost_usd: None,
         }
     }
 
@@ -432,5 +506,39 @@ mod tests {
         assert!(ak.permits_model("anthropic/claude-sonnet-4"));
         assert!(ak.permits_model("some-HAIKU-model"));
         assert!(!ak.permits_model("openai/gpt-5.1"));
+    }
+
+    #[test]
+    fn quota_window_none_and_invalid_return_none() {
+        let now = chrono::Local::now();
+        assert!(quota_window_bounds("none", now).is_none());
+        assert!(quota_window_bounds("", now).is_none());
+        assert!(quota_window_bounds("year", now).is_none());
+    }
+
+    #[test]
+    fn quota_window_day_week_month_bounds() {
+        use chrono::TimeZone;
+        // 固定一个本地时刻（2026-02-18 周三 13:37）。断言用相对关系，避开机器时区差异。
+        let now = chrono::Local
+            .with_ymd_and_hms(2026, 2, 18, 13, 37, 0)
+            .single()
+            .expect("valid local time");
+        let now_ts = now.timestamp();
+
+        let (ds, de) = quota_window_bounds("day", now).unwrap();
+        assert!(ds <= now_ts && now_ts < de);
+        assert_eq!(de - ds, 86_400);
+
+        let (ws, we) = quota_window_bounds("week", now).unwrap();
+        assert!(ws <= now_ts && now_ts < we);
+        assert_eq!(we - ws, 7 * 86_400);
+        // 周起点必须 <= 日起点（本周一不晚于今天）。
+        assert!(ws <= ds);
+
+        let (ms, me) = quota_window_bounds("month", now).unwrap();
+        assert!(ms <= now_ts && now_ts < me);
+        // 2 月（28 天）窗口长度。
+        assert_eq!(me - ms, 28 * 86_400);
     }
 }

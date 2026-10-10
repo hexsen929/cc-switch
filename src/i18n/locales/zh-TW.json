@@ -3953,7 +3953,20 @@
       "capModels": "允許的模型 glob（逗號分隔，如 anthropic/*，留空不限）",
       "saveCaps": "儲存權限",
       "capsSaved": "權限已儲存",
-      "capsSaveFailed": "權限儲存失敗"
+      "capsSaveFailed": "權限儲存失敗",
+      "limitsHint": "依本地日曆視窗限制用量，超限回傳 429；兩個上限各自「留空=不限」。",
+      "limitWindow": "視窗",
+      "limitTokens": "token 上限（留空不限）",
+      "limitCost": "花費上限（美元，留空不限）",
+      "saveLimits": "儲存配額",
+      "limitsSaved": "配額已儲存",
+      "limitsSaveFailed": "配額儲存失敗",
+      "window": {
+        "none": "不限",
+        "day": "每天",
+        "week": "每週",
+        "month": "每月"
+      }
     },
     "autoFailover": {
       "info": "當故障轉移佇列中設定了多個供應商時，系統會在請求失敗時按優先順序依次嘗試。當某個供應商連續失敗達到閾值時，斷路器會打開並在一段時間內跳過該供應商。",

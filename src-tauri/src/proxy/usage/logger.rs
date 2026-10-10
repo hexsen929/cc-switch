@@ -84,6 +84,8 @@ pub struct RequestLog {
     pub is_streaming: bool,
     /// 成本倍数
     pub cost_multiplier: String,
+    /// Fork：发起本次请求的局域网网关密钥 id（None = 非网关密钥流量）。用于 per-key 配额统计。
+    pub gateway_key_id: Option<String>,
 }
 
 /// 使用量记录器
@@ -172,8 +174,8 @@ impl<'a> UsageLogger<'a> {
                 input_token_semantics,
                 input_cost_usd, output_cost_usd, cache_read_cost_usd, cache_creation_cost_usd, total_cost_usd,
                 latency_ms, first_token_ms, status_code, error_message, session_id,
-                provider_type, is_streaming, cost_multiplier, created_at
-            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25)"
+                provider_type, is_streaming, cost_multiplier, created_at, gateway_key_id
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26)"
         );
         let affected_rows = conn
             .execute(
@@ -204,6 +206,7 @@ impl<'a> UsageLogger<'a> {
                     log.is_streaming as i64,
                     log.cost_multiplier,
                     created_at,
+                    log.gateway_key_id,
                 ],
             )
             .map_err(|e| AppError::Database(format!("记录请求日志失败: {e}")))?;
@@ -285,6 +288,7 @@ impl<'a> UsageLogger<'a> {
             provider_type: None,
             is_streaming: false,
             cost_multiplier: "1.0".to_string(),
+            gateway_key_id: None,
         };
 
         self.log_request(&log)
@@ -326,6 +330,7 @@ impl<'a> UsageLogger<'a> {
             provider_type,
             is_streaming,
             cost_multiplier: "1.0".to_string(),
+            gateway_key_id: None,
         };
 
         self.log_request(&log)
@@ -386,6 +391,7 @@ impl<'a> UsageLogger<'a> {
         session_id: Option<String>,
         provider_type: Option<String>,
         is_streaming: bool,
+        gateway_key_id: Option<String>,
     ) -> Result<(), AppError> {
         let pricing = self.get_model_pricing(&pricing_model)?;
 
@@ -422,6 +428,7 @@ impl<'a> UsageLogger<'a> {
             provider_type,
             is_streaming,
             cost_multiplier: "1".to_string(),
+            gateway_key_id,
         };
 
         self.log_request(&log)
@@ -457,6 +464,7 @@ mod tests {
             provider_type: Some("codex".to_string()),
             is_streaming: true,
             cost_multiplier: "1".to_string(),
+            gateway_key_id: None,
         }
     }
 
@@ -500,6 +508,7 @@ mod tests {
             None,
             Some("claude".to_string()),
             false,
+            None,
         )?;
 
         // 验证记录已插入
@@ -714,6 +723,7 @@ mod tests {
             provider_type: Some("grokbuild".to_string()),
             is_streaming: false,
             cost_multiplier: "1".to_string(),
+            gateway_key_id: None,
         };
 
         logger.log_request(&log)?;

@@ -488,6 +488,7 @@ struct ClaudeUsageLog {
     latency_ms: u64,
     status_code: u16,
     is_streaming: bool,
+    gateway_key_id: Option<String>,
 }
 
 fn prepare_claude_usage_log(
@@ -521,6 +522,7 @@ fn prepare_claude_usage_log(
         latency_ms: ctx.latency_ms(),
         status_code,
         is_streaming,
+        gateway_key_id: ctx.gateway_key_id.clone(),
     })
 }
 
@@ -538,6 +540,7 @@ async fn write_claude_usage_log(state: &ProxyState, log: ClaudeUsageLog) {
         log.is_streaming,
         log.status_code,
         Some(log.session_id),
+        log.gateway_key_id,
     )
     .await;
 }
@@ -655,6 +658,7 @@ async fn handle_claude_transform(
             let status_code = status.as_u16();
             let start_time = ctx.start_time;
             let session_id = ctx.session_id.clone();
+            let gateway_key_id = ctx.gateway_key_id.clone();
             // 用 ctx 的 app_type：Claude Desktop 网关也走此转换路径，硬编码
             // "claude" 会把 claude-desktop 的行错记到 claude 名下
             let app_type_str = ctx.app_type_str;
@@ -675,6 +679,7 @@ async fn handle_claude_transform(
                         let session_id = session_id.clone();
                         let request_model = request_model.clone();
                         let outbound_model = fallback_model.clone();
+                        let gateway_key_id = gateway_key_id.clone();
 
                         tokio::spawn(async move {
                             log_usage(
@@ -690,6 +695,7 @@ async fn handle_claude_transform(
                                 true,
                                 status_code,
                                 Some(session_id),
+                                gateway_key_id,
                             )
                             .await;
                         });
@@ -943,6 +949,7 @@ async fn handle_claude_virtual_tool_stream(
             let state = state.clone();
             let provider_id = ctx.provider.id.clone();
             let session_id = ctx.session_id.clone();
+            let gateway_key_id = ctx.gateway_key_id.clone();
             async move {
                 log_usage(
                     &state,
@@ -957,6 +964,7 @@ async fn handle_claude_virtual_tool_stream(
                     true,
                     status.as_u16(),
                     Some(session_id),
+                    gateway_key_id,
                 )
                 .await;
             }
@@ -1920,6 +1928,7 @@ async fn handle_codex_xai_native_responses_rewrite(
                     let provider_id = ctx.provider.id.clone();
                     let session_id = ctx.session_id.clone();
                     let latency_ms = ctx.latency_ms();
+                    let gateway_key_id = ctx.gateway_key_id.clone();
                     async move {
                         log_usage(
                             &state,
@@ -1934,6 +1943,7 @@ async fn handle_codex_xai_native_responses_rewrite(
                             false,
                             status.as_u16(),
                             Some(session_id),
+                            gateway_key_id,
                         )
                         .await;
                     }
@@ -2016,6 +2026,7 @@ async fn handle_codex_chat_to_responses_transform(
             let app_type_str = ctx.app_type_str;
             let start_time = ctx.start_time;
             let session_id = ctx.session_id.clone();
+            let gateway_key_id = ctx.gateway_key_id.clone();
 
             Some(SseUsageCollector::new(
                 start_time,
@@ -2044,6 +2055,7 @@ async fn handle_codex_chat_to_responses_transform(
                     let request_model = request_model.clone();
                     let outbound_model = fallback_model.clone();
                     let session_id = session_id.clone();
+                    let gateway_key_id = gateway_key_id.clone();
 
                     tokio::spawn(async move {
                         log_usage(
@@ -2059,6 +2071,7 @@ async fn handle_codex_chat_to_responses_transform(
                             true,
                             status.as_u16(),
                             Some(session_id),
+                            gateway_key_id,
                         )
                         .await;
                     });
@@ -2173,6 +2186,7 @@ async fn handle_codex_chat_to_responses_transform(
             let provider_id = ctx.provider.id.clone();
             let session_id = ctx.session_id.clone();
             let latency_ms = ctx.latency_ms();
+            let gateway_key_id = ctx.gateway_key_id.clone();
             async move {
                 log_usage(
                     &state,
@@ -2187,6 +2201,7 @@ async fn handle_codex_chat_to_responses_transform(
                     false,
                     status.as_u16(),
                     Some(session_id),
+                    gateway_key_id,
                 )
                 .await;
             }
@@ -2274,6 +2289,7 @@ async fn handle_codex_virtual_tool_stream(
             let provider_id = ctx.provider.id.clone();
             let session_id = ctx.session_id.clone();
             let latency_ms = ctx.latency_ms();
+            let gateway_key_id = ctx.gateway_key_id.clone();
             async move {
                 log_usage(
                     &state,
@@ -2288,6 +2304,7 @@ async fn handle_codex_virtual_tool_stream(
                     true,
                     status.as_u16(),
                     Some(session_id),
+                    gateway_key_id,
                 )
                 .await;
             }
@@ -2438,6 +2455,7 @@ async fn handle_codex_anthropic_to_responses_transform(
             let provider_id = ctx.provider.id.clone();
             let session_id = ctx.session_id.clone();
             let latency_ms = ctx.latency_ms();
+            let gateway_key_id = ctx.gateway_key_id.clone();
             async move {
                 log_usage(
                     &state,
@@ -2452,6 +2470,7 @@ async fn handle_codex_anthropic_to_responses_transform(
                     false,
                     status.as_u16(),
                     Some(session_id),
+                    gateway_key_id,
                 )
                 .await;
             }
@@ -2502,6 +2521,7 @@ fn build_codex_anthropic_sse_response(
         let app_type_str = ctx.app_type_str;
         let start_time = ctx.start_time;
         let session_id = ctx.session_id.clone();
+        let gateway_key_id = ctx.gateway_key_id.clone();
 
         Some(SseUsageCollector::new(
             start_time,
@@ -2524,6 +2544,7 @@ fn build_codex_anthropic_sse_response(
                 let request_model = request_model.clone();
                 let outbound_model = fallback_model.clone();
                 let session_id = session_id.clone();
+                let gateway_key_id = gateway_key_id.clone();
 
                 tokio::spawn(async move {
                     log_usage(
@@ -2539,6 +2560,7 @@ fn build_codex_anthropic_sse_response(
                         true,
                         status.as_u16(),
                         Some(session_id),
+                        gateway_key_id,
                     )
                     .await;
                 });
@@ -2871,6 +2893,7 @@ fn codex_proxy_error_code(error: &ProxyError) -> &'static str {
         ProxyError::InvalidRequest(_) => "cc_switch_invalid_request",
         ProxyError::AuthError(_) => "cc_switch_auth_error",
         ProxyError::Forbidden(_) => "cc_switch_forbidden",
+        ProxyError::RateLimited { .. } => "cc_switch_rate_limited",
         ProxyError::UpstreamError { .. } => "cc_switch_upstream_error",
         ProxyError::DatabaseError(_) => "cc_switch_database_error",
         ProxyError::Internal(_) => "cc_switch_internal_error",
@@ -3666,6 +3689,7 @@ async fn log_usage(
     is_streaming: bool,
     status_code: u16,
     session_id: Option<String>,
+    gateway_key_id: Option<String>,
 ) {
     use super::usage::logger::UsageLogger;
 
@@ -3710,6 +3734,7 @@ async fn log_usage(
             session_id,
             None, // provider_type
             is_streaming,
+            gateway_key_id,
         )
     });
     if let Err(e) = write.await.unwrap_or_else(|e| {
@@ -4838,6 +4863,9 @@ mod stack_tests {
             allowed_apps: vec![],
             allowed_providers: vec![],
             allowed_models: vec!["anthropic/*".into()],
+            limit_window: "none".into(),
+            limit_tokens: None,
+            limit_cost_usd: None,
         };
         // Anthropic 发现形状：data[].id
         let mut discovery = json!({

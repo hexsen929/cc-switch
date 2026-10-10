@@ -3952,7 +3952,20 @@
       "capModels": "允许的模型 glob（逗号分隔，如 anthropic/*，留空不限）",
       "saveCaps": "保存权限",
       "capsSaved": "权限已保存",
-      "capsSaveFailed": "权限保存失败"
+      "capsSaveFailed": "权限保存失败",
+      "limitsHint": "按本地日历窗口限制用量，超限返回 429；两个上限各自「留空=不限」。",
+      "limitWindow": "窗口",
+      "limitTokens": "token 上限（留空不限）",
+      "limitCost": "花费上限（美元，留空不限）",
+      "saveLimits": "保存配额",
+      "limitsSaved": "配额已保存",
+      "limitsSaveFailed": "配额保存失败",
+      "window": {
+        "none": "不限",
+        "day": "每天",
+        "week": "每周",
+        "month": "每月"
+      }
     },
     "autoFailover": {
       "info": "当故障转移队列中配置了多个供应商时，系统会在请求失败时按优先级顺序依次尝试。当某个供应商连续失败达到阈值时，熔断器会打开并在一段时间内跳过该供应商。",

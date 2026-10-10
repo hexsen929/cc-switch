@@ -526,6 +526,8 @@ pub(crate) fn create_usage_collector(
     let stream_parser = parser_config.stream_parser;
     let model_extractor = parser_config.model_extractor;
     let session_id = ctx.session_id.clone();
+    // Fork：把本次请求归因到发起它的局域网网关密钥，供 per-key 配额统计。
+    let gateway_key_id = ctx.gateway_key_id.clone();
 
     Some(SseUsageCollector::new(
         start_time,
@@ -540,6 +542,7 @@ pub(crate) fn create_usage_collector(
                 let session_id = session_id.clone();
                 let request_model = request_model.clone();
                 let outbound_model = fallback_model.clone();
+                let gateway_key_id = gateway_key_id.clone();
 
                 tokio::spawn(async move {
                     log_usage_internal(
@@ -555,6 +558,7 @@ pub(crate) fn create_usage_collector(
                         true, // is_streaming
                         status_code,
                         Some(session_id),
+                        gateway_key_id,
                     )
                     .await;
                 });
@@ -566,6 +570,7 @@ pub(crate) fn create_usage_collector(
                 let session_id = session_id.clone();
                 let request_model = request_model.clone();
                 let outbound_model = fallback_model.clone();
+                let gateway_key_id = gateway_key_id.clone();
 
                 tokio::spawn(async move {
                     log_usage_internal(
@@ -581,6 +586,7 @@ pub(crate) fn create_usage_collector(
                         true, // is_streaming
                         status_code,
                         Some(session_id),
+                        gateway_key_id,
                     )
                     .await;
                 });
@@ -619,6 +625,7 @@ fn spawn_log_usage(
         .unwrap_or_else(|| ctx.request_model.clone());
     let latency_ms = ctx.latency_ms();
     let session_id = ctx.session_id.clone();
+    let gateway_key_id = ctx.gateway_key_id.clone();
 
     tokio::spawn(async move {
         log_usage_internal(
@@ -634,6 +641,7 @@ fn spawn_log_usage(
             is_streaming,
             status_code,
             Some(session_id),
+            gateway_key_id,
         )
         .await;
     });
@@ -667,6 +675,7 @@ async fn log_usage_internal(
     is_streaming: bool,
     status_code: u16,
     session_id: Option<String>,
+    gateway_key_id: Option<String>,
 ) {
     use super::usage::logger::UsageLogger;
 
@@ -716,6 +725,7 @@ async fn log_usage_internal(
             session_id,
             None, // provider_type
             is_streaming,
+            gateway_key_id,
         )
     });
     if let Err(e) = write.await.unwrap_or_else(|e| {
@@ -1277,6 +1287,7 @@ mod tests {
             false,
             200,
             None,
+            None,
         )
         .await;
 
@@ -1342,6 +1353,7 @@ mod tests {
             None,
             false,
             200,
+            None,
             None,
         )
         .await;
@@ -1435,6 +1447,7 @@ mod tests {
                 None,
                 false,
                 200,
+                None,
                 None,
             )
             .await;

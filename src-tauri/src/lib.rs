@@ -1663,6 +1663,7 @@ pub fn run() {
             commands::rename_gateway_key,
             commands::remove_gateway_key,
             commands::set_gateway_key_caps,
+            commands::set_gateway_key_limits,
             // Fork failover (model-level queues + chain)
             commands::get_failover_queue_for_model,
             commands::get_available_providers_for_model_failover,
