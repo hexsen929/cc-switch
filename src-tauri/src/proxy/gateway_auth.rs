@@ -31,8 +31,8 @@ pub struct PeerAddr(pub SocketAddr);
 
 /// 一条局域网网关密钥（token 明文仅存于本地 forkdb）。
 ///
-/// caps（allowed_apps / allowed_providers / allowed_models）在 Slice C 加入；
-/// 此处先给出基础字段，`#[serde(default)]` 让旧数据/旧前端平滑兼容。
+/// caps（allowed_apps / allowed_providers / allowed_models）为 per-key 允许表：
+/// 空数组 = 不限；allowed_models 支持 `*` glob。`#[serde(default)]` 让旧数据/旧前端平滑兼容。
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct GatewayKey {
@@ -44,16 +44,23 @@ pub struct GatewayKey {
     pub enabled: bool,
     #[serde(default)]
     pub created_at: String,
+    #[serde(default)]
+    pub allowed_apps: Vec<String>,
+    #[serde(default)]
+    pub allowed_providers: Vec<String>,
+    #[serde(default)]
+    pub allowed_models: Vec<String>,
 }
 
-/// 鉴权通过后的身份（供下游 caps 校验读取；环回免 key 请求不带此扩展 = 不受限）。
+/// 鉴权通过后的身份 + 允许表（供下游 caps 校验读取；环回免 key 请求不带此扩展 = 不受限）。
 #[derive(Debug, Clone)]
 pub struct AuthedKey {
-    // id / name 在 Slice C（per-key caps 校验）接入后被读取；此刻仅写入请求扩展。
-    #[allow(dead_code)]
     pub id: String,
     #[allow(dead_code)]
     pub name: String,
+    pub allowed_apps: Vec<String>,
+    pub allowed_providers: Vec<String>,
+    pub allowed_models: Vec<String>,
 }
 
 impl From<&GatewayKey> for AuthedKey {
@@ -61,7 +68,40 @@ impl From<&GatewayKey> for AuthedKey {
         AuthedKey {
             id: k.id.clone(),
             name: k.name.clone(),
+            allowed_apps: k.allowed_apps.clone(),
+            allowed_providers: k.allowed_providers.clone(),
+            allowed_models: k.allowed_models.clone(),
         }
+    }
+}
+
+/// 允许表语义：空 = 不限；否则值须命中其一（app/provider 精确匹配，大小写敏感）。
+fn exact_allow(list: &[String], value: &str) -> bool {
+    list.is_empty() || list.iter().any(|x| x == value)
+}
+
+/// 模型允许表：空 = 不限；否则 model 须命中其一（复用意图路由的 `*` glob 语义，大小写不敏感）。
+fn model_allow(list: &[String], model: &str) -> bool {
+    list.is_empty()
+        || list
+            .iter()
+            .any(|pat| crate::proxy::intent_routing::glob_match(pat, model))
+}
+
+impl AuthedKey {
+    /// app 维度是否允许（空表 = 不限）。
+    pub fn app_allowed(&self, app_type: &str) -> bool {
+        exact_allow(&self.allowed_apps, app_type)
+    }
+
+    /// provider 维度是否允许（空表 = 不限）。
+    pub fn provider_allowed(&self, provider_id: &str) -> bool {
+        exact_allow(&self.allowed_providers, provider_id)
+    }
+
+    /// 该 key 是否允许展示/使用某模型（空表 = 不限；供 /v1/models 过滤与请求校验复用）。
+    pub fn permits_model(&self, model: &str) -> bool {
+        model_allow(&self.allowed_models, model)
     }
 }
 
@@ -341,9 +381,56 @@ mod tests {
             token: "ccs-t".into(),
             enabled: true,
             created_at: "now".into(),
+            allowed_apps: vec!["claude".into()],
+            allowed_providers: vec![],
+            allowed_models: vec!["anthropic/*".into()],
         };
         let a = AuthedKey::from(&k);
         assert_eq!(a.id, "id1");
         assert_eq!(a.name, "laptop");
+        assert_eq!(a.allowed_apps, vec!["claude".to_string()]);
+        assert_eq!(a.allowed_models, vec!["anthropic/*".to_string()]);
+    }
+
+    fn authed(apps: &[&str], providers: &[&str], models: &[&str]) -> AuthedKey {
+        AuthedKey {
+            id: "k".into(),
+            name: "k".into(),
+            allowed_apps: apps.iter().map(|s| s.to_string()).collect(),
+            allowed_providers: providers.iter().map(|s| s.to_string()).collect(),
+            allowed_models: models.iter().map(|s| s.to_string()).collect(),
+        }
+    }
+
+    #[test]
+    fn empty_caps_allow_everything() {
+        let ak = authed(&[], &[], &[]);
+        assert!(ak.app_allowed("claude"));
+        assert!(ak.app_allowed("codex"));
+        assert!(ak.provider_allowed("anything"));
+        assert!(ak.permits_model("whatever-model"));
+    }
+
+    #[test]
+    fn app_cap_restricts_exactly() {
+        let ak = authed(&["claude"], &[], &[]);
+        assert!(ak.app_allowed("claude"));
+        assert!(!ak.app_allowed("codex"));
+        assert!(!ak.app_allowed("gemini"));
+    }
+
+    #[test]
+    fn provider_cap_restricts_exactly() {
+        let ak = authed(&[], &["p-allowed"], &[]);
+        assert!(ak.provider_allowed("p-allowed"));
+        assert!(!ak.provider_allowed("p-other"));
+    }
+
+    #[test]
+    fn model_cap_supports_glob_and_is_case_insensitive() {
+        let ak = authed(&[], &[], &["anthropic/*", "*haiku*"]);
+        assert!(ak.permits_model("anthropic/claude-sonnet-4"));
+        assert!(ak.permits_model("some-HAIKU-model"));
+        assert!(!ak.permits_model("openai/gpt-5.1"));
     }
 }

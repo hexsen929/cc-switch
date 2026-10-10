@@ -309,7 +309,8 @@ fn has_tool_matching(body: &Value, needle: &str) -> bool {
 }
 
 /// 极简 glob：支持首尾 `*`（`*x`、`x*`、`*x*`、`x`、`*`）。大小写不敏感。
-fn glob_match(pattern: &str, value: &str) -> bool {
+/// `pub(crate)`：局域网网关 per-key caps 的 allowed_models 复用同一套 glob 语义。
+pub(crate) fn glob_match(pattern: &str, value: &str) -> bool {
     let p = pattern.to_lowercase();
     let v = value.to_lowercase();
     if p == "*" {

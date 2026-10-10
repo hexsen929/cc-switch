@@ -293,18 +293,36 @@ impl Database {
 
         // 9.6 局域网网关密钥表（Fork 扩展）
         // 开启「局域网共享」后，非环回入站必须携带这里某个 enabled 的 token 才放行。
-        // token 以明文存于 forkdb（本地文件），列表只回末 4 位；允许表（caps）列见 Slice C。
+        // token 以明文存于 forkdb（本地文件），列表只回末 4 位。
+        // allowed_* 为 per-key caps（Slice C）：JSON 数组，空数组 `[]` = 不限；
+        // allowed_models 支持 `*` glob。limit_* 列为 Slice D（配额）预留，当前未用、可空。
         conn.execute(
             "CREATE TABLE IF NOT EXISTS forkdb.gateway_keys (
                 id TEXT PRIMARY KEY,
                 name TEXT NOT NULL DEFAULT '',
                 token TEXT NOT NULL UNIQUE,
                 enabled INTEGER NOT NULL DEFAULT 1,
-                created_at TEXT NOT NULL DEFAULT (datetime('now'))
+                created_at TEXT NOT NULL DEFAULT (datetime('now')),
+                allowed_apps TEXT NOT NULL DEFAULT '[]',
+                allowed_providers TEXT NOT NULL DEFAULT '[]',
+                allowed_models TEXT NOT NULL DEFAULT '[]'
             )",
             [],
         )
         .map_err(|e| AppError::Database(e.to_string()))?;
+        // 为 Slice B 已建表（无 caps 列）的本地库补列；重复执行时忽略「列已存在」错误。
+        let _ = conn.execute(
+            "ALTER TABLE forkdb.gateway_keys ADD COLUMN allowed_apps TEXT NOT NULL DEFAULT '[]'",
+            [],
+        );
+        let _ = conn.execute(
+            "ALTER TABLE forkdb.gateway_keys ADD COLUMN allowed_providers TEXT NOT NULL DEFAULT '[]'",
+            [],
+        );
+        let _ = conn.execute(
+            "ALTER TABLE forkdb.gateway_keys ADD COLUMN allowed_models TEXT NOT NULL DEFAULT '[]'",
+            [],
+        );
 
         // 10. Proxy Request Logs 表
         // pricing_model = 写入时实际用于计价的模型名（pricing_model_source 解析结果），

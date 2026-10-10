@@ -5701,6 +5701,7 @@ model_provider = "c"
                 "Claude",
                 "claude",
                 None,
+                None,
             )
         };
         let chain = |ctx: &crate::proxy::handler_context::RequestContext| {

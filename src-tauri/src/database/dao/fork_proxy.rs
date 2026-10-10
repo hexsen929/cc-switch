@@ -573,12 +573,19 @@ impl Database {
     fn map_gateway_key_row(
         row: &rusqlite::Row<'_>,
     ) -> rusqlite::Result<crate::proxy::gateway_auth::GatewayKey> {
+        // caps 列为 JSON 数组文本；坏数据/空串 → 空 Vec（= 不限），fail-safe。
+        let parse_arr = |s: String| -> Vec<String> {
+            serde_json::from_str::<Vec<String>>(&s).unwrap_or_default()
+        };
         Ok(crate::proxy::gateway_auth::GatewayKey {
             id: row.get(0)?,
             name: row.get(1)?,
             token: row.get(2)?,
             enabled: row.get::<_, i64>(3)? != 0,
             created_at: row.get(4)?,
+            allowed_apps: parse_arr(row.get::<_, String>(5)?),
+            allowed_providers: parse_arr(row.get::<_, String>(6)?),
+            allowed_models: parse_arr(row.get::<_, String>(7)?),
         })
     }
 
@@ -588,7 +595,7 @@ impl Database {
     ) -> Result<Vec<crate::proxy::gateway_auth::GatewayKey>, AppError> {
         let conn = lock_conn!(self.conn);
         let mut stmt = conn
-            .prepare("SELECT id, name, token, enabled, created_at FROM forkdb.gateway_keys ORDER BY created_at ASC, id ASC")
+            .prepare("SELECT id, name, token, enabled, created_at, allowed_apps, allowed_providers, allowed_models FROM forkdb.gateway_keys ORDER BY created_at ASC, id ASC")
             .map_err(|e| AppError::Database(e.to_string()))?;
         let rows = stmt
             .query_map([], Self::map_gateway_key_row)
@@ -607,7 +614,7 @@ impl Database {
     ) -> Result<Option<crate::proxy::gateway_auth::GatewayKey>, AppError> {
         let conn = lock_conn!(self.conn);
         let mut stmt = conn
-            .prepare("SELECT id, name, token, enabled, created_at FROM forkdb.gateway_keys WHERE token = ?1 LIMIT 1")
+            .prepare("SELECT id, name, token, enabled, created_at, allowed_apps, allowed_providers, allowed_models FROM forkdb.gateway_keys WHERE token = ?1 LIMIT 1")
             .map_err(|e| AppError::Database(e.to_string()))?;
         let mut rows = stmt
             .query_map(rusqlite::params![token], Self::map_gateway_key_row)
@@ -689,6 +696,29 @@ impl Database {
         conn.execute(
             "DELETE FROM forkdb.gateway_keys WHERE id = ?1",
             rusqlite::params![id],
+        )
+        .map_err(|e| AppError::Database(e.to_string()))?;
+        Ok(())
+    }
+
+    /// 设置某条密钥的 per-key caps（允许表）。各参数为字符串列表，空列表 = 不限；
+    /// 以 JSON 数组文本存库。id 不存在时为 no-op。
+    pub fn set_gateway_key_caps(
+        &self,
+        id: &str,
+        allowed_apps: &[String],
+        allowed_providers: &[String],
+        allowed_models: &[String],
+    ) -> Result<(), AppError> {
+        let apps = serde_json::to_string(allowed_apps).unwrap_or_else(|_| "[]".to_string());
+        let providers = serde_json::to_string(allowed_providers).unwrap_or_else(|_| "[]".to_string());
+        let models = serde_json::to_string(allowed_models).unwrap_or_else(|_| "[]".to_string());
+        let conn = lock_conn!(self.conn);
+        conn.execute(
+            "UPDATE forkdb.gateway_keys
+             SET allowed_apps = ?2, allowed_providers = ?3, allowed_models = ?4
+             WHERE id = ?1",
+            rusqlite::params![id, apps, providers, models],
         )
         .map_err(|e| AppError::Database(e.to_string()))?;
         Ok(())
@@ -784,5 +814,35 @@ mod gateway_key_tests {
     fn find_unknown_token_returns_none() {
         let db = db();
         assert!(db.find_gateway_key_by_token("ccs-missing").unwrap().is_none());
+    }
+
+    #[test]
+    fn caps_default_empty_and_round_trip() {
+        let db = db();
+        let k = db.add_gateway_key("capped", None).unwrap();
+        // 默认空 caps（= 不限）。
+        assert!(k.allowed_apps.is_empty());
+        assert!(k.allowed_providers.is_empty());
+        assert!(k.allowed_models.is_empty());
+
+        db.set_gateway_key_caps(
+            &k.id,
+            &["claude".to_string(), "codex".to_string()],
+            &["p-1".to_string()],
+            &["anthropic/*".to_string()],
+        )
+        .unwrap();
+
+        let got = db.find_gateway_key_by_token(&k.token).unwrap().unwrap();
+        assert_eq!(got.allowed_apps, vec!["claude", "codex"]);
+        assert_eq!(got.allowed_providers, vec!["p-1"]);
+        assert_eq!(got.allowed_models, vec!["anthropic/*"]);
+
+        // 置空恢复为「不限」。
+        db.set_gateway_key_caps(&k.id, &[], &[], &[]).unwrap();
+        let got = db.find_gateway_key_by_token(&k.token).unwrap().unwrap();
+        assert!(got.allowed_apps.is_empty());
+        assert!(got.allowed_providers.is_empty());
+        assert!(got.allowed_models.is_empty());
     }
 }

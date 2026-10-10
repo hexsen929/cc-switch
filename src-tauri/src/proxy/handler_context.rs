@@ -121,9 +121,12 @@ impl RequestContext {
     /// * `tag` - 日志标签
     /// * `app_type_str` - 应用类型字符串
     /// * `stack` - Stack 模型的目标（请求体里的 `model` 已换成上游名）
+    /// * `authed` - 命中的局域网网关密钥（非环回且带有效 key 时存在）；用于 per-key caps 校验。
+    ///   环回免 key 请求为 `None` → 不受限，与改造前行为一致。
     ///
     /// # Errors
-    /// 返回 `ProxyError` 如果 Provider 选择失败
+    /// 返回 `ProxyError` 如果 Provider 选择失败，或网关密钥 caps 不允许本次请求（403）
+    #[allow(clippy::too_many_arguments)]
     pub async fn new(
         state: &ProxyState,
         body: &serde_json::Value,
@@ -132,6 +135,7 @@ impl RequestContext {
         tag: &'static str,
         app_type_str: &'static str,
         stack: Option<StackTarget>,
+        authed: Option<&crate::proxy::gateway_auth::AuthedKey>,
     ) -> Result<Self, ProxyError> {
         let start_time = Instant::now();
 
@@ -196,7 +200,7 @@ impl RequestContext {
         );
 
         let is_stack = stack.is_some();
-        let (provider, providers, current_provider_id, request_model) = match stack {
+        let (mut provider, mut providers, current_provider_id, request_model) = match stack {
             Some(target) => {
                 // Stack 模型：只发往 Stack 里的那一家，不读代理路由、不经熔断器选家。按「单家、
                 // 不转移」处理：换成有效副本，转发和读响应两个阶段都从这里取，超时和重试
@@ -350,6 +354,39 @@ impl RequestContext {
                 (provider, providers, current_provider_id, request_model)
             }
         };
+
+        // Fork 扩展：局域网网关 per-key caps 校验（在转发/凭证替换之前返回 403）。
+        // 仅携带 AuthedKey 的非环回请求受限；环回免 key 请求 authed=None → 不校验，与改造前一致。
+        // 各维度「空允许表 = 不限」。provider 维度把失败转移链收敛到允许集合，杜绝经 failover
+        // 触达未授权 provider。
+        if let Some(ak) = authed {
+            let deny = |reason: String| -> ProxyError {
+                log::warn!("[{tag}] 网关密钥 {} caps 拒绝：{reason}", ak.id);
+                ProxyError::Forbidden(reason)
+            };
+            if !ak.app_allowed(app_type_str) {
+                return Err(deny(format!(
+                    "gateway key not allowed to access app '{app_type_str}'"
+                )));
+            }
+            if !request_model.is_empty() && !ak.permits_model(&request_model) {
+                return Err(deny(format!(
+                    "gateway key not allowed to use model '{request_model}'"
+                )));
+            }
+            if !ak.allowed_providers.is_empty() {
+                providers.retain(|p| ak.provider_allowed(&p.id));
+                match providers.first().cloned() {
+                    Some(p) => provider = p,
+                    None => {
+                        return Err(deny(
+                            "gateway key not allowed to use any currently available provider"
+                                .to_string(),
+                        ))
+                    }
+                }
+            }
+        }
 
         Ok(Self {
             start_time,
@@ -648,6 +685,7 @@ base_url = "https://third.example/v1"
             AppType::Codex,
             "Codex",
             "codex",
+            None,
             None,
         )
         .await

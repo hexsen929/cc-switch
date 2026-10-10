@@ -253,7 +253,7 @@ pub async fn set_intent_routing_config(
 
 // ==================== 局域网网关（Fork 扩展，默认关闭） ====================
 
-/// 列表视图：token 只回末 4 位，避免在管理界面泄露完整明文。
+/// 列表视图：token 只回末 4 位，避免在管理界面泄露完整明文。caps 允许表随列表回传供编辑。
 #[derive(serde::Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct GatewayKeyView {
@@ -262,6 +262,9 @@ pub struct GatewayKeyView {
     pub token_masked: String,
     pub enabled: bool,
     pub created_at: String,
+    pub allowed_apps: Vec<String>,
+    pub allowed_providers: Vec<String>,
+    pub allowed_models: Vec<String>,
 }
 
 fn mask_token(token: &str) -> String {
@@ -306,6 +309,9 @@ pub async fn list_gateway_keys(
             name: k.name,
             enabled: k.enabled,
             created_at: k.created_at,
+            allowed_apps: k.allowed_apps,
+            allowed_providers: k.allowed_providers,
+            allowed_models: k.allowed_models,
         })
         .collect())
 }
@@ -365,4 +371,19 @@ pub async fn remove_gateway_key(
     id: String,
 ) -> Result<(), String> {
     state.db.remove_gateway_key(&id).map_err(|e| e.to_string())
+}
+
+/// 设置某条网关密钥的 per-key caps（允许表）。空数组 = 不限；allowed_models 支持 `*` glob。
+#[tauri::command]
+pub async fn set_gateway_key_caps(
+    state: tauri::State<'_, AppState>,
+    id: String,
+    allowed_apps: Vec<String>,
+    allowed_providers: Vec<String>,
+    allowed_models: Vec<String>,
+) -> Result<(), String> {
+    state
+        .db
+        .set_gateway_key_caps(&id, &allowed_apps, &allowed_providers, &allowed_models)
+        .map_err(|e| e.to_string())
 }

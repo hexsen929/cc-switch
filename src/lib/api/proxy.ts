@@ -336,6 +336,21 @@ export const proxyApi = {
     return invoke("remove_gateway_key", { id });
   },
 
+  /** 设置 per-key caps（允许表）：空数组 = 不限；allowedModels 支持 `*` glob。 */
+  async setGatewayKeyCaps(
+    id: string,
+    allowedApps: string[],
+    allowedProviders: string[],
+    allowedModels: string[],
+  ): Promise<void> {
+    return invoke("set_gateway_key_caps", {
+      id,
+      allowedApps,
+      allowedProviders,
+      allowedModels,
+    });
+  },
+
   // ========== 计费默认配置 API ==========
 
   // 获取计费模式来源

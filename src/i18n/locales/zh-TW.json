@@ -3945,7 +3945,15 @@
       "addFailed": "新增金鑰失敗",
       "rotateFailed": "輪換失敗",
       "removeFailed": "刪除失敗",
-      "toggleKeyFailed": "切換金鑰狀態失敗"
+      "toggleKeyFailed": "切換金鑰狀態失敗",
+      "caps": "權限",
+      "capsHint": "限制此金鑰可用的範圍；三項各自「留空=不限」。",
+      "capApps": "應用",
+      "capProviders": "允許的供應商 ID（逗號分隔，留空不限）",
+      "capModels": "允許的模型 glob（逗號分隔，如 anthropic/*，留空不限）",
+      "saveCaps": "儲存權限",
+      "capsSaved": "權限已儲存",
+      "capsSaveFailed": "權限儲存失敗"
     },
     "autoFailover": {
       "info": "當故障轉移佇列中設定了多個供應商時，系統會在請求失敗時按優先順序依次嘗試。當某個供應商連續失敗達到閾值時，斷路器會打開並在一段時間內跳過該供應商。",

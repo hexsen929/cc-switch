@@ -74,6 +74,10 @@ pub enum ProxyError {
     #[error("认证失败: {0}")]
     AuthError(String),
 
+    /// 局域网网关 per-key 允许表（caps）拒绝：key 无权在该 app / 用该 provider / 跑该 model。
+    #[error("网关密钥无权访问: {0}")]
+    Forbidden(String),
+
     #[allow(dead_code)]
     #[error("内部错误: {0}")]
     Internal(String),
@@ -156,6 +160,7 @@ impl IntoResponse for ProxyError {
                         (StatusCode::GATEWAY_TIMEOUT, self.to_string())
                     }
                     ProxyError::AuthError(_) => (StatusCode::UNAUTHORIZED, self.to_string()),
+                    ProxyError::Forbidden(_) => (StatusCode::FORBIDDEN, self.to_string()),
                     ProxyError::Internal(_) => {
                         (StatusCode::INTERNAL_SERVER_ERROR, self.to_string())
                     }

@@ -6,6 +6,7 @@ import {
   Loader2,
   Plus,
   RefreshCw,
+  Shield,
   Trash2,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -14,7 +15,17 @@ import { SettingsSwitchRow } from "@/components/settings/SettingsLayout";
 import { ConfirmDialog } from "@/components/ConfirmDialog";
 import { toast } from "@/lib/toast";
 import { proxyApi } from "@/lib/api/proxy";
+import { PROXY_APP_IDS } from "@/config/appConfig";
+import { APP_DISPLAY_NAME } from "@/components/shell/AppGlyph";
 import type { GatewayKey, GatewayKeyView } from "@/types/proxy";
+
+/** 把逗号/换行分隔的输入解析为去空白、去空项的字符串数组。 */
+function parseList(raw: string): string[] {
+  return raw
+    .split(/[,\n]/)
+    .map((x) => x.trim())
+    .filter(Boolean);
+}
 
 async function copyToClipboard(text: string): Promise<boolean> {
   try {
@@ -162,6 +173,28 @@ export function GatewayKeysPanel() {
     else toast.error(t("proxy.lanGateway.copyFailed", "复制失败"));
   };
 
+  const saveCaps = async (
+    id: string,
+    allowedApps: string[],
+    allowedProviders: string[],
+    allowedModels: string[],
+  ) => {
+    try {
+      await proxyApi.setGatewayKeyCaps(
+        id,
+        allowedApps,
+        allowedProviders,
+        allowedModels,
+      );
+      await refreshKeys();
+      toast.success(t("proxy.lanGateway.capsSaved", "权限已保存"));
+    } catch (e) {
+      toast.error(
+        t("proxy.lanGateway.capsSaveFailed", "权限保存失败") + ":" + String(e),
+      );
+    }
+  };
+
   // PANEL_RENDER_PLACEHOLDER
   return (
     <div className="space-y-4">
@@ -271,6 +304,9 @@ export function GatewayKeysPanel() {
                   onRotate={() => setConfirmRotate(k)}
                   onRemove={() => setConfirmRemove(k)}
                   onCopyMasked={() => void copyToken(k.tokenMasked)}
+                  onSaveCaps={(apps, providers, models) =>
+                    void saveCaps(k.id, apps, providers, models)
+                  }
                 />
               ))}
             </div>
@@ -323,6 +359,7 @@ interface KeyRowProps {
   onRotate: () => void;
   onRemove: () => void;
   onCopyMasked: () => void;
+  onSaveCaps: (apps: string[], providers: string[], models: string[]) => void;
 }
 
 function KeyRow({
@@ -333,63 +370,153 @@ function KeyRow({
   onRotate,
   onRemove,
   onCopyMasked,
+  onSaveCaps,
 }: KeyRowProps) {
   const { t } = useTranslation();
   const [name, setName] = useState(item.name);
+  const [showCaps, setShowCaps] = useState(false);
+  const [apps, setApps] = useState<string[]>(item.allowedApps);
+  const [providers, setProviders] = useState(item.allowedProviders.join(", "));
+  const [models, setModels] = useState(item.allowedModels.join(", "));
 
   const commitName = () => {
     const trimmed = name.trim();
     if (trimmed !== item.name) onRename(trimmed);
   };
 
+  const toggleApp = (app: string) =>
+    setApps((cur) =>
+      cur.includes(app) ? cur.filter((a) => a !== app) : [...cur, app],
+    );
+
+  const hasCaps =
+    item.allowedApps.length > 0 ||
+    item.allowedProviders.length > 0 ||
+    item.allowedModels.length > 0;
+
   return (
-    <div className="flex items-center gap-2 rounded-md border border-border bg-surface p-2">
-      <Button
-        variant={item.enabled ? "solid" : "neutral"}
-        size="sm"
-        onClick={() => onToggle(!item.enabled)}
-        disabled={disabled}
-        className="shrink-0"
-      >
-        {item.enabled
-          ? t("proxy.lanGateway.enabled", "已启用")
-          : t("proxy.lanGateway.disabled", "已停用")}
-      </Button>
-      <Input
-        value={name}
-        onChange={(e) => setName(e.target.value)}
-        onBlur={commitName}
-        disabled={disabled}
-        placeholder={t("proxy.lanGateway.keyNamePlaceholder", "密钥名（可选）")}
-        className="text-xs"
-      />
-      <code
-        className="shrink-0 cursor-pointer rounded border border-border bg-subtle px-2 py-1 font-mono text-xs text-fg-2"
-        title={t("proxy.lanGateway.copyMasked", "复制脱敏值")}
-        onClick={onCopyMasked}
-      >
-        {item.tokenMasked}
-      </code>
-      <Button
-        variant="neutral"
-        size="sm"
-        onClick={onRotate}
-        disabled={disabled}
-        className="shrink-0"
-        aria-label={t("proxy.lanGateway.rotate", "轮换")}
-      >
-        <RefreshCw className="h-3.5 w-3.5" />
-      </Button>
-      <Button
-        variant="neutral"
-        size="sm"
-        onClick={onRemove}
-        disabled={disabled}
-        className="shrink-0"
-        aria-label={t("common.delete", "删除")}
-      >
-        <Trash2 className="h-3.5 w-3.5" />
-      </Button>
+    <div className="space-y-2 rounded-md border border-border bg-surface p-2">
+      <div className="flex items-center gap-2">
+        <Button
+          variant={item.enabled ? "solid" : "neutral"}
+          size="sm"
+          onClick={() => onToggle(!item.enabled)}
+          disabled={disabled}
+          className="shrink-0"
+        >
+          {item.enabled
+            ? t("proxy.lanGateway.enabled", "已启用")
+            : t("proxy.lanGateway.disabled", "已停用")}
+        </Button>
+        <Input
+          value={name}
+          onChange={(e) => setName(e.target.value)}
+          onBlur={commitName}
+          disabled={disabled}
+          placeholder={t(
+            "proxy.lanGateway.keyNamePlaceholder",
+            "密钥名（可选）",
+          )}
+          className="text-xs"
+        />
+        <code
+          className="shrink-0 cursor-pointer rounded border border-border bg-subtle px-2 py-1 font-mono text-xs text-fg-2"
+          title={t("proxy.lanGateway.copyMasked", "复制脱敏值")}
+          onClick={onCopyMasked}
+        >
+          {item.tokenMasked}
+        </code>
+        <Button
+          variant={showCaps || hasCaps ? "solid" : "neutral"}
+          size="sm"
+          onClick={() => setShowCaps((v) => !v)}
+          disabled={disabled}
+          className="shrink-0"
+          aria-label={t("proxy.lanGateway.caps", "权限")}
+          title={t("proxy.lanGateway.caps", "权限")}
+        >
+          <Shield className="h-3.5 w-3.5" />
+        </Button>
+        <Button
+          variant="neutral"
+          size="sm"
+          onClick={onRotate}
+          disabled={disabled}
+          className="shrink-0"
+          aria-label={t("proxy.lanGateway.rotate", "轮换")}
+        >
+          <RefreshCw className="h-3.5 w-3.5" />
+        </Button>
+        <Button
+          variant="neutral"
+          size="sm"
+          onClick={onRemove}
+          disabled={disabled}
+          className="shrink-0"
+          aria-label={t("common.delete", "删除")}
+        >
+          <Trash2 className="h-3.5 w-3.5" />
+        </Button>
+      </div>
+
+      {showCaps && (
+        <div className="space-y-2 border-t border-border pt-2">
+          <p className="text-xs text-fg-2">
+            {t(
+              "proxy.lanGateway.capsHint",
+              "限制此密钥可用的范围；三项各自「留空=不限」。",
+            )}
+          </p>
+          <div className="flex flex-wrap items-center gap-1.5">
+            <span className="text-xs text-fg-3">
+              {t("proxy.lanGateway.capApps", "应用")}
+            </span>
+            {PROXY_APP_IDS.map((app) => (
+              <Button
+                key={app}
+                variant={apps.includes(app) ? "solid" : "neutral"}
+                size="sm"
+                onClick={() => toggleApp(app)}
+                disabled={disabled}
+              >
+                {APP_DISPLAY_NAME[app]}
+              </Button>
+            ))}
+          </div>
+          <Input
+            value={providers}
+            onChange={(e) => setProviders(e.target.value)}
+            disabled={disabled}
+            placeholder={t(
+              "proxy.lanGateway.capProviders",
+              "允许的供应商 ID（逗号分隔，留空不限）",
+            )}
+            className="font-mono text-xs"
+          />
+          <Input
+            value={models}
+            onChange={(e) => setModels(e.target.value)}
+            disabled={disabled}
+            placeholder={t(
+              "proxy.lanGateway.capModels",
+              "允许的模型 glob（逗号分隔，如 anthropic/*，留空不限）",
+            )}
+            className="font-mono text-xs"
+          />
+          <div className="flex justify-end">
+            <Button
+              variant="solid"
+              size="sm"
+              disabled={disabled}
+              onClick={() =>
+                onSaveCaps(apps, parseList(providers), parseList(models))
+              }
+            >
+              {t("proxy.lanGateway.saveCaps", "保存权限")}
+            </Button>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

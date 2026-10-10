@@ -3944,7 +3944,15 @@
       "addFailed": "Failed to add key",
       "rotateFailed": "Rotation failed",
       "removeFailed": "Delete failed",
-      "toggleKeyFailed": "Failed to toggle key state"
+      "toggleKeyFailed": "Failed to toggle key state",
+      "caps": "Permissions",
+      "capsHint": "Restrict what this key may use; each field \"empty = unrestricted\".",
+      "capApps": "Apps",
+      "capProviders": "Allowed provider IDs (comma-separated, empty = unrestricted)",
+      "capModels": "Allowed model globs (comma-separated, e.g. anthropic/*, empty = unrestricted)",
+      "saveCaps": "Save permissions",
+      "capsSaved": "Permissions saved",
+      "capsSaveFailed": "Failed to save permissions"
     },
     "autoFailover": {
       "info": "When the failover queue has multiple providers, the system will try them in priority order when requests fail. When a provider reaches the consecutive failure threshold, the circuit breaker will open and skip it temporarily.",

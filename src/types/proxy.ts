@@ -358,6 +358,10 @@ export interface GatewayKeyView {
   tokenMasked: string;
   enabled: boolean;
   createdAt: string;
+  /** per-key caps（允许表）：空数组 = 不限；allowedModels 支持 `*` glob。 */
+  allowedApps: string[];
+  allowedProviders: string[];
+  allowedModels: string[];
 }
 
 /** 完整密钥：仅在「新增 / 轮换」后一次性返回，含明文 token。 */

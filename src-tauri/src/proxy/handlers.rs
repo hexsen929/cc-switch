@@ -93,11 +93,22 @@ pub async fn get_status(State(state): State<ProxyState>) -> Result<Json<ProxySta
 /// 按 [`is_claude_model_discovery`] 认出来，返回 Anthropic 形状的 Stack 模型列表。
 pub async fn handle_models(
     State(state): State<ProxyState>,
-    uri: axum::http::Uri,
-    headers: axum::http::HeaderMap,
+    request: axum::extract::Request,
 ) -> Result<Json<Value>, ProxyError> {
+    let (parts, _body) = request.into_parts();
+    let uri = parts.uri;
+    let headers = parts.headers;
+    // Fork：局域网网关 per-key caps——按当前 key 的 allowed_models 过滤模型列表（magpie 同款：
+    // 每个 key 只看到自己能用的模型）。环回免 key 请求无 AuthedKey → 不过滤，与改造前一致。
+    let authed = parts
+        .extensions
+        .get::<crate::proxy::gateway_auth::AuthedKey>()
+        .cloned();
+
     if is_claude_model_discovery(&uri, &headers) {
-        return Ok(Json(claude_model_discovery(&state)));
+        let mut discovery = claude_model_discovery(&state);
+        filter_models_by_caps(&mut discovery, authed.as_ref());
+        return Ok(Json(discovery));
     }
     let config_dir = crate::codex_config::get_codex_config_dir();
     let active_catalog_path = match crate::codex_config::read_codex_config_text() {
@@ -107,7 +118,7 @@ pub async fn handle_models(
         Err(_) => None,
     };
 
-    let catalog = if let Some(catalog_path) =
+    let mut catalog = if let Some(catalog_path) =
         active_catalog_path.as_ref().filter(|path| path.exists())
     {
         match crate::codex_config::read_codex_model_catalog_text(catalog_path) {
@@ -125,7 +136,41 @@ pub async fn handle_models(
         }
         json!({"models": []})
     };
+    filter_models_by_caps(&mut catalog, authed.as_ref());
     Ok(Json(catalog))
+}
+
+/// 按 AuthedKey 的 allowed_models 过滤 /v1/models 输出（就地）。
+/// 支持两种形状：Anthropic 发现 `{data:[{id,...}]}` 与 Codex 目录 `{models:[...]}`。
+/// 空允许表 / 无 key → 不过滤。无法识别出模型 id 的条目保留（请求时仍会 403 兜底）。
+fn filter_models_by_caps(
+    value: &mut Value,
+    authed: Option<&crate::proxy::gateway_auth::AuthedKey>,
+) {
+    let Some(ak) = authed else { return };
+    if ak.allowed_models.is_empty() {
+        return;
+    }
+    for key in ["data", "models"] {
+        if let Some(Value::Array(items)) = value.get_mut(key) {
+            items.retain(|item| match model_id_of(item) {
+                Some(id) => ak.permits_model(&id),
+                None => true,
+            });
+        }
+    }
+}
+
+/// 从模型列表条目里取出用于匹配的模型 id（容忍 id / model / slug / name 多种字段名）。
+fn model_id_of(item: &Value) -> Option<String> {
+    for field in ["id", "model", "slug", "name"] {
+        if let Some(s) = item.get(field).and_then(|v| v.as_str()) {
+            if !s.is_empty() {
+                return Some(s.to_string());
+            }
+        }
+    }
+    None
 }
 
 // ============================================================================
@@ -316,6 +361,7 @@ async fn handle_messages_for_app(
         tag,
         app_type_str,
         stack,
+        extensions.get::<crate::proxy::gateway_auth::AuthedKey>(),
     )
     .await?;
 
@@ -1176,6 +1222,7 @@ pub async fn handle_chat_completions(
         "Codex",
         "codex",
         stack,
+        extensions.get::<crate::proxy::gateway_auth::AuthedKey>(),
     )
     .await?;
     let endpoint = endpoint_with_query(&uri, "/chat/completions");
@@ -1295,6 +1342,7 @@ async fn handle_responses_for_app(
         tag,
         app_type_str,
         stack,
+        extensions.get::<crate::proxy::gateway_auth::AuthedKey>(),
     )
     .await?;
     let endpoint = endpoint_with_query(&uri, "/responses");
@@ -1538,6 +1586,7 @@ async fn handle_codex_standalone_passthrough(
         "Codex",
         "codex",
         None,
+        extensions.get::<crate::proxy::gateway_auth::AuthedKey>(),
     )
     .await?;
     let endpoint = endpoint_with_query(&uri, canonical_endpoint);
@@ -1628,6 +1677,7 @@ async fn handle_responses_compact_for_app(
         tag,
         app_type_str,
         stack,
+        extensions.get::<crate::proxy::gateway_auth::AuthedKey>(),
     )
     .await?;
     let endpoint = endpoint_with_query(&uri, "/responses/compact");
@@ -2820,6 +2870,7 @@ fn codex_proxy_error_code(error: &ProxyError) -> &'static str {
         ProxyError::TransformError(_) => "cc_switch_transform_error",
         ProxyError::InvalidRequest(_) => "cc_switch_invalid_request",
         ProxyError::AuthError(_) => "cc_switch_auth_error",
+        ProxyError::Forbidden(_) => "cc_switch_forbidden",
         ProxyError::UpstreamError { .. } => "cc_switch_upstream_error",
         ProxyError::DatabaseError(_) => "cc_switch_database_error",
         ProxyError::Internal(_) => "cc_switch_internal_error",
@@ -2884,6 +2935,7 @@ pub async fn handle_gemini(
         "Gemini",
         "gemini",
         None,
+        extensions.get::<crate::proxy::gateway_auth::AuthedKey>(),
     )
     .await?
     .with_model_from_uri(&uri);
@@ -3734,6 +3786,7 @@ mod tests {
                 upstream_model: "bridge-model".into(),
                 original_model: "bridge-model".into(),
             }),
+            None,
         )
         .await
         .unwrap();
@@ -4718,6 +4771,7 @@ mod stack_tests {
             "Claude",
             "claude",
             Some(target),
+            None,
         )
         .await
         .expect("context");
@@ -4764,15 +4818,57 @@ mod stack_tests {
 
     #[tokio::test]
     async fn claude_model_discovery_lists_nothing_outside_proxy_mode() {
-        let mut headers = axum::http::HeaderMap::new();
-        headers.insert("anthropic-version", "2023-06-01".parse().unwrap());
-        let Json(body) = handle_models(
-            State(proxy_state()),
-            "/v1/models?limit=1000".parse().unwrap(),
-            headers,
-        )
-        .await
-        .expect("models");
+        let req = axum::http::Request::builder()
+            .uri("/v1/models?limit=1000")
+            .header("anthropic-version", "2023-06-01")
+            .body(axum::body::Body::empty())
+            .unwrap();
+        let Json(body) = handle_models(State(proxy_state()), req)
+            .await
+            .expect("models");
         assert_eq!(body, json!({ "data": [], "has_more": false }));
+    }
+
+    #[test]
+    fn filter_models_by_caps_filters_both_shapes() {
+        use crate::proxy::gateway_auth::AuthedKey;
+        let ak = AuthedKey {
+            id: "k".into(),
+            name: "k".into(),
+            allowed_apps: vec![],
+            allowed_providers: vec![],
+            allowed_models: vec!["anthropic/*".into()],
+        };
+        // Anthropic 发现形状：data[].id
+        let mut discovery = json!({
+            "data": [
+                { "type": "model", "id": "anthropic/claude-sonnet-4" },
+                { "type": "model", "id": "openai/gpt-5.1" }
+            ],
+            "has_more": false
+        });
+        filter_models_by_caps(&mut discovery, Some(&ak));
+        let ids: Vec<&str> = discovery["data"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|m| m["id"].as_str().unwrap())
+            .collect();
+        assert_eq!(ids, vec!["anthropic/claude-sonnet-4"]);
+
+        // Codex 目录形状：models[].id
+        let mut catalog = json!({
+            "models": [
+                { "id": "anthropic/claude-opus-4" },
+                { "id": "xai/grok" }
+            ]
+        });
+        filter_models_by_caps(&mut catalog, Some(&ak));
+        assert_eq!(catalog["models"].as_array().unwrap().len(), 1);
+
+        // 空 caps / 无 key → 不过滤。
+        let mut untouched = json!({ "data": [ { "id": "x" } ] });
+        filter_models_by_caps(&mut untouched, None);
+        assert_eq!(untouched["data"].as_array().unwrap().len(), 1);
     }
 }

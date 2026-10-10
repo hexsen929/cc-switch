@@ -3944,7 +3944,15 @@
       "addFailed": "新增密钥失败",
       "rotateFailed": "轮换失败",
       "removeFailed": "删除失败",
-      "toggleKeyFailed": "切换密钥状态失败"
+      "toggleKeyFailed": "切换密钥状态失败",
+      "caps": "权限",
+      "capsHint": "限制此密钥可用的范围；三项各自「留空=不限」。",
+      "capApps": "应用",
+      "capProviders": "允许的供应商 ID（逗号分隔，留空不限）",
+      "capModels": "允许的模型 glob（逗号分隔，如 anthropic/*，留空不限）",
+      "saveCaps": "保存权限",
+      "capsSaved": "权限已保存",
+      "capsSaveFailed": "权限保存失败"
     },
     "autoFailover": {
       "info": "当故障转移队列中配置了多个供应商时，系统会在请求失败时按优先级顺序依次尝试。当某个供应商连续失败达到阈值时，熔断器会打开并在一段时间内跳过该供应商。",
