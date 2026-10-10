@@ -291,6 +291,21 @@ impl Database {
             [],
         );
 
+        // 9.6 局域网网关密钥表（Fork 扩展）
+        // 开启「局域网共享」后，非环回入站必须携带这里某个 enabled 的 token 才放行。
+        // token 以明文存于 forkdb（本地文件），列表只回末 4 位；允许表（caps）列见 Slice C。
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS forkdb.gateway_keys (
+                id TEXT PRIMARY KEY,
+                name TEXT NOT NULL DEFAULT '',
+                token TEXT NOT NULL UNIQUE,
+                enabled INTEGER NOT NULL DEFAULT 1,
+                created_at TEXT NOT NULL DEFAULT (datetime('now'))
+            )",
+            [],
+        )
+        .map_err(|e| AppError::Database(e.to_string()))?;
+
         // 10. Proxy Request Logs 表
         // pricing_model = 写入时实际用于计价的模型名（pricing_model_source 解析结果），
         // 回填按它重算；NULL 表示 v11 之前的历史行，'' 表示未计价的错误行。

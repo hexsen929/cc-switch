@@ -155,7 +155,7 @@ impl ProxyServer {
             loop {
                 tokio::select! {
                     result = listener.accept() => {
-                        let (stream, _remote_addr) = match result {
+                        let (stream, remote_addr) = match result {
                             Ok(v) => v,
                             Err(e) => {
                                 log::error!("[{SRV}] accept 失败: {e}", SRV = log_srv::ACCEPT_ERR);
@@ -196,6 +196,11 @@ impl ProxyServer {
 
                                     // Insert our own header case map alongside hyper's internal one
                                     parts.extensions.insert(cases);
+
+                                    // Fork：注入入站对端地址，供 LAN 网关守卫中间件判定环回/非环回。
+                                    parts
+                                        .extensions
+                                        .insert(super::gateway_auth::PeerAddr(remote_addr));
 
                                     let body = axum::body::Body::new(body);
                                     let axum_req = http::Request::from_parts(parts, body);
@@ -426,6 +431,12 @@ impl ProxyServer {
             .route("/gemini/v1/*path", any(handlers::handle_gemini))
             // 提高默认请求体大小限制（避免 413 Payload Too Large）
             .layer(DefaultBodyLimit::max(200 * 1024 * 1024))
+            // Fork：局域网网关守卫（最外层，覆盖所有路由，在转发/凭证替换之前执行）。
+            // 环回零成本直通；非环回按「共享开关 + enabled key」决定 403/401/放行。
+            .layer(axum::middleware::from_fn_with_state(
+                self.state.clone(),
+                super::gateway_auth::lan_gateway_guard,
+            ))
             .with_state(self.state.clone())
     }
 

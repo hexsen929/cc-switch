@@ -16,6 +16,8 @@ import type {
   RequestRewriteConfig,
   ResponseMiddlewareConfig,
   IntentRoutingConfig,
+  GatewayKey,
+  GatewayKeyView,
 } from "@/types/proxy";
 import { PROVIDER_ROUTING_STRATEGIES } from "@/types/proxy";
 
@@ -290,6 +292,48 @@ export const proxyApi = {
     config: IntentRoutingConfig,
   ): Promise<void> {
     return invoke("set_intent_routing_config", { appType, config });
+  },
+
+  // ========== 局域网网关（Fork 扩展，默认关闭 + 强制 per-key 鉴权） ==========
+
+  async getLanShareEnabled(): Promise<boolean> {
+    return invoke<boolean>("get_lan_share_enabled");
+  },
+
+  async setLanShareEnabled(enabled: boolean): Promise<void> {
+    return invoke("set_lan_share_enabled", { enabled });
+  },
+
+  async listGatewayKeys(): Promise<GatewayKeyView[]> {
+    return invoke<GatewayKeyView[]>("list_gateway_keys");
+  },
+
+  /** 新增密钥：customToken 为空时后端生成 `ccs-<uuid>`；返回含明文 token 的完整记录。 */
+  async addGatewayKey(
+    name: string,
+    customToken?: string | null,
+  ): Promise<GatewayKey> {
+    return invoke<GatewayKey>("add_gateway_key", {
+      name,
+      customToken: customToken ?? null,
+    });
+  },
+
+  /** 轮换 token：返回新的完整记录；id 不存在返回 null。 */
+  async rotateGatewayKey(id: string): Promise<GatewayKey | null> {
+    return invoke<GatewayKey | null>("rotate_gateway_key", { id });
+  },
+
+  async setGatewayKeyEnabled(id: string, enabled: boolean): Promise<void> {
+    return invoke("set_gateway_key_enabled", { id, enabled });
+  },
+
+  async renameGatewayKey(id: string, name: string): Promise<void> {
+    return invoke("rename_gateway_key", { id, name });
+  },
+
+  async removeGatewayKey(id: string): Promise<void> {
+    return invoke("remove_gateway_key", { id });
   },
 
   // ========== 计费默认配置 API ==========

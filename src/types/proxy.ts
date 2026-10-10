@@ -348,3 +348,23 @@ export const EMPTY_INTENT_ROUTING: IntentRoutingConfig = {
   enabled: false,
   rules: [],
 };
+
+// ==================== 局域网网关（Fork 扩展，默认关闭） ====================
+
+/** 列表视图：token 已脱敏为末 4 位（`••••abcd`），用于管理界面展示。 */
+export interface GatewayKeyView {
+  id: string;
+  name: string;
+  tokenMasked: string;
+  enabled: boolean;
+  createdAt: string;
+}
+
+/** 完整密钥：仅在「新增 / 轮换」后一次性返回，含明文 token。 */
+export interface GatewayKey {
+  id: string;
+  name: string;
+  token: string;
+  enabled: boolean;
+  createdAt: string;
+}

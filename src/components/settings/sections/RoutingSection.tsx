@@ -25,6 +25,7 @@ import { RequestMiddlewarePanel } from "@/components/proxy/RequestMiddlewarePane
 import { RequestRewritePanel } from "@/components/proxy/RequestRewritePanel";
 import { ResponseMiddlewarePanel } from "@/components/proxy/ResponseMiddlewarePanel";
 import { IntentRoutingPanel } from "@/components/proxy/IntentRoutingPanel";
+import { GatewayKeysPanel } from "@/components/proxy/GatewayKeysPanel";
 import { RectifierConfigPanel } from "@/components/settings/RectifierConfigPanel";
 import { APP_DISPLAY_NAME, AppGlyph } from "@/components/shell/AppGlyph";
 import { MODE_TONE } from "@/components/providers/mode/ModeTabs";
@@ -493,6 +494,21 @@ export function RoutingSection({ onOpenApp }: RoutingSectionProps) {
             }))}
           />
           <IntentRoutingPanel key={intentApp} appType={intentApp} />
+        </div>
+      </SettingsBlock>
+
+      <SettingsBlock
+        title={t("proxy.lanGateway.title", "局域网网关")}
+        help={{
+          title: t("proxy.lanGateway.title", "局域网网关"),
+          body: t(
+            "proxy.lanGateway.hint",
+            "默认关闭时只有本机可用代理。开启「局域网共享」后，非环回入站必须携带某个已启用的网关密钥才放行，否则 401；共享仍关闭时非环回入站一律 403。为每个客户端单独建密钥，便于启停与吊销。",
+          ),
+        }}
+      >
+        <div className="rounded-panel border border-border bg-surface p-5">
+          <GatewayKeysPanel />
         </div>
       </SettingsBlock>
 

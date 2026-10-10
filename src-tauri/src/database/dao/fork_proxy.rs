@@ -555,4 +555,234 @@ impl Database {
 
         Ok(())
     }
+
+    // ==================== 局域网网关（Fork 扩展） ====================
+
+    /// 局域网共享总开关（全局无后缀键，默认关闭 / fail-safe）。
+    pub fn get_lan_share_enabled(&self) -> Result<bool, AppError> {
+        Ok(Self::parse_setting_bool(
+            self.get_fork_setting("fork_lan_share_enabled")?,
+            false,
+        ))
+    }
+
+    pub fn set_lan_share_enabled(&self, enabled: bool) -> Result<(), AppError> {
+        self.set_fork_setting("fork_lan_share_enabled", if enabled { "1" } else { "0" })
+    }
+
+    fn map_gateway_key_row(
+        row: &rusqlite::Row<'_>,
+    ) -> rusqlite::Result<crate::proxy::gateway_auth::GatewayKey> {
+        Ok(crate::proxy::gateway_auth::GatewayKey {
+            id: row.get(0)?,
+            name: row.get(1)?,
+            token: row.get(2)?,
+            enabled: row.get::<_, i64>(3)? != 0,
+            created_at: row.get(4)?,
+        })
+    }
+
+    /// 列出所有网关密钥（含明文 token；命令层按需裁剪为末 4 位展示）。
+    pub fn list_gateway_keys(
+        &self,
+    ) -> Result<Vec<crate::proxy::gateway_auth::GatewayKey>, AppError> {
+        let conn = lock_conn!(self.conn);
+        let mut stmt = conn
+            .prepare("SELECT id, name, token, enabled, created_at FROM forkdb.gateway_keys ORDER BY created_at ASC, id ASC")
+            .map_err(|e| AppError::Database(e.to_string()))?;
+        let rows = stmt
+            .query_map([], Self::map_gateway_key_row)
+            .map_err(|e| AppError::Database(e.to_string()))?;
+        let mut out = Vec::new();
+        for r in rows {
+            out.push(r.map_err(|e| AppError::Database(e.to_string()))?);
+        }
+        Ok(out)
+    }
+
+    /// 按 token 精确查找（中间件热路径仅对非环回请求调用一次）。
+    pub fn find_gateway_key_by_token(
+        &self,
+        token: &str,
+    ) -> Result<Option<crate::proxy::gateway_auth::GatewayKey>, AppError> {
+        let conn = lock_conn!(self.conn);
+        let mut stmt = conn
+            .prepare("SELECT id, name, token, enabled, created_at FROM forkdb.gateway_keys WHERE token = ?1 LIMIT 1")
+            .map_err(|e| AppError::Database(e.to_string()))?;
+        let mut rows = stmt
+            .query_map(rusqlite::params![token], Self::map_gateway_key_row)
+            .map_err(|e| AppError::Database(e.to_string()))?;
+        match rows.next() {
+            Some(r) => Ok(Some(r.map_err(|e| AppError::Database(e.to_string()))?)),
+            None => Ok(None),
+        }
+    }
+
+    /// 新增密钥：custom 为空时生成 `ccs-<uuid>`（泛化既有 claude-desktop 样板）。
+    /// 返回含明文 token 的完整记录（token 仅此一次完整回传）。
+    pub fn add_gateway_key(
+        &self,
+        name: &str,
+        custom_token: Option<&str>,
+    ) -> Result<crate::proxy::gateway_auth::GatewayKey, AppError> {
+        let id = uuid::Uuid::new_v4().simple().to_string();
+        let token = match custom_token.map(str::trim).filter(|t| !t.is_empty()) {
+            Some(t) => t.to_string(),
+            None => format!("ccs-{}", uuid::Uuid::new_v4().simple()),
+        };
+        {
+            let conn = lock_conn!(self.conn);
+            conn.execute(
+                "INSERT INTO forkdb.gateway_keys (id, name, token, enabled) VALUES (?1, ?2, ?3, 1)",
+                rusqlite::params![id, name, token],
+            )
+            .map_err(|e| AppError::Database(e.to_string()))?;
+        }
+        Ok(self
+            .find_gateway_key_by_token(&token)?
+            .unwrap_or_default())
+    }
+
+    /// 轮换 token（保留 id/name/enabled）。id 不存在返回 None。
+    pub fn rotate_gateway_key(
+        &self,
+        id: &str,
+    ) -> Result<Option<crate::proxy::gateway_auth::GatewayKey>, AppError> {
+        let token = format!("ccs-{}", uuid::Uuid::new_v4().simple());
+        {
+            let conn = lock_conn!(self.conn);
+            let n = conn
+                .execute(
+                    "UPDATE forkdb.gateway_keys SET token = ?2 WHERE id = ?1",
+                    rusqlite::params![id, token],
+                )
+                .map_err(|e| AppError::Database(e.to_string()))?;
+            if n == 0 {
+                return Ok(None);
+            }
+        }
+        self.find_gateway_key_by_token(&token)
+    }
+
+    pub fn set_gateway_key_enabled(&self, id: &str, enabled: bool) -> Result<(), AppError> {
+        let conn = lock_conn!(self.conn);
+        conn.execute(
+            "UPDATE forkdb.gateway_keys SET enabled = ?2 WHERE id = ?1",
+            rusqlite::params![id, if enabled { 1 } else { 0 }],
+        )
+        .map_err(|e| AppError::Database(e.to_string()))?;
+        Ok(())
+    }
+
+    pub fn rename_gateway_key(&self, id: &str, name: &str) -> Result<(), AppError> {
+        let conn = lock_conn!(self.conn);
+        conn.execute(
+            "UPDATE forkdb.gateway_keys SET name = ?2 WHERE id = ?1",
+            rusqlite::params![id, name],
+        )
+        .map_err(|e| AppError::Database(e.to_string()))?;
+        Ok(())
+    }
+
+    pub fn remove_gateway_key(&self, id: &str) -> Result<(), AppError> {
+        let conn = lock_conn!(self.conn);
+        conn.execute(
+            "DELETE FROM forkdb.gateway_keys WHERE id = ?1",
+            rusqlite::params![id],
+        )
+        .map_err(|e| AppError::Database(e.to_string()))?;
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+mod gateway_key_tests {
+    use super::Database;
+
+    fn db() -> Database {
+        Database::memory().expect("in-memory db")
+    }
+
+    #[test]
+    fn lan_share_defaults_off_and_toggles() {
+        let db = db();
+        assert!(!db.get_lan_share_enabled().unwrap());
+        db.set_lan_share_enabled(true).unwrap();
+        assert!(db.get_lan_share_enabled().unwrap());
+        db.set_lan_share_enabled(false).unwrap();
+        assert!(!db.get_lan_share_enabled().unwrap());
+    }
+
+    #[test]
+    fn add_generates_ccs_token_and_is_findable() {
+        let db = db();
+        let k = db.add_gateway_key("laptop", None).unwrap();
+        assert!(k.token.starts_with("ccs-"));
+        assert!(k.enabled);
+        assert_eq!(k.name, "laptop");
+        let found = db.find_gateway_key_by_token(&k.token).unwrap().unwrap();
+        assert_eq!(found.id, k.id);
+    }
+
+    #[test]
+    fn add_honors_custom_token() {
+        let db = db();
+        let k = db.add_gateway_key("ci", Some("my-custom-token")).unwrap();
+        assert_eq!(k.token, "my-custom-token");
+        // 空白自定义 token 回落为生成的 ccs- token。
+        let k2 = db.add_gateway_key("blank", Some("   ")).unwrap();
+        assert!(k2.token.starts_with("ccs-"));
+    }
+
+    #[test]
+    fn list_orders_and_contains_added() {
+        let db = db();
+        let a = db.add_gateway_key("a", None).unwrap();
+        let b = db.add_gateway_key("b", None).unwrap();
+        let all = db.list_gateway_keys().unwrap();
+        assert_eq!(all.len(), 2);
+        let ids: Vec<&str> = all.iter().map(|k| k.id.as_str()).collect();
+        assert!(ids.contains(&a.id.as_str()));
+        assert!(ids.contains(&b.id.as_str()));
+    }
+
+    #[test]
+    fn rotate_replaces_token() {
+        let db = db();
+        let k = db.add_gateway_key("x", None).unwrap();
+        let old_token = k.token.clone();
+        let rotated = db.rotate_gateway_key(&k.id).unwrap().unwrap();
+        assert_ne!(rotated.token, old_token);
+        assert_eq!(rotated.id, k.id);
+        // 旧 token 不再有效。
+        assert!(db.find_gateway_key_by_token(&old_token).unwrap().is_none());
+        assert!(db.find_gateway_key_by_token(&rotated.token).unwrap().is_some());
+    }
+
+    #[test]
+    fn rotate_unknown_id_returns_none() {
+        let db = db();
+        assert!(db.rotate_gateway_key("nope").unwrap().is_none());
+    }
+
+    #[test]
+    fn set_enabled_rename_remove() {
+        let db = db();
+        let k = db.add_gateway_key("orig", None).unwrap();
+        db.set_gateway_key_enabled(&k.id, false).unwrap();
+        let found = db.find_gateway_key_by_token(&k.token).unwrap().unwrap();
+        assert!(!found.enabled);
+        db.rename_gateway_key(&k.id, "renamed").unwrap();
+        let found = db.find_gateway_key_by_token(&k.token).unwrap().unwrap();
+        assert_eq!(found.name, "renamed");
+        db.remove_gateway_key(&k.id).unwrap();
+        assert!(db.find_gateway_key_by_token(&k.token).unwrap().is_none());
+        assert!(db.list_gateway_keys().unwrap().is_empty());
+    }
+
+    #[test]
+    fn find_unknown_token_returns_none() {
+        let db = db();
+        assert!(db.find_gateway_key_by_token("ccs-missing").unwrap().is_none());
+    }
 }

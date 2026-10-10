@@ -250,3 +250,119 @@ pub async fn set_intent_routing_config(
         .set_intent_routing_config(&app_type, &config)
         .map_err(|e| e.to_string())
 }
+
+// ==================== 局域网网关（Fork 扩展，默认关闭） ====================
+
+/// 列表视图：token 只回末 4 位，避免在管理界面泄露完整明文。
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GatewayKeyView {
+    pub id: String,
+    pub name: String,
+    pub token_masked: String,
+    pub enabled: bool,
+    pub created_at: String,
+}
+
+fn mask_token(token: &str) -> String {
+    let chars: Vec<char> = token.chars().collect();
+    if chars.len() <= 4 {
+        "••••".to_string()
+    } else {
+        let last4: String = chars[chars.len() - 4..].iter().collect();
+        format!("••••{last4}")
+    }
+}
+
+/// 读取局域网共享总开关（默认关闭）
+#[tauri::command]
+pub async fn get_lan_share_enabled(state: tauri::State<'_, AppState>) -> Result<bool, String> {
+    state.db.get_lan_share_enabled().map_err(|e| e.to_string())
+}
+
+/// 设置局域网共享总开关
+#[tauri::command]
+pub async fn set_lan_share_enabled(
+    state: tauri::State<'_, AppState>,
+    enabled: bool,
+) -> Result<(), String> {
+    state
+        .db
+        .set_lan_share_enabled(enabled)
+        .map_err(|e| e.to_string())
+}
+
+/// 列出网关密钥（token 脱敏为末 4 位）
+#[tauri::command]
+pub async fn list_gateway_keys(
+    state: tauri::State<'_, AppState>,
+) -> Result<Vec<GatewayKeyView>, String> {
+    let keys = state.db.list_gateway_keys().map_err(|e| e.to_string())?;
+    Ok(keys
+        .into_iter()
+        .map(|k| GatewayKeyView {
+            token_masked: mask_token(&k.token),
+            id: k.id,
+            name: k.name,
+            enabled: k.enabled,
+            created_at: k.created_at,
+        })
+        .collect())
+}
+
+/// 新增网关密钥：返回含明文 token 的完整记录（仅此一次完整可见）
+#[tauri::command]
+pub async fn add_gateway_key(
+    state: tauri::State<'_, AppState>,
+    name: String,
+    custom_token: Option<String>,
+) -> Result<crate::proxy::gateway_auth::GatewayKey, String> {
+    state
+        .db
+        .add_gateway_key(&name, custom_token.as_deref())
+        .map_err(|e| e.to_string())
+}
+
+/// 轮换网关密钥 token：返回新的完整记录（仅此一次完整可见）
+#[tauri::command]
+pub async fn rotate_gateway_key(
+    state: tauri::State<'_, AppState>,
+    id: String,
+) -> Result<Option<crate::proxy::gateway_auth::GatewayKey>, String> {
+    state.db.rotate_gateway_key(&id).map_err(|e| e.to_string())
+}
+
+/// 启停某条网关密钥
+#[tauri::command]
+pub async fn set_gateway_key_enabled(
+    state: tauri::State<'_, AppState>,
+    id: String,
+    enabled: bool,
+) -> Result<(), String> {
+    state
+        .db
+        .set_gateway_key_enabled(&id, enabled)
+        .map_err(|e| e.to_string())
+}
+
+/// 重命名某条网关密钥
+#[tauri::command]
+pub async fn rename_gateway_key(
+    state: tauri::State<'_, AppState>,
+    id: String,
+    name: String,
+) -> Result<(), String> {
+    state
+        .db
+        .rename_gateway_key(&id, &name)
+        .map_err(|e| e.to_string())
+}
+
+/// 删除某条网关密钥
+#[tauri::command]
+pub async fn remove_gateway_key(
+    state: tauri::State<'_, AppState>,
+    id: String,
+) -> Result<(), String> {
+    state.db.remove_gateway_key(&id).map_err(|e| e.to_string())
+}

@@ -1653,6 +1653,15 @@ pub fn run() {
             // Fork 意图路由（intent routing）
             commands::get_intent_routing_config,
             commands::set_intent_routing_config,
+            // Fork 局域网网关（LAN gateway，默认关闭 + 强制 per-key 鉴权）
+            commands::get_lan_share_enabled,
+            commands::set_lan_share_enabled,
+            commands::list_gateway_keys,
+            commands::add_gateway_key,
+            commands::rotate_gateway_key,
+            commands::set_gateway_key_enabled,
+            commands::rename_gateway_key,
+            commands::remove_gateway_key,
             // Fork failover (model-level queues + chain)
             commands::get_failover_queue_for_model,
             commands::get_available_providers_for_model_failover,
