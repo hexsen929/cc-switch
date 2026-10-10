@@ -364,6 +364,8 @@ pub struct RequestForwarder {
     request_middleware: crate::proxy::request_middleware::RequestMiddlewareConfig,
     /// 声明式请求改写预设（Fork 扩展，无代码「现成中间件」，默认关闭、fail-safe）
     request_rewrite: crate::proxy::request_rewrite::RequestRewriteConfig,
+    /// 响应侧可编程中间件（Fork 扩展，onResponse 非流式 / onEvent 流式，默认关闭、fail-open）
+    response_middleware: crate::proxy::response_middleware::ResponseMiddlewareConfig,
     /// 订阅内多账号故障转移开关（Fork 扩展，默认关闭）。
     /// 开启后托管 OAuth 账号收到 401/403/429 会进入冷却，同池内改选健康账号。
     subscription_account_failover: bool,
@@ -422,6 +424,78 @@ impl RequestForwarder {
             }
             Err(join_err) => {
                 log::warn!("[Middleware] onRequest 任务异常，放行原始请求: {join_err}");
+            }
+        }
+    }
+
+    /// 响应侧 onResponse 钩子：对**非流式** JSON 响应体做纯函数式改写。调用方已保证
+    /// `self.response_middleware.is_response_active() && !request_is_streaming`。
+    ///
+    /// fail-safe / fail-open：
+    /// - 读取 body 失败 → 已无法还原（此时原响应多半也已损坏），记日志后放行空 buffered 体；
+    /// - 非 JSON 对象（含压缩/二进制）→ 原样放行（保留原始头与原始字节，含 content-encoding）；
+    /// - 脚本报错/超时/返回非对象/序列化失败 → 放行原始字节；
+    /// - 成功改写 → 以未压缩 JSON 重建，去掉 content-encoding 并修正 content-length。
+    async fn apply_on_response(
+        &self,
+        response: ProxyResponse,
+        meta: crate::proxy::response_middleware::ResponseMiddlewareMeta,
+    ) -> ProxyResponse {
+        let status = response.status();
+        let headers = response.headers().clone();
+        let encoding = get_content_encoding(&headers);
+        let raw = match response.bytes_with_limit(MAX_RESPONSE_BODY_BYTES).await {
+            Ok(b) => b,
+            Err(e) => {
+                log::warn!("[Middleware] onResponse 读取响应体失败，放行: {e}");
+                return ProxyResponse::buffered(status, headers, Bytes::new());
+            }
+        };
+        // 解压后再尝试解析（压缩 JSON 也能改写）；不支持的编码/解压失败 → 用原始字节判定。
+        let decoded: Vec<u8> = match &encoding {
+            Some(enc) => match decompress_body_with_limit(enc, &raw, MAX_RESPONSE_BODY_BYTES) {
+                Ok(Some(d)) => d,
+                _ => raw.to_vec(),
+            },
+            None => raw.to_vec(),
+        };
+        let parsed = match serde_json::from_slice::<Value>(&decoded) {
+            Ok(v) if v.is_object() => v,
+            // 非 JSON 对象：原样放行（保留原始头 + 原始字节，fidelity 不变）
+            _ => return ProxyResponse::buffered(status, headers, raw),
+        };
+
+        let script = self.response_middleware.on_response.script.clone();
+        let result = tokio::task::spawn_blocking(move || {
+            crate::proxy::response_middleware::run_on_response(&script, &parsed, &meta)
+        })
+        .await;
+
+        match result {
+            Ok(Ok(new_body)) => match serde_json::to_vec(&new_body) {
+                Ok(serialized) => {
+                    // 变换分支：body 为未压缩 JSON，去掉 content-encoding 并修正 content-length。
+                    let mut h = headers.clone();
+                    h.remove("content-encoding");
+                    h.remove("content-length");
+                    if let Ok(v) = http::HeaderValue::from_str(&serialized.len().to_string()) {
+                        h.insert("content-length", v);
+                    }
+                    log::debug!("[Middleware] onResponse 已应用");
+                    ProxyResponse::buffered(status, h, Bytes::from(serialized))
+                }
+                Err(e) => {
+                    log::warn!("[Middleware] onResponse 结果序列化失败，放行: {e}");
+                    ProxyResponse::buffered(status, headers, raw)
+                }
+            },
+            Ok(Err(e)) => {
+                log::warn!("[Middleware] onResponse 执行失败，放行原始响应: {e}");
+                ProxyResponse::buffered(status, headers, raw)
+            }
+            Err(join_err) => {
+                log::warn!("[Middleware] onResponse 任务异常，放行原始响应: {join_err}");
+                ProxyResponse::buffered(status, headers, raw)
             }
         }
     }
@@ -515,6 +589,7 @@ impl RequestForwarder {
         copilot_optimizer_config: CopilotOptimizerConfig,
         request_middleware: crate::proxy::request_middleware::RequestMiddlewareConfig,
         request_rewrite: crate::proxy::request_rewrite::RequestRewriteConfig,
+        response_middleware: crate::proxy::response_middleware::ResponseMiddlewareConfig,
         subscription_account_failover: bool,
         max_retries: u32,
     ) -> Self {
@@ -537,6 +612,7 @@ impl RequestForwarder {
             copilot_optimizer_config,
             request_middleware,
             request_rewrite,
+            response_middleware,
             subscription_account_failover,
             non_streaming_timeout: std::time::Duration::from_secs(non_streaming_timeout),
             streaming_first_byte_timeout: std::time::Duration::from_secs(
@@ -3144,6 +3220,30 @@ impl RequestForwarder {
                     .hold_encrypted_agent_task_stream(response, &filtered_body)
                     .await?;
             }
+            // Fork 扩展：响应侧可编程中间件（onResponse 非流式 / onEvent 流式）。
+            // 置于所有内置响应校验/转换之后，让脚本看到客户端最终会收到的形态。默认关闭、
+            // fail-open：开关关时此处零开销；任何失败都放行原始响应/事件。两钩子互斥命中。
+            if self.response_middleware.is_response_active() && !request_is_streaming {
+                let meta = crate::proxy::response_middleware::ResponseMiddlewareMeta {
+                    app_type: app_type.as_str().to_string(),
+                    provider_id: provider.id.clone(),
+                    provider_name: provider.name.clone(),
+                    model: outbound_model.clone().unwrap_or_default(),
+                };
+                response = self.apply_on_response(response, meta).await;
+            } else if self.response_middleware.is_event_active() && response.is_sse() {
+                let meta = crate::proxy::response_middleware::ResponseMiddlewareMeta {
+                    app_type: app_type.as_str().to_string(),
+                    provider_id: provider.id.clone(),
+                    provider_name: provider.name.clone(),
+                    model: outbound_model.clone().unwrap_or_default(),
+                };
+                response = crate::proxy::response_middleware::wrap_sse_stream(
+                    response,
+                    self.response_middleware.on_event.script.clone(),
+                    meta,
+                );
+            }
             Ok((response, resolved_claude_api_format, outbound_model))
         } else {
             let status_code = status.as_u16();
@@ -5042,6 +5142,8 @@ mod tests {
             copilot_optimizer_config: CopilotOptimizerConfig::default(),
             request_middleware: crate::proxy::request_middleware::RequestMiddlewareConfig::default(),
             request_rewrite: crate::proxy::request_rewrite::RequestRewriteConfig::default(),
+            response_middleware:
+                crate::proxy::response_middleware::ResponseMiddlewareConfig::default(),
             subscription_account_failover: false,
             non_streaming_timeout,
             streaming_first_byte_timeout,

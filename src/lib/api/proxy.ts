@@ -14,6 +14,7 @@ import type {
   AppModeView,
   StartupAttachFailure,
   RequestRewriteConfig,
+  ResponseMiddlewareConfig,
 } from "@/types/proxy";
 import { PROVIDER_ROUTING_STRATEGIES } from "@/types/proxy";
 
@@ -258,6 +259,22 @@ export const proxyApi = {
     config: RequestRewriteConfig,
   ): Promise<void> {
     return invoke("set_request_rewrite_config", { appType, config });
+  },
+
+  // 响应侧可编程中间件（Fork 扩展）：onResponse 非流式 / onEvent 流式
+  async getResponseMiddlewareConfig(
+    appType: string,
+  ): Promise<ResponseMiddlewareConfig> {
+    return invoke<ResponseMiddlewareConfig>("get_response_middleware_config", {
+      appType,
+    });
+  },
+
+  async setResponseMiddlewareConfig(
+    appType: string,
+    config: ResponseMiddlewareConfig,
+  ): Promise<void> {
+    return invoke("set_response_middleware_config", { appType, config });
   },
 
   // ========== 计费默认配置 API ==========

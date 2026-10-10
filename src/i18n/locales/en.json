@@ -3869,6 +3869,23 @@
         "claudeOnly": "Applies to Claude only (Anthropic native system field); use the programmable script for other apps."
       }
     },
+    "respMiddleware": {
+      "title": "Programmable response middleware",
+      "hint": "Run your own scripts on upstream responses: onResponse rewrites non-streaming JSON bodies, onEvent rewrites each event of a streaming SSE response. Each hook toggles independently; off by default, fail-open.",
+      "on": "On",
+      "off": "Off",
+      "saved": "Response middleware saved",
+      "saveFailed": "Save failed",
+      "contract": "Each script must evaluate to a function: onResponse is (response, meta) => any, onEvent is (event, meta) => any. Return a JSON object to replace; return a non-object to pass through unchanged.",
+      "security": "Scripts run in an isolated sandbox: no network, no filesystem. onResponse only applies to non-streaming JSON; non-JSON (including compressed/binary) responses always pass through untouched.",
+      "onResponse": {
+        "title": "onResponse (non-streaming)"
+      },
+      "onEvent": {
+        "title": "onEvent (streaming)",
+        "warn": "The script runs once per SSE event (50ms CPU budget); keep the logic minimal. Any error, timeout, or non-object return passes the event through unchanged and never interrupts your stream."
+      }
+    },
     "autoFailover": {
       "info": "When the failover queue has multiple providers, the system will try them in priority order when requests fail. When a provider reaches the consecutive failure threshold, the circuit breaker will open and skip it temporarily.",
       "configSaved": "Auto failover config saved",

@@ -200,3 +200,28 @@ pub async fn set_request_rewrite_config(
         .set_request_rewrite_config(&app_type, &config)
         .map_err(|e| e.to_string())
 }
+
+/// 获取某应用的响应侧中间件配置（Fork 扩展，onResponse / onEvent 钩子）
+#[tauri::command]
+pub async fn get_response_middleware_config(
+    state: tauri::State<'_, AppState>,
+    app_type: String,
+) -> Result<crate::proxy::response_middleware::ResponseMiddlewareConfig, String> {
+    state
+        .db
+        .get_response_middleware_config(&app_type)
+        .map_err(|e| e.to_string())
+}
+
+/// 设置某应用的响应侧中间件配置（Fork 扩展）
+#[tauri::command]
+pub async fn set_response_middleware_config(
+    state: tauri::State<'_, AppState>,
+    app_type: String,
+    config: crate::proxy::response_middleware::ResponseMiddlewareConfig,
+) -> Result<(), String> {
+    state
+        .db
+        .set_response_middleware_config(&app_type, &config)
+        .map_err(|e| e.to_string())
+}

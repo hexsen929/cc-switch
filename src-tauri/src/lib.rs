@@ -1648,6 +1648,8 @@ pub fn run() {
             // Fork 声明式请求改写预设（无代码「现成中间件」）
             commands::get_request_rewrite_config,
             commands::set_request_rewrite_config,
+            commands::get_response_middleware_config,
+            commands::set_response_middleware_config,
             // Fork failover (model-level queues + chain)
             commands::get_failover_queue_for_model,
             commands::get_available_providers_for_model_failover,

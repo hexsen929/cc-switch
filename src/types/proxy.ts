@@ -282,3 +282,21 @@ export const EMPTY_REQUEST_REWRITE: RequestRewriteConfig = {
   paramOverrides: {},
   systemPrompt: { mode: "off", text: "" },
 };
+
+/** 响应侧单个钩子（onResponse / onEvent 各一份），默认关闭、脚本为空。 */
+export interface ResponseHookConfig {
+  enabled: boolean;
+  /** 求值得到 `(x, meta) => any` 的表达式；x 为响应体 / 事件 JSON */
+  script: string;
+}
+
+/** 响应侧可编程中间件配置（Fork 扩展，onResponse 非流式 / onEvent 流式）。 */
+export interface ResponseMiddlewareConfig {
+  onResponse: ResponseHookConfig;
+  onEvent: ResponseHookConfig;
+}
+
+export const EMPTY_RESPONSE_MIDDLEWARE: ResponseMiddlewareConfig = {
+  onResponse: { enabled: false, script: "" },
+  onEvent: { enabled: false, script: "" },
+};

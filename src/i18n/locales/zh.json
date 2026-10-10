@@ -3869,6 +3869,23 @@
         "claudeOnly": "仅对 Claude（Anthropic 原生 system 字段）生效；其它应用请用可编程脚本注入。"
       }
     },
+    "respMiddleware": {
+      "title": "可编程响应中间件",
+      "hint": "对上游响应运行你自己的脚本：onResponse 改写非流式 JSON 响应体，onEvent 改写流式 SSE 的每个事件。两个钩子各自独立开关，默认关闭、失败放行。",
+      "on": "已开启",
+      "off": "已关闭",
+      "saved": "响应中间件已保存",
+      "saveFailed": "保存失败",
+      "contract": "脚本必须是求值得到函数的表达式：onResponse 为 (response, meta) => any，onEvent 为 (event, meta) => any。返回 JSON 对象替换，返回非对象按原样放行。",
+      "security": "脚本运行在隔离沙箱中：无网络、无文件。onResponse 仅作用于非流式 JSON，非 JSON（含压缩/二进制）响应一律放行、不触碰。",
+      "onResponse": {
+        "title": "onResponse（非流式）"
+      },
+      "onEvent": {
+        "title": "onEvent（流式）",
+        "warn": "每个 SSE 事件都会执行一次脚本（50ms CPU 上限）；逻辑务必精简。任何报错/超时/非对象返回都会原样放行该事件，绝不中断你的流。"
+      }
+    },
     "autoFailover": {
       "info": "当故障转移队列中配置了多个供应商时，系统会在请求失败时按优先级顺序依次尝试。当某个供应商连续失败达到阈值时，熔断器会打开并在一段时间内跳过该供应商。",
       "configSaved": "自动故障转移配置已保存",

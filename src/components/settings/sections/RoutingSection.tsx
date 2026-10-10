@@ -23,6 +23,7 @@ import { ConfirmDialog } from "@/components/ConfirmDialog";
 import { AutoFailoverConfigPanel } from "@/components/proxy/AutoFailoverConfigPanel";
 import { RequestMiddlewarePanel } from "@/components/proxy/RequestMiddlewarePanel";
 import { RequestRewritePanel } from "@/components/proxy/RequestRewritePanel";
+import { ResponseMiddlewarePanel } from "@/components/proxy/ResponseMiddlewarePanel";
 import { RectifierConfigPanel } from "@/components/settings/RectifierConfigPanel";
 import { APP_DISPLAY_NAME, AppGlyph } from "@/components/shell/AppGlyph";
 import { MODE_TONE } from "@/components/providers/mode/ModeTabs";
@@ -83,6 +84,8 @@ export function RoutingSection({ onOpenApp }: RoutingSectionProps) {
   const [failoverApp, setFailoverApp] = useState<ProxyAppId>("claude");
   const [middlewareApp, setMiddlewareApp] = useState<ProxyAppId>("claude");
   const [rewriteApp, setRewriteApp] = useState<ProxyAppId>("claude");
+  const [respMiddlewareApp, setRespMiddlewareApp] =
+    useState<ProxyAppId>("claude");
 
   useEffect(() => {
     if (config) {
@@ -435,6 +438,34 @@ export function RoutingSection({ onOpenApp }: RoutingSectionProps) {
             }))}
           />
           <RequestRewritePanel key={rewriteApp} appType={rewriteApp} />
+        </div>
+      </SettingsBlock>
+
+      <SettingsBlock
+        title={t("proxy.respMiddleware.title", "可编程响应中间件")}
+        help={{
+          title: t("proxy.respMiddleware.title", "可编程响应中间件"),
+          body: t(
+            "proxy.respMiddleware.hint",
+            "对上游响应运行你自己的脚本：onResponse 改写非流式 JSON 响应体，onEvent 改写流式 SSE 的每个事件。两个钩子各自独立开关，默认关闭、失败放行。",
+          ),
+        }}
+      >
+        <div className="space-y-4 rounded-panel border border-border bg-surface p-5">
+          <SegmentedControl
+            size="sm"
+            aria-label={t("proxy.respMiddleware.title", "可编程响应中间件")}
+            value={respMiddlewareApp}
+            onValueChange={setRespMiddlewareApp}
+            items={PROXY_APP_IDS.map((app) => ({
+              value: app,
+              label: APP_DISPLAY_NAME[app],
+            }))}
+          />
+          <ResponseMiddlewarePanel
+            key={respMiddlewareApp}
+            appType={respMiddlewareApp}
+          />
         </div>
       </SettingsBlock>
 

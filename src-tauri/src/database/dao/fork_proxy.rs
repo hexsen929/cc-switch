@@ -176,6 +176,37 @@ impl Database {
         self.set_fork_setting(&key, &json)
     }
 
+    // ============== 响应侧可编程中间件（Fork 扩展，onResponse / onEvent 钩子） ==============
+
+    /// 获取某应用的响应侧中间件配置（默认空配置、两钩子均关闭）。
+    ///
+    /// 整份配置以单个 JSON blob 存储于 forkdb；解析失败时回落到默认空配置（fail-safe），
+    /// 绝不因坏数据阻断读取路径。
+    pub fn get_response_middleware_config(
+        &self,
+        app_type: &str,
+    ) -> Result<crate::proxy::response_middleware::ResponseMiddlewareConfig, AppError> {
+        let key = format!("fork_response_middleware_{app_type}");
+        match self.get_fork_setting(&key)? {
+            Some(raw) if !raw.trim().is_empty() => {
+                Ok(serde_json::from_str(&raw).unwrap_or_default())
+            }
+            _ => Ok(Default::default()),
+        }
+    }
+
+    /// 设置某应用的响应侧中间件配置（整体 JSON 覆盖写）。
+    pub fn set_response_middleware_config(
+        &self,
+        app_type: &str,
+        config: &crate::proxy::response_middleware::ResponseMiddlewareConfig,
+    ) -> Result<(), AppError> {
+        let key = format!("fork_response_middleware_{app_type}");
+        let json = serde_json::to_string(config)
+            .map_err(|e| AppError::Database(format!("序列化响应中间件配置失败: {e}")))?;
+        self.set_fork_setting(&key, &json)
+    }
+
     // ==================== 订阅内多账号故障转移（Fork 扩展） ====================
 
     /// 获取某应用的「订阅内多账号故障转移」开关（默认关闭）。

@@ -3870,6 +3870,23 @@
         "claudeOnly": "僅對 Claude（Anthropic 原生 system 欄位）生效；其它應用請用可程式化腳本注入。"
       }
     },
+    "respMiddleware": {
+      "title": "可程式化回應中介層",
+      "hint": "對上游回應執行你自己的腳本：onResponse 改寫非串流 JSON 回應體，onEvent 改寫串流 SSE 的每個事件。兩個鉤子各自獨立開關，預設關閉、失敗放行。",
+      "on": "已開啟",
+      "off": "已關閉",
+      "saved": "回應中介層已儲存",
+      "saveFailed": "儲存失敗",
+      "contract": "腳本必須是求值得到函式的表達式：onResponse 為 (response, meta) => any，onEvent 為 (event, meta) => any。回傳 JSON 物件替換，回傳非物件則按原樣放行。",
+      "security": "腳本執行於隔離沙箱中：無網路、無檔案。onResponse 僅作用於非串流 JSON，非 JSON（含壓縮/二進位）回應一律放行、不觸碰。",
+      "onResponse": {
+        "title": "onResponse（非串流）"
+      },
+      "onEvent": {
+        "title": "onEvent（串流）",
+        "warn": "每個 SSE 事件都會執行一次腳本（50ms CPU 上限）；邏輯務必精簡。任何報錯/逾時/非物件回傳都會原樣放行該事件，絕不中斷你的串流。"
+      }
+    },
     "autoFailover": {
       "info": "當故障轉移佇列中設定了多個供應商時，系統會在請求失敗時按優先順序依次嘗試。當某個供應商連續失敗達到閾值時，斷路器會打開並在一段時間內跳過該供應商。",
       "configSaved": "自動故障轉移設定已儲存",
