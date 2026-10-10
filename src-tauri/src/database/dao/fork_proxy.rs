@@ -31,6 +31,15 @@ impl Database {
         }
     }
 
+    /// Provider 级路由策略取值归一（Fork 扩展）：order | rotate | usage，非法值回落 order
+    fn normalize_routing_strategy(strategy: &str) -> &'static str {
+        match strategy {
+            "rotate" => "rotate",
+            "usage" => "usage",
+            _ => "order",
+        }
+    }
+
     fn get_fork_setting(&self, key: &str) -> Result<Option<String>, AppError> {
         let conn = lock_conn!(self.conn);
         let mut stmt = conn
@@ -58,6 +67,45 @@ impl Database {
         )
         .map_err(|e| AppError::Database(e.to_string()))?;
         Ok(())
+    }
+
+    // ==================== Provider 级路由策略（Fork 扩展） ====================
+
+    /// 获取某应用的 Provider 级路由策略（order | rotate | usage，默认 order）
+    pub fn get_provider_routing_strategy(&self, app_type: &str) -> Result<String, AppError> {
+        let key = format!("fork_routing_strategy_{app_type}");
+        let raw = self.get_fork_setting(&key)?;
+        Ok(Self::normalize_routing_strategy(raw.as_deref().unwrap_or("order")).to_string())
+    }
+
+    /// 设置某应用的 Provider 级路由策略（非法值回落 order）
+    pub fn set_provider_routing_strategy(
+        &self,
+        app_type: &str,
+        strategy: &str,
+    ) -> Result<(), AppError> {
+        let key = format!("fork_routing_strategy_{app_type}");
+        let normalized = Self::normalize_routing_strategy(strategy);
+        self.set_fork_setting(&key, normalized)
+    }
+
+    /// 获取某应用的会话粘性开关（默认关闭）
+    ///
+    /// 开启后，同一对话（客户端提供稳定 session id）会尽量固定在上一轮应答的 Provider 上，
+    /// 避免 rotate / usage 策略逐请求换家导致上游 prompt 缓存失效。
+    pub fn get_provider_sticky_enabled(&self, app_type: &str) -> Result<bool, AppError> {
+        let key = format!("fork_routing_sticky_{app_type}");
+        Ok(Self::parse_setting_bool(self.get_fork_setting(&key)?, false))
+    }
+
+    /// 设置某应用的会话粘性开关
+    pub fn set_provider_sticky_enabled(
+        &self,
+        app_type: &str,
+        enabled: bool,
+    ) -> Result<(), AppError> {
+        let key = format!("fork_routing_sticky_{app_type}");
+        self.set_fork_setting(&key, if enabled { "1" } else { "0" })
     }
 
     // ==================== Claude 模型路由策略（Fork 扩展） ====================

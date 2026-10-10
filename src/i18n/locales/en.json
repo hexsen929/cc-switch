@@ -3794,6 +3794,30 @@
       "reorderFailed": "Failed to update order",
       "toggleFailed": "Failed to update status"
     },
+    "routingStrategy": {
+      "title": "Routing strategy",
+      "hint": "When auto failover is on and the queue has multiple providers, this decides the primary route and failover order. No effect with a single provider.",
+      "saved": "Routing strategy saved",
+      "saveFailed": "Failed to save routing strategy",
+      "option": {
+        "order": "Order",
+        "rotate": "Rotate",
+        "usage": "Least used"
+      },
+      "desc": {
+        "order": "Follow the failover queue order: always prefer P1, then fall back in sequence.",
+        "rotate": "Round-robin: shift the primary route by one across healthy providers on each request to spread load.",
+        "usage": "Least-used first: prefer the provider picked the fewest times during this run."
+      }
+    },
+    "routingSticky": {
+      "title": "Conversation stickiness",
+      "hint": "When on, a conversation stays on the provider that answered its previous turn, so rotate/least-used strategies don't switch providers every request and invalidate the upstream cache. Recommended with Rotate or Least used.",
+      "on": "On",
+      "off": "Off",
+      "saved": "Conversation stickiness saved",
+      "saveFailed": "Failed to save conversation stickiness"
+    },
     "autoFailover": {
       "info": "When the failover queue has multiple providers, the system will try them in priority order when requests fail. When a provider reaches the consecutive failure threshold, the circuit breaker will open and skip it temporarily.",
       "configSaved": "Auto failover config saved",

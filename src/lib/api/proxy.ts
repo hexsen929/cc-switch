@@ -7,12 +7,20 @@ import type {
   AppProxyConfig,
   ClaudeModelRoutingSettings,
   ClaudeModelRoutePolicy,
+  ProviderRoutingStrategy,
   ProxyStack,
   ProxyStackNotice,
   CodexDaemonRestartOutcome,
   AppModeView,
   StartupAttachFailure,
 } from "@/types/proxy";
+import { PROVIDER_ROUTING_STRATEGIES } from "@/types/proxy";
+
+function normalizeRoutingStrategy(value: string): ProviderRoutingStrategy {
+  return (PROVIDER_ROUTING_STRATEGIES as string[]).includes(value)
+    ? (value as ProviderRoutingStrategy)
+    : "order";
+}
 
 export const proxyApi = {
   // ========== 代理服务器控制 API ==========
@@ -158,6 +166,37 @@ export const proxyApi = {
     policy: ClaudeModelRoutePolicy,
   ): Promise<void> {
     return invoke("upsert_claude_model_route_policy", { policy });
+  },
+
+  // Provider 级路由策略（Fork 扩展）：order | rotate | usage
+  // 作用于「自动故障转移」开启、候选 Provider ≥ 2 时的主路由与降级顺序
+  async getProviderRoutingStrategy(
+    appType: string,
+  ): Promise<ProviderRoutingStrategy> {
+    const value = await invoke<string>("get_provider_routing_strategy", {
+      appType,
+    });
+    return normalizeRoutingStrategy(value);
+  },
+
+  async setProviderRoutingStrategy(
+    appType: string,
+    strategy: ProviderRoutingStrategy,
+  ): Promise<void> {
+    return invoke("set_provider_routing_strategy", { appType, strategy });
+  },
+
+  // 会话粘性（Fork 扩展）：开启后同一对话尽量固定在上一轮应答的 Provider 上，
+  // 避免 rotate / usage 策略逐请求换家破坏上游 prompt 缓存
+  async getProviderStickyEnabled(appType: string): Promise<boolean> {
+    return invoke<boolean>("get_provider_sticky_enabled", { appType });
+  },
+
+  async setProviderStickyEnabled(
+    appType: string,
+    enabled: boolean,
+  ): Promise<void> {
+    return invoke("set_provider_sticky_enabled", { appType, enabled });
   },
 
   // ========== 计费默认配置 API ==========

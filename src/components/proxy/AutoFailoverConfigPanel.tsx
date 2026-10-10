@@ -7,6 +7,11 @@ import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Save, Loader2, Info } from "lucide-react";
 import { toast } from "@/lib/toast";
 import { useAppProxyConfig, useUpdateAppProxyConfig } from "@/lib/query/proxy";
+import { proxyApi } from "@/lib/api/proxy";
+import {
+  PROVIDER_ROUTING_STRATEGIES,
+  type ProviderRoutingStrategy,
+} from "@/types/proxy";
 
 export interface AutoFailoverConfigPanelProps {
   appType: string;
@@ -53,6 +58,89 @@ export function AutoFailoverConfigPanel({
       });
     }
   }, [config]);
+
+  // Provider 级路由策略（Fork 扩展）独立存储于 forkdb，与上面的代理配置分开读写
+  const [routingStrategy, setRoutingStrategy] =
+    useState<ProviderRoutingStrategy>("order");
+  const [routingSaving, setRoutingSaving] = useState(false);
+
+  useEffect(() => {
+    let active = true;
+    proxyApi
+      .getProviderRoutingStrategy(appType)
+      .then((strategy) => {
+        if (active) setRoutingStrategy(strategy);
+      })
+      .catch(() => {
+        /* 读取失败时保持默认 order */
+      });
+    return () => {
+      active = false;
+    };
+  }, [appType]);
+
+  const handleStrategyChange = async (next: ProviderRoutingStrategy) => {
+    if (next === routingStrategy || routingSaving) return;
+    const prev = routingStrategy;
+    setRoutingStrategy(next);
+    setRoutingSaving(true);
+    try {
+      await proxyApi.setProviderRoutingStrategy(appType, next);
+      toast.success(t("proxy.routingStrategy.saved", "路由策略已保存"), {
+        closeButton: true,
+      });
+    } catch (e) {
+      setRoutingStrategy(prev);
+      toast.error(
+        t("proxy.routingStrategy.saveFailed", "路由策略保存失败") +
+          ":" +
+          String(e),
+      );
+    } finally {
+      setRoutingSaving(false);
+    }
+  };
+
+  // 会话粘性（Fork 扩展）：同样独立存储于 forkdb，默认关闭
+  const [stickyEnabled, setStickyEnabled] = useState(false);
+  const [stickySaving, setStickySaving] = useState(false);
+
+  useEffect(() => {
+    let active = true;
+    proxyApi
+      .getProviderStickyEnabled(appType)
+      .then((enabled) => {
+        if (active) setStickyEnabled(enabled);
+      })
+      .catch(() => {
+        /* 读取失败时保持默认关闭 */
+      });
+    return () => {
+      active = false;
+    };
+  }, [appType]);
+
+  const handleStickyToggle = async () => {
+    if (stickySaving) return;
+    const next = !stickyEnabled;
+    setStickyEnabled(next);
+    setStickySaving(true);
+    try {
+      await proxyApi.setProviderStickyEnabled(appType, next);
+      toast.success(t("proxy.routingSticky.saved", "会话粘性已保存"), {
+        closeButton: true,
+      });
+    } catch (e) {
+      setStickyEnabled(!next);
+      toast.error(
+        t("proxy.routingSticky.saveFailed", "会话粘性保存失败") +
+          ":" +
+          String(e),
+      );
+    } finally {
+      setStickySaving(false);
+    }
+  };
 
   const handleSave = async () => {
     if (!config) return;
@@ -235,6 +323,61 @@ export function AutoFailoverConfigPanel({
             )}
           </AlertDescription>
         </Alert>
+
+        {/* Provider 级路由策略（Fork 扩展） */}
+        <div className="space-y-3 rounded-lg border border-white/10 bg-subtle p-4">
+          <h4 className="text-sm font-semibold">
+            {t("proxy.routingStrategy.title", "路由策略")}
+          </h4>
+          <p className="text-xs text-fg-2">
+            {t(
+              "proxy.routingStrategy.hint",
+              "自动故障转移开启、且队列中有多个供应商时，决定主路由与降级顺序。单个供应商时不生效。",
+            )}
+          </p>
+          <div className="flex flex-wrap gap-2">
+            {PROVIDER_ROUTING_STRATEGIES.map((strategy) => (
+              <Button
+                key={strategy}
+                variant={routingStrategy === strategy ? "solid" : "neutral"}
+                size="regular"
+                onClick={() => handleStrategyChange(strategy)}
+                disabled={isDisabled || routingSaving}
+              >
+                {t(`proxy.routingStrategy.option.${strategy}`, strategy)}
+              </Button>
+            ))}
+          </div>
+          <p className="text-xs text-fg-2">
+            {t(`proxy.routingStrategy.desc.${routingStrategy}`, "")}
+          </p>
+
+          {/* 会话粘性开关（Fork 扩展） */}
+          <div className="mt-1 flex items-start justify-between gap-3 border-t border-white/10 pt-3">
+            <div className="min-w-0">
+              <p className="text-sm font-medium">
+                {t("proxy.routingSticky.title", "会话粘性")}
+              </p>
+              <p className="mt-1 text-xs text-fg-2">
+                {t(
+                  "proxy.routingSticky.hint",
+                  "开启后，同一对话会尽量固定在上一轮应答的供应商上，避免轮询/最少使用策略逐请求换家导致上游缓存失效。建议与「轮询」「最少使用」搭配使用。",
+                )}
+              </p>
+            </div>
+            <Button
+              variant={stickyEnabled ? "solid" : "neutral"}
+              size="regular"
+              onClick={handleStickyToggle}
+              disabled={isDisabled || stickySaving}
+              className="shrink-0"
+            >
+              {stickyEnabled
+                ? t("proxy.routingSticky.on", "已开启")
+                : t("proxy.routingSticky.off", "已关闭")}
+            </Button>
+          </div>
+        </div>
 
         {/* 重试与超时配置 */}
         <div className="space-y-4 rounded-lg border border-white/10 bg-subtle p-4">

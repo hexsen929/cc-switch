@@ -171,10 +171,21 @@ impl RequestContext {
                     vec![current_provider.ok_or(ProxyError::NoProvidersConfigured)?]
                 } else {
                     // 使用共享的 ProviderRouter 选择 Provider（熔断器状态跨请求保持）
-                    // 注意：只在这里调用一次，结果传递给 forwarder，避免重复消耗 HalfOpen 名额
+                    // 注意：只在这里调用一次，结果传递给 forwarder，避免重复消耗 HalfOpen 名额。
+                    // 只有客户端提供的稳定 session 才参与会话粘性；自生成的 UUID 每轮都变，
+                    // 不能作为粘性键（否则同一对话每轮都被当成新会话）。
+                    let sticky_session = if session_result.client_provided {
+                        Some(session_id.as_str())
+                    } else {
+                        None
+                    };
                     state
                         .provider_router
-                        .select_providers_with_current(app_type_str, current_provider)
+                        .select_providers_with_current(
+                            app_type_str,
+                            current_provider,
+                            sticky_session,
+                        )
                         .await
                         .map_err(|e| match e {
                             crate::error::AppError::AllProvidersCircuitOpen => {

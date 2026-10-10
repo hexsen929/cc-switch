@@ -50,3 +50,53 @@ pub async fn upsert_claude_model_route_policy(
         .upsert_claude_model_route_policy(&policy)
         .map_err(|e| e.to_string())
 }
+
+/// 获取某应用的 Provider 级路由策略（Fork 扩展）：order | rotate | usage
+#[tauri::command]
+pub async fn get_provider_routing_strategy(
+    state: tauri::State<'_, AppState>,
+    app_type: String,
+) -> Result<String, String> {
+    state
+        .db
+        .get_provider_routing_strategy(&app_type)
+        .map_err(|e| e.to_string())
+}
+
+/// 设置某应用的 Provider 级路由策略（Fork 扩展）
+#[tauri::command]
+pub async fn set_provider_routing_strategy(
+    state: tauri::State<'_, AppState>,
+    app_type: String,
+    strategy: String,
+) -> Result<(), String> {
+    state
+        .db
+        .set_provider_routing_strategy(&app_type, &strategy)
+        .map_err(|e| e.to_string())
+}
+
+/// 获取某应用的会话粘性开关（Fork 扩展）
+#[tauri::command]
+pub async fn get_provider_sticky_enabled(
+    state: tauri::State<'_, AppState>,
+    app_type: String,
+) -> Result<bool, String> {
+    state
+        .db
+        .get_provider_sticky_enabled(&app_type)
+        .map_err(|e| e.to_string())
+}
+
+/// 设置某应用的会话粘性开关（Fork 扩展）
+#[tauri::command]
+pub async fn set_provider_sticky_enabled(
+    state: tauri::State<'_, AppState>,
+    app_type: String,
+    enabled: bool,
+) -> Result<(), String> {
+    state
+        .db
+        .set_provider_sticky_enabled(&app_type, enabled)
+        .map_err(|e| e.to_string())
+}

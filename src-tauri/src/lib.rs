@@ -1622,6 +1622,10 @@ pub fn run() {
             commands::set_claude_model_routing_settings,
             commands::list_claude_model_route_policies,
             commands::upsert_claude_model_route_policy,
+            commands::get_provider_routing_strategy,
+            commands::set_provider_routing_strategy,
+            commands::get_provider_sticky_enabled,
+            commands::set_provider_sticky_enabled,
             // Fork failover (model-level queues + chain)
             commands::get_failover_queue_for_model,
             commands::get_available_providers_for_model_failover,

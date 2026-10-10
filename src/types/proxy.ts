@@ -219,6 +219,16 @@ export interface ClaudeModelRoutePolicy {
   updatedAt: string;
 }
 
+// Provider 级路由策略（Fork 扩展，灵感来自 magpie 的 routing group 模式）
+// order=队列顺序；rotate=轮询均摊；usage=最少使用优先
+export type ProviderRoutingStrategy = "order" | "rotate" | "usage";
+
+export const PROVIDER_ROUTING_STRATEGIES: ProviderRoutingStrategy[] = [
+  "order",
+  "rotate",
+  "usage",
+];
+
 // 应用级代理配置（每个 app 独立）
 export interface AppProxyConfig {
   appType: string;
