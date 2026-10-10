@@ -239,9 +239,6 @@ describe("Codex Copilot provider form", () => {
       expect(saved.meta?.codexCopilotApiFormat).toBe(
         format === "auto" ? undefined : format,
       );
-      expect(saved.meta?.apiFormat).toBe(
-        format === "auto" ? "openai_chat" : format,
-      );
       expect(JSON.parse(saved.settingsConfig).config).toContain(
         'wire_api = "responses"',
       );
@@ -266,7 +263,7 @@ describe("Codex Copilot provider form", () => {
       app: "codex",
       settingsConfig: draft,
       category: preset.category,
-      meta: { providerType: "github_copilot", apiFormat: "openai_chat" },
+      meta: { providerType: "github_copilot" },
     });
     await waitFor(() =>
       expect(
@@ -302,7 +299,6 @@ describe("Codex Copilot provider form", () => {
           accountId: "copilot-account",
         },
         githubAccountId: "copilot-account",
-        apiFormat: "openai_responses",
         codexCopilotApiFormat: "openai_responses",
       }),
     );
@@ -343,7 +339,6 @@ describe("Codex Copilot provider form", () => {
     await waitForPreset(copilot);
     expect(requests.at(-1)?.meta).toEqual({
       providerType: "github_copilot",
-      apiFormat: "openai_chat",
     });
     await selectFormat("openai_responses");
 
@@ -357,7 +352,6 @@ describe("Codex Copilot provider form", () => {
     expect(formatControl()).toHaveTextContent(formatLabels.auto);
     expect(requests.at(-1)?.meta).toEqual({
       providerType: "github_copilot",
-      apiFormat: "openai_chat",
     });
 
     const previousRequests = requests.length;
@@ -437,7 +431,6 @@ describe("Codex Copilot provider form", () => {
     expect(saved.meta?.githubAccountId).toBe(accountId ?? undefined);
     expect(saved.meta?.providerType).toBe("github_copilot");
     expect(saved.meta?.codexCopilotApiFormat).toBe("openai_responses");
-    expect(saved.meta?.apiFormat).toBe("openai_responses");
     const settings = JSON.parse(saved.settingsConfig);
     expect(settings.auth).toEqual({});
     expect(settings.config).toContain('wire_api = "responses"');
@@ -564,6 +557,25 @@ requires_openai_auth = true`;
     });
   });
 
+  it.each(["auto", "openai_chat", "openai_responses"] as const)(
+    "preserves the fork tool bridge only for Chat-capable Copilot format %s",
+    async (format) => {
+      const onSubmit = renderForm({
+        providerType: "github_copilot",
+        codexCopilotApiFormat: format,
+        toolCallBridge: true,
+      });
+      fireEvent.click(screen.getByRole("button", { name: "save" }));
+      await waitFor(() => expect(onSubmit).toHaveBeenCalledTimes(1));
+      const meta = onSubmit.mock.calls[0][0].meta;
+      // Auto may use Chat; Responses-only providers must not retain the bridge.
+      expect(meta?.toolCallBridge).toBe(
+        format === "openai_responses" ? undefined : true,
+      );
+      expect(meta?.apiFormat).toBeUndefined();
+    },
+  );
+
   it("loads a saved explicit protocol and can return it to automatic", async () => {
     const onSubmit = renderForm({
       providerType: "github_copilot",
@@ -577,7 +589,6 @@ requires_openai_auth = true`;
     expect(
       onSubmit.mock.calls[0][0].meta?.codexCopilotApiFormat,
     ).toBeUndefined();
-    expect(onSubmit.mock.calls[0][0].meta?.apiFormat).toBe("openai_chat");
   });
 
   it("excludes Messages only for Copilot and resets the override on preset changes", async () => {

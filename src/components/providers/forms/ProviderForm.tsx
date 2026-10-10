@@ -787,32 +787,35 @@ function ProviderFormFull({
   } = useCodexConfigState({ initialData });
 
   const initialCodexApiFormat: CodexApiFormat =
-    initialData?.meta?.apiFormat === "openai_chat"
-      ? "openai_chat"
-      : initialData?.meta?.apiFormat === "anthropic"
-        ? "anthropic"
-        : initialData?.meta?.apiFormat === "openai_responses"
-          ? "openai_responses"
-          : (codexApiFormatFromWireApi(
-              extractCodexWireApi(
-                typeof initialData?.settingsConfig?.config === "string"
-                  ? initialData.settingsConfig.config
-                  : "",
-              ),
-            ) ?? "openai_responses");
+    initialData?.meta?.providerType === "github_copilot"
+      ? "openai_responses"
+      : initialData?.meta?.apiFormat === "openai_chat"
+        ? "openai_chat"
+        : initialData?.meta?.apiFormat === "anthropic"
+          ? "anthropic"
+          : initialData?.meta?.apiFormat === "openai_responses"
+            ? "openai_responses"
+            : (codexApiFormatFromWireApi(
+                extractCodexWireApi(
+                  typeof initialData?.settingsConfig?.config === "string"
+                    ? initialData.settingsConfig.config
+                    : "",
+                ),
+              ) ?? "openai_responses");
 
   const initialCodexCopilotApiFormat =
     initialData?.meta?.codexCopilotApiFormat ?? "auto";
   const [localCodexApiFormat, setLocalCodexApiFormat] =
-    useState<CodexApiFormat>(
-      initialData?.meta?.providerType === "github_copilot"
-        ? initialCodexCopilotApiFormat === "auto"
-          ? "openai_chat"
-          : initialCodexCopilotApiFormat
-        : initialCodexApiFormat,
-    );
-  const [codexCopilotApiFormat, setCodexCopilotApiFormat] =
-    useState<CodexCopilotApiFormat>(initialCodexCopilotApiFormat);
+    useState<CodexApiFormat>(initialCodexApiFormat);
+  // Preserve future selections verbatim unless the user changes the format.
+  const [codexCopilotApiFormat, setCodexCopilotApiFormat] = useState(
+    initialCodexCopilotApiFormat,
+  );
+  const effectiveCodexCopilotApiFormat: CodexCopilotApiFormat =
+    codexCopilotApiFormat === "openai_chat" ||
+    codexCopilotApiFormat === "openai_responses"
+      ? codexCopilotApiFormat
+      : "auto";
 
   // Auth-field choice for the Anthropic Messages upstream (defaults to the Bearer form)
   const initialCodexAnthropicAuthField: ClaudeApiKeyField =
@@ -847,28 +850,32 @@ function ProviderFormFull({
     [originalHandleCodexConfigChange, debouncedValidate],
   );
 
+  // Codex always speaks Responses to the proxy, regardless of upstream selection.
+  const ensureCodexResponsesWireApi = useCallback(() => {
+    setCodexConfig((prev) => {
+      const updated = setCodexWireApi(prev, "responses");
+      debouncedValidate(updated);
+      return updated;
+    });
+  }, [setCodexConfig, debouncedValidate]);
+
   const handleCodexApiFormatChange = useCallback(
     (format: CodexApiFormat) => {
       setLocalCodexApiFormat(format);
       if (format !== "openai_chat") {
         setToolCallBridge(false);
       }
-      // wire_api is always "responses" for Codex; format controls proxy-layer conversion
-      setCodexConfig((prev) => {
-        const updated = setCodexWireApi(prev, "responses");
-        debouncedValidate(updated);
-        return updated;
-      });
+      ensureCodexResponsesWireApi();
     },
-    [setCodexConfig, debouncedValidate],
+    [ensureCodexResponsesWireApi],
   );
 
   const handleCodexCopilotApiFormatChange = useCallback(
     (format: CodexCopilotApiFormat) => {
       setCodexCopilotApiFormat(format);
-      handleCodexApiFormatChange(format === "auto" ? "openai_chat" : format);
+      ensureCodexResponsesWireApi();
     },
-    [handleCodexApiFormatChange],
+    [ensureCodexResponsesWireApi],
   );
 
   // 新增：预设或模板投影到当前配置文件上显示。每次重置显示内容都要重新投影，否则保存时
@@ -981,6 +988,10 @@ function ProviderFormFull({
     (appId === "codex" && hasManagedCopilotIdentity) ||
     (appId === "claude" &&
       (hasManagedCopilotIdentity || baseUrl.includes("githubcopilot.com")));
+  // Auto can select Chat per request, so retain Chat-only options for that path.
+  const isCodexChatFormat = isCopilotProvider
+    ? effectiveCodexCopilotApiFormat !== "openai_responses"
+    : localCodexApiFormat === "openai_chat";
   const isClaudeCodexOauthProvider =
     appId === "claude" &&
     (presetProviderType === "codex_oauth" ||
@@ -1994,15 +2005,13 @@ function ProviderFormFull({
           : undefined,
       codexFastMode: isClaudeCodexOauthProvider ? codexFastMode : undefined,
       codexChatReasoning:
-        appId === "codex" &&
-        category !== "official" &&
-        localCodexApiFormat === "openai_chat"
+        appId === "codex" && category !== "official" && isCodexChatFormat
           ? normalizeCodexChatReasoningForSave(codexChatReasoning)
           : undefined,
       promptCacheRouting:
         appId === "codex" &&
         category !== "official" &&
-        localCodexApiFormat === "openai_chat" &&
+        isCodexChatFormat &&
         promptCacheRouting !== "auto"
           ? promptCacheRouting
           : undefined,
@@ -2029,7 +2038,7 @@ function ProviderFormFull({
       toolCallBridge:
         category !== "official" &&
         ((appId === "claude" && localApiFormat === "openai_chat") ||
-          (appId === "codex" && localCodexApiFormat === "openai_chat")) &&
+          (appId === "codex" && isCodexChatFormat)) &&
         toolCallBridge
           ? true
           : undefined,
@@ -2038,14 +2047,10 @@ function ProviderFormFull({
           ? isXaiOauthProvider
             ? "openai_responses"
             : localApiFormat
-          : appId === "codex" && category !== "official"
-            ? isCopilotProvider
-              ? codexCopilotApiFormat === "auto"
-                ? "openai_chat"
-                : codexCopilotApiFormat
-              : isXaiOauthProvider
-                ? "openai_responses"
-                : localCodexApiFormat
+          : appId === "codex" && category !== "official" && !isCopilotProvider
+            ? isXaiOauthProvider
+              ? "openai_responses"
+              : localCodexApiFormat
             : undefined,
       codexCopilotApiFormat:
         appId === "codex" &&
@@ -2092,6 +2097,10 @@ function ProviderFormFull({
       stackModels,
     };
 
+    // Remove the legacy representative value, including on existing Copilot cards.
+    if (appId === "codex" && isCopilotProvider) {
+      delete nextMeta.apiFormat;
+    }
     if (!isClaudeCodexOauthProvider && "codexFastMode" in nextMeta) {
       delete nextMeta.codexFastMode;
     }
@@ -2283,7 +2292,7 @@ function ProviderFormFull({
         config,
         preset.category,
         preset.providerType === "github_copilot"
-          ? { providerType: preset.providerType, apiFormat: preset.apiFormat }
+          ? { providerType: preset.providerType }
           : undefined,
       );
       return;
@@ -2798,7 +2807,7 @@ function ProviderFormFull({
               onApiFormatChange={handleCodexApiFormatChange}
               toolCallBridge={toolCallBridge}
               onToolCallBridgeChange={setToolCallBridge}
-              copilotApiFormat={codexCopilotApiFormat}
+              copilotApiFormat={effectiveCodexCopilotApiFormat}
               onCopilotApiFormatChange={handleCodexCopilotApiFormatChange}
               anthropicAuthField={localCodexAnthropicAuthField}
               onAnthropicAuthFieldChange={setLocalCodexAnthropicAuthField}

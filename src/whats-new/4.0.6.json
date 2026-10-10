@@ -14,6 +14,20 @@
       "zh-TW": "修復 Codex 工具呼叫橋接遺失命名空間及自訂工具類型",
       "en": "Fixed Codex tool bridging losing namespaces and custom tool types",
       "ja": "Codex ツール橋渡しで名前空間とカスタム型が失われる問題を修正"
+    },
+    {
+      "type": "fix",
+      "zh": "修复 Claude Code 经路由转 Chat 格式时最后一段回复丢失",
+      "zh-TW": "修復 Claude Code 經路由轉 Chat 格式時最後一段回覆遺失",
+      "en": "Fixed Claude Code losing its last reply when routed to a Chat-format provider",
+      "ja": "Claude Code をルーティングで Chat 形式に変換すると最後の応答が消える問題を修正"
+    },
+    {
+      "type": "fix",
+      "zh": "修复 Codex 聚合模式下 /model 里官方模型消失",
+      "zh-TW": "修復 Codex 聚合模式下 /model 中官方模型消失",
+      "en": "Fixed official models missing from /model in Codex aggregation mode",
+      "ja": "Codex の集約モードで /model から公式モデルが消える問題を修正"
     }
   ]
 }
