@@ -1224,6 +1224,14 @@ pub fn run() {
                 log::info!("✓ XaiOAuthManager initialized");
             }
 
+            // 初始化 Gemini(Google OAuth) token 刷新缓存（代理侧自动续期 access_token）
+            {
+                use crate::proxy::providers::gemini_token::{GeminiTokenManager, GeminiTokenState};
+
+                app.manage(GeminiTokenState(Arc::new(GeminiTokenManager::new())));
+                log::info!("✓ GeminiTokenManager initialized");
+            }
+
             // 初始化全局出站代理 HTTP 客户端
             {
                 let db = &app.state::<AppState>().db;

@@ -2513,6 +2513,26 @@ impl RequestForwarder {
                 }
             }
 
+            // Gemini(Google OAuth)：Google 的 access_token 只有 ~1h 有效期，而
+            // provider 配置里存的是登录当时那一个，很快过期。若凭证带 refresh_token，
+            // 就用它换取并缓存新的 access_token（与 Codex/xAI/Copilot 的惰性刷新同构）。
+            // 无 refresh_token 或刷新失败时保留原 token —— 行为与改造前一致，
+            // 不会让原本可用的请求变差。
+            if auth.strategy == AuthStrategy::GoogleOAuth {
+                if let Some(app_handle) = &self.app_handle {
+                    if let Some(gemini_state) = app_handle
+                        .try_state::<crate::proxy::providers::gemini_token::GeminiTokenState>()
+                    {
+                        if let Some(fresh) =
+                            gemini_state.0.valid_access_token(&auth.api_key).await
+                        {
+                            auth.access_token = Some(fresh);
+                            log::debug!("[GeminiOAuth] 已刷新 access_token");
+                        }
+                    }
+                }
+            }
+
             for secret in std::iter::once(&auth.api_key).chain(auth.access_token.iter()) {
                 if !secret.is_empty() && !log_secrets.contains(secret) {
                     log_secrets.push(secret.clone());
