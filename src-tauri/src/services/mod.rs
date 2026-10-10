@@ -16,6 +16,7 @@ pub mod profile;
 pub mod prompt;
 pub mod provider;
 pub mod proxy;
+pub mod quota_refresh;
 pub mod s3;
 pub mod s3_auto_sync;
 pub mod s3_sync;

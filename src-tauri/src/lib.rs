@@ -1232,6 +1232,11 @@ pub fn run() {
                 log::info!("✓ GeminiTokenManager initialized");
             }
 
+            // 额度感知路由（Smart/Pace）后台额度刷新器：门控——仅当某应用启用 smart/pace
+            // 且开启故障转移时才刷额度，否则一个网络请求都不发（不选额度路由即零影响）。
+            crate::services::quota_refresh::start_worker(app.handle().clone());
+            log::info!("✓ Quota-aware routing refresher started (gated on smart/pace)");
+
             // 初始化全局出站代理 HTTP 客户端
             {
                 let db = &app.state::<AppState>().db;
