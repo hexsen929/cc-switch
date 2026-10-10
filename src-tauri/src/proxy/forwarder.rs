@@ -818,6 +818,54 @@ impl RequestForwarder {
         })
     }
 
+    /// 统计某托管订阅卡当前「健康（无需重新登录）」的本地账号数量。
+    ///
+    /// 仅用于订阅内多账号故障转移（Phase 2）判定「是否存在可切换的备用账号」。
+    /// 返回 `None` 表示该卡不是托管订阅（Copilot / Codex OAuth / xAI OAuth）、
+    /// AppHandle 不可用或无法提取鉴权策略，此时调用方不做任何当场换账号重试。
+    async fn healthy_managed_pool_size(
+        &self,
+        provider: &Provider,
+        adapter: &dyn ProviderAdapter,
+    ) -> Option<usize> {
+        let app_handle = self.app_handle.as_ref()?;
+        let strategy = adapter.extract_auth(provider)?.strategy;
+        let count = match strategy {
+            AuthStrategy::GitHubCopilot => {
+                let copilot_state = app_handle.state::<CopilotAuthState>();
+                let copilot_auth = copilot_state.0.read().await;
+                copilot_auth
+                    .list_accounts()
+                    .await
+                    .into_iter()
+                    .filter(|a| !a.reauth_required)
+                    .count()
+            }
+            AuthStrategy::CodexOAuth => {
+                let codex_state = app_handle.state::<CodexOAuthState>();
+                codex_state
+                    .0
+                    .list_accounts()
+                    .await
+                    .into_iter()
+                    .filter(|a| !a.reauth_required)
+                    .count()
+            }
+            AuthStrategy::XaiOAuth => {
+                let xai_state = app_handle.state::<XaiOAuthState>();
+                let xai_auth = xai_state.0.read().await;
+                xai_auth
+                    .list_accounts()
+                    .await
+                    .into_iter()
+                    .filter(|a| !a.requires_reauth)
+                    .count()
+            }
+            _ => return None,
+        };
+        Some(count)
+    }
+
     /// 实际转发逻辑（不包含客户端维度的入口/出口计数）
     ///
     /// # Arguments
@@ -923,22 +971,62 @@ impl RequestForwarder {
             // 新「正在尝试哪个 provider」的展示字段。
             self.note_attempt(provider).await;
 
-            // 转发请求（每个 Provider 只尝试一次，重试由客户端控制）
+            // 转发请求（每个 Provider 只尝试一次，Provider 维度的重试由故障转移队列控制）
+            //
+            // 订阅内多账号故障转移（Phase 2）：仅对 401/403（账号 token 失效、鉴权死）
+            // 当场换账号重试。机制 —— forward() 收到 401/403 时已把失效账号送入冷却（v1），
+            // 再次调用 forward() 时 v1 的 choose_managed_account 会自动跳过冷却中的账号、
+            // 改选下一个健康账号。启用条件：开关开启 + 本卡为托管订阅 + 池内健康账号 ≥ 2；
+            // 重试上限 = min(池内健康账号数 - 1, MAX_ACCOUNT_AUTH_RETRIES)，杜绝任何空转。
+            // 429 不在此处当场换账号（可能已消耗配额、并影响 Codex 加密回合连续性），
+            // 继续沿用 v1 的冷却在「下一条请求」生效。此重试不占用 Provider 故障转移预算，
+            // 也不占用熔断器探测名额、不写 Provider 维度健康度（账号切换对 Provider 透明）。
+            const MAX_ACCOUNT_AUTH_RETRIES: usize = 5;
+            let mut account_auth_retries_left = if self.subscription_account_failover {
+                self.healthy_managed_pool_size(provider, adapter.as_ref())
+                    .await
+                    .map(|n| n.saturating_sub(1).min(MAX_ACCOUNT_AUTH_RETRIES))
+                    .unwrap_or(0)
+            } else {
+                0
+            };
+
             let mut attempted_codex_upstream_format = None;
-            match self
-                .forward(
-                    app_type,
-                    &method,
-                    provider,
-                    endpoint,
-                    &provider_body,
-                    &headers,
-                    &extensions,
-                    adapter.as_ref(),
-                    &mut attempted_codex_upstream_format,
-                )
-                .await
-            {
+            let forwarded_result = loop {
+                let result = self
+                    .forward(
+                        app_type,
+                        &method,
+                        provider,
+                        endpoint,
+                        &provider_body,
+                        &headers,
+                        &extensions,
+                        adapter.as_ref(),
+                        &mut attempted_codex_upstream_format,
+                    )
+                    .await;
+
+                if account_auth_retries_left > 0
+                    && matches!(
+                        &result,
+                        Err(ProxyError::UpstreamError { status, .. })
+                            if *status == 401 || *status == 403
+                    )
+                {
+                    account_auth_retries_left -= 1;
+                    log::warn!(
+                        "[{app_type_str}] [AccountFailover] provider={} 账号鉴权失效，改选下一个健康账号当场重试（剩余 {} 次）",
+                        provider.name,
+                        account_auth_retries_left
+                    );
+                    continue;
+                }
+
+                break result;
+            };
+
+            match forwarded_result {
                 Ok(forwarded) => {
                     return Ok(self
                         .finish_success(

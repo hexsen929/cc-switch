@@ -1156,4 +1156,40 @@ mod tests {
             Some("a".to_string())
         );
     }
+
+    #[tokio::test]
+    #[serial]
+    async fn account_failover_walks_pool_on_sequential_auth_death() {
+        // 模拟 Phase 2 的「单条请求内 401/403 当场换账号」循环：
+        // forward() 每次收到 401 都会给当前账号记一次冷却，下一轮 choose
+        // 据此自动前进到下一个健康账号。此处把该序列显式跑一遍，验证
+        // choose + record_account_cooldown 组合能逐一走遍账号池 a→b→c。
+        let _home = TempHome::new();
+        let db = Arc::new(Database::memory().unwrap());
+        let router = ProviderRouter::new(db);
+        let candidates = vec!["a".to_string(), "b".to_string(), "c".to_string()];
+        let preferred = Some("a".to_string());
+
+        // 第 1 次尝试：命中绑定账号 a
+        let a = router.choose_managed_account("codex_oauth", preferred.clone(), &candidates);
+        assert_eq!(a, Some("a".to_string()));
+        // a 返回 401 → forward 记冷却
+        router.record_account_cooldown("codex_oauth", "a");
+
+        // 第 2 次尝试（当场重试）：a 冷却中 → 前进到 b
+        let b = router.choose_managed_account("codex_oauth", preferred.clone(), &candidates);
+        assert_eq!(b, Some("b".to_string()));
+        router.record_account_cooldown("codex_oauth", "b");
+
+        // 第 3 次尝试：a、b 均冷却 → 前进到 c
+        let c = router.choose_managed_account("codex_oauth", preferred.clone(), &candidates);
+        assert_eq!(c, Some("c".to_string()));
+        router.record_account_cooldown("codex_oauth", "c");
+
+        // 全池耗尽后：退回首选项（调用方的重试上限 = 池size-1 会在此之前停止，
+        // 不会真的走到这一步，但 choose 本身保证绝不中断转发）。
+        let exhausted =
+            router.choose_managed_account("codex_oauth", preferred, &candidates);
+        assert_eq!(exhausted, Some("a".to_string()));
+    }
 }
