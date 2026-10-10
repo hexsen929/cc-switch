@@ -843,7 +843,7 @@ fn provider_has_official_usage_route(provider: &crate::provider::Provider) -> bo
                 }))
 }
 #[derive(Debug, PartialEq, Eq)]
-enum TrayUsageSource {
+pub(crate) enum TrayUsageSource {
     ManagedCodex(String),
     /// 客户端自己登录的官方订阅：和供应商卡片读写同一份应用级订阅缓存。
     Subscription,
@@ -851,7 +851,10 @@ enum TrayUsageSource {
 }
 
 /// Keep the tray's refresh and display paths on the same credentials and toggle.
-fn tray_usage_source(app_type: &AppType, provider: &Provider) -> Option<TrayUsageSource> {
+///
+/// 也供额度感知路由（Smart/Pace）复用：把 Provider 归到用量来源三类，是只读分类，
+/// 不触发任何缓存失效。
+pub(crate) fn tray_usage_source(app_type: &AppType, provider: &Provider) -> Option<TrayUsageSource> {
     if *app_type == AppType::Codex {
         if let Some(account_id) = managed_codex_account_id(provider) {
             // Match ProviderCard: managed accounts query by default until the

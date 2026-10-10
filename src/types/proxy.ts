@@ -220,13 +220,21 @@ export interface ClaudeModelRoutePolicy {
 }
 
 // Provider 级路由策略（Fork 扩展，灵感来自 magpie 的 routing group 模式）
-// order=队列顺序；rotate=轮询均摊；usage=最少使用优先
-export type ProviderRoutingStrategy = "order" | "rotate" | "usage";
+// order=队列顺序；rotate=轮询均摊；usage=最少使用优先；
+// smart=额度感知·优先最快重置；pace=额度感知·按每小时剩余额度配速
+export type ProviderRoutingStrategy =
+  | "order"
+  | "rotate"
+  | "usage"
+  | "smart"
+  | "pace";
 
 export const PROVIDER_ROUTING_STRATEGIES: ProviderRoutingStrategy[] = [
   "order",
   "rotate",
   "usage",
+  "smart",
+  "pace",
 ];
 
 // 应用级代理配置（每个 app 独立）

@@ -3802,12 +3802,16 @@
       "option": {
         "order": "Order",
         "rotate": "Rotate",
-        "usage": "Least used"
+        "usage": "Least used",
+        "smart": "Smart (save quota)",
+        "pace": "Pace (even quota)"
       },
       "desc": {
         "order": "Follow the failover queue order: always prefer P1, then fall back in sequence.",
         "rotate": "Round-robin: shift the primary route by one across healthy providers on each request to spread load.",
-        "usage": "Least-used first: prefer the provider picked the fewest times during this run."
+        "usage": "Least-used first: prefer the provider picked the fewest times during this run.",
+        "smart": "Quota-aware (smart): among providers that still have quota, prefer the one resetting soonest so the about-to-reset quota is used up with the least waste. Reads the latest usage snapshot and falls back to Order when quota is unknown.",
+        "pace": "Quota-aware (pace): prefer the provider with the most remaining quota per hour until reset, spreading the window evenly so it is not spent too early. Reads the latest usage snapshot and falls back to Order when quota is unknown."
       }
     },
     "routingSticky": {

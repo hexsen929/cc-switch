@@ -31,11 +31,14 @@ impl Database {
         }
     }
 
-    /// Provider 级路由策略取值归一（Fork 扩展）：order | rotate | usage，非法值回落 order
+    /// Provider 级路由策略取值归一（Fork 扩展）：order | rotate | usage | smart | pace，
+    /// 非法值回落 order。smart/pace 为额度感知策略（灵感来自 magpie）。
     fn normalize_routing_strategy(strategy: &str) -> &'static str {
         match strategy {
             "rotate" => "rotate",
             "usage" => "usage",
+            "smart" => "smart",
+            "pace" => "pace",
             _ => "order",
         }
     }

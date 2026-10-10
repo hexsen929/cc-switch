@@ -36,6 +36,14 @@ pub enum RoutingStrategy {
     Rotate,
     /// 最少使用优先：按本进程内被选为主路由的次数升序，平票保持队列顺序
     Usage,
+    /// 额度感知·智能（灵感来自 magpie `smart`）：在「仍有额度」的候选里，优先用
+    /// **最快重置**的那家，让即将重置的额度尽量用满、减少浪费；额度已耗尽的排到最后。
+    /// 任何候选的额度快照缺失/未知都按「未知」处理并排在已知之后；全部未知时整体回落到
+    /// `order`，行为与改造前完全一致。
+    Smart,
+    /// 额度感知·配速（灵感来自 magpie `pace`）：优先用「距重置前每小时可用额度最多」的
+    /// 那家，把周期额度摊匀、避免早早用完。缺失/未知与全未知时的回落规则同 `Smart`。
+    Pace,
 }
 
 impl RoutingStrategy {
@@ -43,6 +51,8 @@ impl RoutingStrategy {
         match raw {
             "rotate" => RoutingStrategy::Rotate,
             "usage" => RoutingStrategy::Usage,
+            "smart" => RoutingStrategy::Smart,
+            "pace" => RoutingStrategy::Pace,
             _ => RoutingStrategy::Order,
         }
     }
@@ -52,7 +62,130 @@ impl RoutingStrategy {
             RoutingStrategy::Order => "order",
             RoutingStrategy::Rotate => "rotate",
             RoutingStrategy::Usage => "usage",
+            RoutingStrategy::Smart => "smart",
+            RoutingStrategy::Pace => "pace",
         }
+    }
+}
+
+/// 额度视图：某候选 Provider 当前已知的「最紧张档位」摘要（只读、进程内快照派生）。
+///
+/// 「最紧张档位」= `utilization` 最高（剩余最少）的那个限速窗口，它是真正的瓶颈。
+#[derive(Debug, Clone, Copy)]
+struct QuotaView {
+    /// 剩余额度比例，0.0..=1.0（= 1 − 最紧张档位 utilization/100）
+    remaining_fraction: f64,
+    /// 距离该档位重置的毫秒数；`None` 表示重置时间未知（快照里没有 resets_at）
+    ms_until_reset: Option<i64>,
+}
+
+/// 判定「额度已耗尽」的阈值：剩余比例 ≤ 此值视为用完，排到最后。
+const QUOTA_EXHAUSTED_EPS: f64 = 0.001;
+
+/// Pace 速率计算的最小时长地板（10 分钟）：避免「重置在即/快照已过期」时
+/// 窗口趋近 0 导致速率炸裂、把一个其实快用完的账号错排到最前。
+const PACE_MIN_WINDOW_MS: f64 = 10.0 * 60.0 * 1000.0;
+
+/// 把一个候选的额度视图映射成「越小越优先」的 f64 排序键。
+///
+/// `view = None`（额度未知）恒返回 `+∞`，稳定排序下会落在所有「已知额度」候选之后，
+/// 且彼此保持原有队列相对顺序 —— 这正是我们要的「未知者维持 order 语义殿后」。
+fn quota_sort_key(strategy: RoutingStrategy, view: Option<&QuotaView>) -> f64 {
+    let Some(v) = view else {
+        return f64::INFINITY;
+    };
+    match strategy {
+        RoutingStrategy::Smart => {
+            // 已耗尽的加一个极大基数，确保恒排在所有未耗尽之后；
+            // 未耗尽者按「距重置毫秒数」升序 —— 最快重置优先（重置时浪费最少）。
+            let base = if v.remaining_fraction <= QUOTA_EXHAUSTED_EPS {
+                1.0e18
+            } else {
+                0.0
+            };
+            let reset = v
+                .ms_until_reset
+                .map(|m| m.max(0) as f64)
+                .unwrap_or(f64::MAX / 4.0);
+            base + reset
+        }
+        RoutingStrategy::Pace => {
+            // 每毫秒剩余额度，越大越优先 → 取负做升序键。重置时间未知时按最小窗口兜底，
+            // 退化为「剩余比例越大越优先」，仍是合理的保守选择。
+            let window = v
+                .ms_until_reset
+                .map(|m| (m as f64).max(PACE_MIN_WINDOW_MS))
+                .unwrap_or(PACE_MIN_WINDOW_MS);
+            -(v.remaining_fraction / window)
+        }
+        // 非额度感知策略不会走到这里；给个稳定值以满足编译器。
+        _ => 0.0,
+    }
+}
+
+/// 从订阅额度快照派生 [`QuotaView`]：取 `utilization` 最高（剩余最少）的瓶颈档位。
+///
+/// 仅信任 `success == true` 的快照；没有任何可用档位时返回 `None`（视为未知）。
+fn quota_view_from_subscription(
+    quota: &crate::services::subscription::SubscriptionQuota,
+    now_ms: i64,
+) -> Option<QuotaView> {
+    if !quota.success {
+        return None;
+    }
+    let worst = quota
+        .tiers
+        .iter()
+        .filter(|t| t.utilization.is_finite())
+        .max_by(|a, b| a.utilization.total_cmp(&b.utilization))?;
+    let remaining_fraction = (1.0 - worst.utilization / 100.0).clamp(0.0, 1.0);
+    let ms_until_reset = worst
+        .resets_at
+        .as_deref()
+        .and_then(parse_rfc3339_ms)
+        .map(|reset_ms| reset_ms - now_ms);
+    Some(QuotaView {
+        remaining_fraction,
+        ms_until_reset,
+    })
+}
+
+fn parse_rfc3339_ms(raw: &str) -> Option<i64> {
+    chrono::DateTime::parse_from_rfc3339(raw.trim())
+        .ok()
+        .map(|dt| dt.timestamp_millis())
+}
+
+fn now_ms() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as i64)
+        .unwrap_or(0)
+}
+
+/// 读取单个候选 Provider 的额度视图（只读，复用托盘用量来源分类，不做任何失效/网络）。
+///
+/// 复用 [`crate::tray::tray_usage_source`] 把 Provider 归到「托管 Codex 账号 / 客户端订阅 /
+/// 脚本」三类用量来源，再按对应维度读取 [`UsageCache`](crate::services::usage_cache::UsageCache)：
+/// - 托管 Codex 账号：按 account_id 读 codex_oauth 快照；
+/// - 客户端订阅：按 AppType 读 subscription 快照；
+/// - 脚本型（Copilot/xAI/中转自定义脚本等）：当前版本不参与额度感知，返回 `None`（按未知殿后）。
+fn quota_view_for_provider(
+    usage_cache: &crate::services::usage_cache::UsageCache,
+    app: &AppType,
+    provider: &Provider,
+    now_ms: i64,
+) -> Option<QuotaView> {
+    match crate::tray::tray_usage_source(app, provider)? {
+        crate::tray::TrayUsageSource::ManagedCodex(account_id) => usage_cache
+            .with_codex_oauth(&account_id, |quota| {
+                quota_view_from_subscription(quota, now_ms)
+            })
+            .flatten(),
+        crate::tray::TrayUsageSource::Subscription => usage_cache
+            .with_subscription(app, |quota| quota_view_from_subscription(quota, now_ms))
+            .flatten(),
+        crate::tray::TrayUsageSource::Script => None,
     }
 }
 
@@ -79,6 +212,10 @@ pub struct ProviderRouter {
     /// 订阅内账号冷却表 - key: "auth_provider:account_id"，value: 进入冷却的时刻（进程内）。
     /// 仅在「订阅内多账号故障转移」开启的应用上被写入/读取；重启即清空。
     account_cooldowns: Mutex<HashMap<String, Instant>>,
+    /// 可选的 Tauri AppHandle：仅额度感知路由（Smart/Pace）用来惰性读取进程内用量缓存
+    /// （`AppState::usage_cache`）。为 `None`（如单元测试、无 GUI）时额度感知策略自动回落
+    /// 到 order —— 绝不影响其它策略与既有行为。
+    app_handle: Option<tauri::AppHandle>,
 }
 
 /// 单条会话粘性绑定（进程内，重启即清空）。
@@ -92,7 +229,17 @@ struct StickyBinding {
 
 impl ProviderRouter {
     /// 创建新的供应商路由器
+    ///
+    /// 生产路径走 [`Self::new_with_app_handle`]（注入 AppHandle）；此简版主要供单元测试与
+    /// 无 GUI 场景使用（额度感知策略在无 AppHandle 时自动回落 order）。
+    #[allow(dead_code)]
     pub fn new(db: Arc<Database>) -> Self {
+        Self::new_with_app_handle(db, None)
+    }
+
+    /// 同 [`Self::new`]，但注入 Tauri AppHandle 供额度感知路由（Smart/Pace）读取用量缓存。
+    /// 代理服务器构建时走这条；测试等无 AppHandle 的场景继续用 [`Self::new`]。
+    pub fn new_with_app_handle(db: Arc<Database>, app_handle: Option<tauri::AppHandle>) -> Self {
         Self {
             db,
             circuit_breakers: Arc::new(RwLock::new(HashMap::new())),
@@ -100,6 +247,7 @@ impl ProviderRouter {
             usage_counts: Mutex::new(HashMap::new()),
             sticky_sessions: Mutex::new(HashMap::new()),
             account_cooldowns: Mutex::new(HashMap::new()),
+            app_handle,
         }
     }
 
@@ -139,6 +287,25 @@ impl ProviderRouter {
                         .unwrap_or(&0)
                 });
             }
+            RoutingStrategy::Smart | RoutingStrategy::Pace => {
+                // 读取每个候选的额度视图（只读，不触发任何缓存失效/网络请求）。
+                let views = self.collect_quota_views(app_type, providers);
+                if views.is_empty() {
+                    // 全部额度未知 → 不重排，行为与 order 完全一致。
+                    log::debug!(
+                        "[{app_type}] 额度感知路由 {} 无可用额度快照，本轮回落 order",
+                        strategy.as_str()
+                    );
+                } else {
+                    // 稳定排序 + 「越小越优先」的 f64 键：已知额度者按策略排前，
+                    // 未知者（键为 +∞）维持原相对顺序殿后。
+                    providers.sort_by(|a, b| {
+                        let ka = quota_sort_key(strategy, views.get(&a.id));
+                        let kb = quota_sort_key(strategy, views.get(&b.id));
+                        ka.total_cmp(&kb)
+                    });
+                }
+            }
         }
 
         // 记录新主路由的使用计数（为 usage 策略提供下一轮依据）
@@ -148,6 +315,42 @@ impl ProviderRouter {
                 .entry(format!("{app_type}:{}", primary.id))
                 .or_insert(0) += 1;
         }
+    }
+
+    /// 为额度感知路由收集候选的额度视图（只读）。
+    ///
+    /// 经 AppHandle 惰性拿到进程内 [`UsageCache`](crate::services::usage_cache::UsageCache)，
+    /// 对每个候选按其用量来源（托管 Codex 账号 / 客户端订阅）读取已有快照并派生
+    /// [`QuotaView`]。额度无从得知的候选（无 AppHandle、未注册 AppState、无法解析 app、
+    /// 脚本型用量、或快照缺失）直接略过 —— 它们在排序里按「未知」殿后。
+    ///
+    /// 全程不触发任何缓存失效或网络请求：数据新鲜与否完全取决于别处（托盘悬停、用量页、
+    /// 后续可选的后台刷新）何时填过缓存。拿不到就少排一个，绝不阻塞请求。
+    fn collect_quota_views(
+        &self,
+        app_type: &str,
+        providers: &[Provider],
+    ) -> HashMap<String, QuotaView> {
+        use tauri::Manager;
+
+        let mut out = HashMap::new();
+        let Some(app_handle) = self.app_handle.as_ref() else {
+            return out;
+        };
+        let Some(state) = app_handle.try_state::<crate::store::AppState>() else {
+            return out;
+        };
+        let Ok(app) = app_type.parse::<AppType>() else {
+            return out;
+        };
+        let usage_cache = state.usage_cache.clone();
+        let now = now_ms();
+        for provider in providers {
+            if let Some(view) = quota_view_for_provider(&usage_cache, &app, provider, now) {
+                out.insert(provider.id.clone(), view);
+            }
+        }
+        out
     }
 
     /// 会话粘性：若该会话上一轮绑定的 Provider 仍在候选中，把它提到队首并刷新计时，
@@ -578,6 +781,151 @@ mod tests {
             ..Default::default()
         });
         provider
+    }
+
+    // ───────────────────── 额度感知路由（Smart/Pace）纯逻辑单测 ─────────────────────
+    // 这些只验证排序键与快照派生，不碰 AppHandle/DB —— 保证即便额度缓存缺失也行为确定。
+
+    use crate::services::subscription::{CredentialStatus, QuotaTier, SubscriptionQuota};
+
+    fn tier(utilization: f64, resets_at: Option<&str>) -> QuotaTier {
+        QuotaTier {
+            name: "five_hour".to_string(),
+            utilization,
+            resets_at: resets_at.map(|s| s.to_string()),
+            used_value_usd: None,
+            max_value_usd: None,
+        }
+    }
+
+    fn quota_with_tiers(success: bool, tiers: Vec<QuotaTier>) -> SubscriptionQuota {
+        SubscriptionQuota {
+            tool: "codex".to_string(),
+            credential_status: CredentialStatus::Valid,
+            credential_message: None,
+            success,
+            tiers,
+            extra_usage: None,
+            reset_credits: None,
+            credits_balance: None,
+            error: None,
+            queried_at: Some(0),
+        }
+    }
+
+    /// 测试辅助：按某策略对 (id, 额度视图) 列表稳定排序，返回排序后的 id 顺序。
+    /// 复刻 `apply_routing_strategy` 里 Smart/Pace 分支的比较逻辑。
+    fn order_by(strategy: RoutingStrategy, items: &[(&str, Option<QuotaView>)]) -> Vec<String> {
+        let views: HashMap<String, QuotaView> = items
+            .iter()
+            .filter_map(|(id, v)| v.map(|v| (id.to_string(), v)))
+            .collect();
+        let mut ids: Vec<String> = items.iter().map(|(id, _)| id.to_string()).collect();
+        ids.sort_by(|a, b| {
+            quota_sort_key(strategy, views.get(a)).total_cmp(&quota_sort_key(strategy, views.get(b)))
+        });
+        ids
+    }
+
+    #[test]
+    fn quota_sort_key_unknown_is_last() {
+        assert_eq!(quota_sort_key(RoutingStrategy::Smart, None), f64::INFINITY);
+        assert_eq!(quota_sort_key(RoutingStrategy::Pace, None), f64::INFINITY);
+    }
+
+    #[test]
+    fn smart_prefers_soonest_reset_among_available() {
+        let soon = QuotaView {
+            remaining_fraction: 0.5,
+            ms_until_reset: Some(60_000),
+        };
+        let later = QuotaView {
+            remaining_fraction: 0.9,
+            ms_until_reset: Some(3_600_000),
+        };
+        // 两家都还有额度：最快重置的排前（即便它剩得更少）。
+        let order = order_by(
+            RoutingStrategy::Smart,
+            &[("later", Some(later)), ("soon", Some(soon))],
+        );
+        assert_eq!(order, vec!["soon", "later"]);
+    }
+
+    #[test]
+    fn smart_sorts_exhausted_last_and_unknown_after_known() {
+        let exhausted = QuotaView {
+            remaining_fraction: 0.0,
+            ms_until_reset: Some(1_000),
+        };
+        let healthy = QuotaView {
+            remaining_fraction: 0.3,
+            ms_until_reset: Some(999_999),
+        };
+        // 已耗尽即便重置最快也必须排在「仍有额度」之后；完全未知的垫底。
+        let order = order_by(
+            RoutingStrategy::Smart,
+            &[
+                ("unknown", None),
+                ("exhausted", Some(exhausted)),
+                ("healthy", Some(healthy)),
+            ],
+        );
+        assert_eq!(order, vec!["healthy", "exhausted", "unknown"]);
+    }
+
+    #[test]
+    fn pace_prefers_more_remaining_per_time() {
+        // 同样剩 50%，但 a 距重置 1h、b 距重置 10h → a 每小时可用更多，排前。
+        let a = QuotaView {
+            remaining_fraction: 0.5,
+            ms_until_reset: Some(3_600_000),
+        };
+        let b = QuotaView {
+            remaining_fraction: 0.5,
+            ms_until_reset: Some(36_000_000),
+        };
+        let order = order_by(RoutingStrategy::Pace, &[("b", Some(b)), ("a", Some(a))]);
+        assert_eq!(order, vec!["a", "b"]);
+    }
+
+    #[test]
+    fn stable_order_preserved_when_all_unknown() {
+        // 全未知 → 排序键全为 +∞，稳定排序保持输入（队列）顺序，等价 order。
+        let order = order_by(
+            RoutingStrategy::Smart,
+            &[("p1", None), ("p2", None), ("p3", None)],
+        );
+        assert_eq!(order, vec!["p1", "p2", "p3"]);
+    }
+
+    #[test]
+    fn quota_view_from_subscription_uses_worst_tier() {
+        let quota = quota_with_tiers(
+            true,
+            vec![
+                tier(20.0, Some("2030-01-01T00:00:00Z")),
+                tier(80.0, Some("2030-01-01T01:00:00Z")),
+            ],
+        );
+        let view = quota_view_from_subscription(&quota, 0).expect("has view");
+        // 瓶颈档位是 utilization=80 → 剩余 ≈ 0.2，重置时间取该档位。
+        assert!((view.remaining_fraction - 0.2).abs() < 1e-9);
+        let expected = parse_rfc3339_ms("2030-01-01T01:00:00Z").unwrap();
+        assert_eq!(view.ms_until_reset, Some(expected));
+    }
+
+    #[test]
+    fn quota_view_from_subscription_rejects_failures_and_empty() {
+        assert!(quota_view_from_subscription(&quota_with_tiers(false, vec![tier(10.0, None)]), 0)
+            .is_none());
+        assert!(quota_view_from_subscription(&quota_with_tiers(true, vec![]), 0).is_none());
+    }
+
+    #[test]
+    fn parse_rfc3339_ms_parses_iso8601() {
+        assert_eq!(parse_rfc3339_ms("1970-01-01T00:00:00Z"), Some(0));
+        assert_eq!(parse_rfc3339_ms("1970-01-01T00:00:01Z"), Some(1000));
+        assert_eq!(parse_rfc3339_ms("not-a-date"), None);
     }
 
     struct TempHome {
