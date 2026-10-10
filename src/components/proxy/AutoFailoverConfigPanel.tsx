@@ -142,6 +142,50 @@ export function AutoFailoverConfigPanel({
     }
   };
 
+  // 订阅内多账号故障转移（Fork 扩展）：独立存储于 forkdb，默认关闭
+  const [accountFailoverEnabled, setAccountFailoverEnabled] = useState(false);
+  const [accountFailoverSaving, setAccountFailoverSaving] = useState(false);
+
+  useEffect(() => {
+    let active = true;
+    proxyApi
+      .getSubscriptionAccountFailoverEnabled(appType)
+      .then((enabled) => {
+        if (active) setAccountFailoverEnabled(enabled);
+      })
+      .catch(() => {
+        /* 读取失败时保持默认关闭 */
+      });
+    return () => {
+      active = false;
+    };
+  }, [appType]);
+
+  const handleAccountFailoverToggle = async () => {
+    if (accountFailoverSaving) return;
+    const next = !accountFailoverEnabled;
+    setAccountFailoverEnabled(next);
+    setAccountFailoverSaving(true);
+    try {
+      await proxyApi.setSubscriptionAccountFailoverEnabled(appType, next);
+      toast.success(
+        t("proxy.accountFailover.saved", "订阅内账号故障转移已保存"),
+        {
+          closeButton: true,
+        },
+      );
+    } catch (e) {
+      setAccountFailoverEnabled(!next);
+      toast.error(
+        t("proxy.accountFailover.saveFailed", "订阅内账号故障转移保存失败") +
+          ":" +
+          String(e),
+      );
+    } finally {
+      setAccountFailoverSaving(false);
+    }
+  };
+
   const handleSave = async () => {
     if (!config) return;
     // 解析数字，返回 NaN 表示无效输入
@@ -375,6 +419,32 @@ export function AutoFailoverConfigPanel({
               {stickyEnabled
                 ? t("proxy.routingSticky.on", "已开启")
                 : t("proxy.routingSticky.off", "已关闭")}
+            </Button>
+          </div>
+
+          {/* 订阅内多账号故障转移开关（Fork 扩展） */}
+          <div className="mt-1 flex items-start justify-between gap-3 border-t border-white/10 pt-3">
+            <div className="min-w-0">
+              <p className="text-sm font-medium">
+                {t("proxy.accountFailover.title", "订阅内账号故障转移")}
+              </p>
+              <p className="mt-1 text-xs text-fg-2">
+                {t(
+                  "proxy.accountFailover.hint",
+                  "开启后，当订阅（Copilot / ChatGPT / xAI 托管账号）里某个账号被限流或鉴权失效（401/403/429）时，会短暂冷却该账号，同一订阅池内后续请求自动改用其它健康账号。默认关闭，关闭时账号选择与原来完全一致。",
+                )}
+              </p>
+            </div>
+            <Button
+              variant={accountFailoverEnabled ? "solid" : "neutral"}
+              size="regular"
+              onClick={handleAccountFailoverToggle}
+              disabled={isDisabled || accountFailoverSaving}
+              className="shrink-0"
+            >
+              {accountFailoverEnabled
+                ? t("proxy.accountFailover.on", "已开启")
+                : t("proxy.accountFailover.off", "已关闭")}
             </Button>
           </div>
         </div>

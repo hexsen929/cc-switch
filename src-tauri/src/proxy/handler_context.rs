@@ -73,6 +73,8 @@ pub struct RequestContext {
     pub copilot_optimizer_config: CopilotOptimizerConfig,
     /// 用户可编程 onRequest 中间件配置（Fork 扩展，默认关闭）
     pub request_middleware: crate::proxy::request_middleware::RequestMiddlewareConfig,
+    /// 订阅内多账号故障转移开关（Fork 扩展，默认关闭）
+    pub subscription_account_failover: bool,
     /// Stack 模型的请求（`mode::stack`）：直达 Stack 里的那一家，不读也不写任何路由状态。
     pub is_stack: bool,
 }
@@ -130,6 +132,12 @@ impl RequestContext {
             };
             crate::proxy::request_middleware::RequestMiddlewareConfig { enabled, script }
         };
+
+        // Fork 扩展：读取「订阅内多账号故障转移」开关（默认关闭）
+        let subscription_account_failover = state
+            .db
+            .get_subscription_account_failover_enabled(app_type_str)
+            .unwrap_or(false);
 
         // 提取 Session ID
         let session_result = extract_session_id(headers, body, app_type_str);
@@ -251,6 +259,7 @@ impl RequestContext {
             optimizer_config,
             copilot_optimizer_config,
             request_middleware,
+            subscription_account_failover,
             is_stack,
         })
     }
@@ -320,6 +329,7 @@ impl RequestContext {
             self.optimizer_config.clone(),
             self.copilot_optimizer_config.clone(),
             self.request_middleware.clone(),
+            self.subscription_account_failover,
             max_retries,
         )
         .stack_request(self.is_stack)

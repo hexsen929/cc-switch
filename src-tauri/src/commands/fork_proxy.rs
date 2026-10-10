@@ -101,6 +101,31 @@ pub async fn set_provider_sticky_enabled(
         .map_err(|e| e.to_string())
 }
 
+/// 获取某应用的「订阅内多账号故障转移」开关（Fork 扩展）
+#[tauri::command]
+pub async fn get_subscription_account_failover_enabled(
+    state: tauri::State<'_, AppState>,
+    app_type: String,
+) -> Result<bool, String> {
+    state
+        .db
+        .get_subscription_account_failover_enabled(&app_type)
+        .map_err(|e| e.to_string())
+}
+
+/// 设置某应用的「订阅内多账号故障转移」开关（Fork 扩展）
+#[tauri::command]
+pub async fn set_subscription_account_failover_enabled(
+    state: tauri::State<'_, AppState>,
+    app_type: String,
+    enabled: bool,
+) -> Result<(), String> {
+    state
+        .db
+        .set_subscription_account_failover_enabled(&app_type, enabled)
+        .map_err(|e| e.to_string())
+}
+
 /// 获取某应用的 onRequest 中间件开关（Fork 扩展）
 #[tauri::command]
 pub async fn get_request_middleware_enabled(

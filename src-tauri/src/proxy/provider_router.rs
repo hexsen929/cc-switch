@@ -17,6 +17,11 @@ use tokio::sync::RwLock;
 /// 每一轮请求都会刷新计时，因此只有真正空闲的会话才会失去粘性。
 const STICKY_SESSION_TTL: Duration = Duration::from_secs(30 * 60);
 
+/// 订阅内账号故障转移的冷却时长：某托管 OAuth 账号收到 401/403/429 后，
+/// 在该时长内会被同订阅池的账号选择逻辑跳过，优先改选其它健康账号。
+/// 冷却到期后自动恢复参与（无需外部清理），避免永久性地弃用某个账号。
+pub(crate) const ACCOUNT_COOLDOWN_TTL: Duration = Duration::from_secs(60);
+
 /// Provider 级路由策略（Fork 扩展，灵感来自 magpie 的 routing group 模式）
 ///
 /// 作用于「自动故障转移」开启、且候选 Provider ≥ 2 时的候选列表排序。
@@ -71,6 +76,9 @@ pub struct ProviderRouter {
     usage_counts: Mutex<HashMap<String, u64>>,
     /// 会话粘性绑定 - key: "app_type:session_id"，value: 上一轮主路由（进程内）
     sticky_sessions: Mutex<HashMap<String, StickyBinding>>,
+    /// 订阅内账号冷却表 - key: "auth_provider:account_id"，value: 进入冷却的时刻（进程内）。
+    /// 仅在「订阅内多账号故障转移」开启的应用上被写入/读取；重启即清空。
+    account_cooldowns: Mutex<HashMap<String, Instant>>,
 }
 
 /// 单条会话粘性绑定（进程内，重启即清空）。
@@ -91,6 +99,7 @@ impl ProviderRouter {
             rotate_cursors: Mutex::new(HashMap::new()),
             usage_counts: Mutex::new(HashMap::new()),
             sticky_sessions: Mutex::new(HashMap::new()),
+            account_cooldowns: Mutex::new(HashMap::new()),
         }
     }
 
@@ -186,6 +195,57 @@ impl ProviderRouter {
                 last_seen: Instant::now(),
             },
         );
+    }
+
+    // ==================== 订阅内多账号故障转移（Fork 扩展） ====================
+
+    /// 标记某托管账号进入冷却（收到 401/403/429 后调用）。
+    ///
+    /// 写入前顺带回收所有已到期的冷却项，控制进程内内存占用。
+    pub(crate) fn record_account_cooldown(&self, auth_provider: &str, account_id: &str) {
+        let now = Instant::now();
+        let mut cooldowns = self.account_cooldowns.lock().unwrap();
+        cooldowns.retain(|_, since| now.duration_since(*since) < ACCOUNT_COOLDOWN_TTL);
+        cooldowns.insert(format!("{auth_provider}:{account_id}"), now);
+    }
+
+    /// 在同一订阅池内挑选一个「当前未冷却」的账号。
+    ///
+    /// 规则（稳定、可预测）：
+    /// - `candidates` 为空：原样返回 `preferred`（无池可选，交回原有解析逻辑）。
+    /// - 首选项（`preferred`，缺省时取候选首位 = 管理器默认账号）未冷却：用首选项。
+    /// - 首选项正在冷却：返回候选中第一个未冷却的账号（候选已按「默认账号在前」排序）。
+    /// - 全部都在冷却：退回首选项（宁可重试也不中断转发）。
+    ///
+    /// 该方法只在「订阅内多账号故障转移」开启时被调用；关闭时账号解析走原路径。
+    pub(crate) fn choose_managed_account(
+        &self,
+        auth_provider: &str,
+        preferred: Option<String>,
+        candidates: &[String],
+    ) -> Option<String> {
+        if candidates.is_empty() {
+            return preferred;
+        }
+        let preferred = preferred
+            .filter(|id| candidates.iter().any(|c| c == id))
+            .or_else(|| candidates.first().cloned())?;
+
+        let now = Instant::now();
+        let mut cooldowns = self.account_cooldowns.lock().unwrap();
+        cooldowns.retain(|_, since| now.duration_since(*since) < ACCOUNT_COOLDOWN_TTL);
+
+        let in_cooldown =
+            |id: &str| cooldowns.contains_key(&format!("{auth_provider}:{id}"));
+
+        if !in_cooldown(&preferred) {
+            return Some(preferred);
+        }
+        candidates
+            .iter()
+            .find(|id| !in_cooldown(id))
+            .cloned()
+            .or(Some(preferred))
     }
 
     /// 选择可用的供应商（支持故障转移）
@@ -1035,5 +1095,65 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(third[0].id, "b");
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn choose_managed_account_prefers_bound_when_healthy() {
+        let _home = TempHome::new();
+        let db = Arc::new(Database::memory().unwrap());
+        let router = ProviderRouter::new(db);
+        let candidates = vec!["a".to_string(), "b".to_string(), "c".to_string()];
+        // 无冷却：绑定账号 b 直接命中
+        assert_eq!(
+            router.choose_managed_account("codex_oauth", Some("b".to_string()), &candidates),
+            Some("b".to_string())
+        );
+        // preferred=None：取候选首位（list_accounts 默认账号在前）
+        assert_eq!(
+            router.choose_managed_account("codex_oauth", None, &candidates),
+            Some("a".to_string())
+        );
+        // 候选为空：原样返回 preferred，不臆造账号
+        assert_eq!(
+            router.choose_managed_account("codex_oauth", Some("x".to_string()), &[]),
+            Some("x".to_string())
+        );
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn choose_managed_account_skips_cooling_to_next_candidate() {
+        let _home = TempHome::new();
+        let db = Arc::new(Database::memory().unwrap());
+        let router = ProviderRouter::new(db);
+        let candidates = vec!["a".to_string(), "b".to_string(), "c".to_string()];
+        // a 收到 429 进入冷却 → 首选 a 被跳过，改选下一个健康账号 b
+        router.record_account_cooldown("codex_oauth", "a");
+        assert_eq!(
+            router.choose_managed_account("codex_oauth", Some("a".to_string()), &candidates),
+            Some("b".to_string())
+        );
+        // 不同 auth_provider 的同名账号互不影响
+        assert_eq!(
+            router.choose_managed_account("xai_oauth", Some("a".to_string()), &candidates),
+            Some("a".to_string())
+        );
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn choose_managed_account_falls_back_when_all_cooling() {
+        let _home = TempHome::new();
+        let db = Arc::new(Database::memory().unwrap());
+        let router = ProviderRouter::new(db);
+        let candidates = vec!["a".to_string(), "b".to_string()];
+        router.record_account_cooldown("codex_oauth", "a");
+        router.record_account_cooldown("codex_oauth", "b");
+        // 全池冷却：退回首选项，宁可重试也不中断转发
+        assert_eq!(
+            router.choose_managed_account("codex_oauth", Some("a".to_string()), &candidates),
+            Some("a".to_string())
+        );
     }
 }

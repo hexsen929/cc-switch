@@ -199,6 +199,27 @@ export const proxyApi = {
     return invoke("set_provider_sticky_enabled", { appType, enabled });
   },
 
+  // 订阅内多账号故障转移（Fork 扩展）：开启后托管 OAuth 账号（Copilot/Codex/xAI）
+  // 收到 401/403/429 会进入短暂冷却，同一订阅池内后续请求自动改选其它健康账号；
+  // 默认关闭，关闭时账号解析行为与改造前完全一致
+  async getSubscriptionAccountFailoverEnabled(
+    appType: string,
+  ): Promise<boolean> {
+    return invoke<boolean>("get_subscription_account_failover_enabled", {
+      appType,
+    });
+  },
+
+  async setSubscriptionAccountFailoverEnabled(
+    appType: string,
+    enabled: boolean,
+  ): Promise<void> {
+    return invoke("set_subscription_account_failover_enabled", {
+      appType,
+      enabled,
+    });
+  },
+
   // 可编程请求中间件（Fork 扩展）：用户 onRequest JS 脚本，沙箱执行、默认关闭、失败放行
   async getRequestMiddlewareEnabled(appType: string): Promise<boolean> {
     return invoke<boolean>("get_request_middleware_enabled", { appType });

@@ -1626,6 +1626,8 @@ pub fn run() {
             commands::set_provider_routing_strategy,
             commands::get_provider_sticky_enabled,
             commands::set_provider_sticky_enabled,
+            commands::get_subscription_account_failover_enabled,
+            commands::set_subscription_account_failover_enabled,
             commands::get_request_middleware_enabled,
             commands::set_request_middleware_enabled,
             commands::get_request_middleware_script,

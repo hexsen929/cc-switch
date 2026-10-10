@@ -3818,6 +3818,14 @@
       "saved": "Conversation stickiness saved",
       "saveFailed": "Failed to save conversation stickiness"
     },
+    "accountFailover": {
+      "title": "In-subscription account failover",
+      "hint": "When on, if one account in a subscription (Copilot / ChatGPT / xAI managed accounts) is rate-limited or its auth fails (401/403/429), that account is briefly cooled down and later requests in the same pool automatically switch to another healthy account. Off by default; when off, account selection is identical to before.",
+      "on": "On",
+      "off": "Off",
+      "saved": "Account failover saved",
+      "saveFailed": "Failed to save account failover"
+    },
     "middleware": {
       "title": "Programmable request middleware",
       "hint": "Run your own onRequest script against the outbound request body for param overrides, model mapping, system-prompt injection, and more. The toggle and script take effect together on Save.",

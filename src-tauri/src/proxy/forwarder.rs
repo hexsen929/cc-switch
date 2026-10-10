@@ -362,6 +362,9 @@ pub struct RequestForwarder {
     copilot_optimizer_config: CopilotOptimizerConfig,
     /// 用户可编程 onRequest 中间件配置（Fork 扩展，默认关闭、fail-open）
     request_middleware: crate::proxy::request_middleware::RequestMiddlewareConfig,
+    /// 订阅内多账号故障转移开关（Fork 扩展，默认关闭）。
+    /// 开启后托管 OAuth 账号收到 401/403/429 会进入冷却，同池内改选健康账号。
+    subscription_account_failover: bool,
     /// 非流式请求超时（秒）
     non_streaming_timeout: std::time::Duration,
     /// 流式请求响应头等待超时（秒）
@@ -509,6 +512,7 @@ impl RequestForwarder {
         optimizer_config: OptimizerConfig,
         copilot_optimizer_config: CopilotOptimizerConfig,
         request_middleware: crate::proxy::request_middleware::RequestMiddlewareConfig,
+        subscription_account_failover: bool,
         max_retries: u32,
     ) -> Self {
         // max_retries 是「失败后重试次数」语义，attempt 上限 = retries + 1。
@@ -529,6 +533,7 @@ impl RequestForwarder {
             optimizer_config,
             copilot_optimizer_config,
             request_middleware,
+            subscription_account_failover,
             non_streaming_timeout: std::time::Duration::from_secs(non_streaming_timeout),
             streaming_first_byte_timeout: std::time::Duration::from_secs(
                 streaming_first_byte_timeout,
@@ -2183,6 +2188,10 @@ impl RequestForwarder {
         let mut codex_oauth_account_id: Option<String> = None;
         let mut should_send_codex_oauth_session_headers = false;
 
+        // 订阅内多账号故障转移：记录本次请求实际使用的托管账号 (auth_provider, 本地账号 id)，
+        // 以便收到 401/403/429 时把该账号送入冷却。仅在开关开启时填充。
+        let mut used_managed_account: Option<(&'static str, String)> = None;
+
         // 获取认证头（提前准备，用于内联替换），同时保留仅用于日志脱敏的
         // 精确认证材料。实际日志永远不输出这些值。
         let mut log_secrets: Vec<String> = Vec::new();
@@ -2195,10 +2204,33 @@ impl RequestForwarder {
                         copilot_state.0.read().await;
 
                     // 从 provider.meta 获取关联的 GitHub 账号 ID（多账号支持）
-                    let account_id = provider
+                    let bound_account_id = provider
                         .meta
                         .as_ref()
                         .and_then(|m| m.managed_account_id_for("github_copilot"));
+
+                    // 订阅内多账号故障转移开启时，在健康账号中改选；关闭时沿用原路径
+                    // （绑定账号或默认账号），账号解析行为与改造前完全一致。
+                    let account_id = if self.subscription_account_failover {
+                        let candidates: Vec<String> = copilot_auth
+                            .list_accounts()
+                            .await
+                            .into_iter()
+                            .filter(|a| !a.reauth_required)
+                            .map(|a| a.id)
+                            .collect();
+                        let chosen = self.router.choose_managed_account(
+                            "github_copilot",
+                            bound_account_id.clone(),
+                            &candidates,
+                        );
+                        if let Some(id) = &chosen {
+                            used_managed_account = Some(("github_copilot", id.clone()));
+                        }
+                        chosen
+                    } else {
+                        bound_account_id
+                    };
 
                     // 根据账号 ID 获取对应 token（向后兼容：无账号 ID 时使用第一个账号）
                     let token_result = match &account_id {
@@ -2245,14 +2277,39 @@ impl RequestForwarder {
                     let codex_auth = &codex_state.0;
 
                     // 从 provider.meta 获取关联的 ChatGPT 账号 ID
-                    let account_id = provider
+                    let bound_account_id = provider
                         .meta
                         .as_ref()
                         .and_then(|m| m.managed_account_id_for("codex_oauth"));
 
-                    let resolved_account_id = match account_id {
-                        Some(id) => Some(id),
-                        None => codex_auth.default_account_id().await,
+                    // 订阅内多账号故障转移开启时在健康账号中改选；关闭时沿用原路径
+                    // （绑定账号，否则管理器默认账号），行为与改造前一致。
+                    let resolved_account_id = if self.subscription_account_failover {
+                        let candidates: Vec<String> = codex_auth
+                            .list_accounts()
+                            .await
+                            .into_iter()
+                            .filter(|a| !a.reauth_required)
+                            .map(|a| a.id)
+                            .collect();
+                        let preferred = match bound_account_id {
+                            Some(id) => Some(id),
+                            None => codex_auth.default_account_id().await,
+                        };
+                        let chosen = self.router.choose_managed_account(
+                            "codex_oauth",
+                            preferred,
+                            &candidates,
+                        );
+                        if let Some(id) = &chosen {
+                            used_managed_account = Some(("codex_oauth", id.clone()));
+                        }
+                        chosen
+                    } else {
+                        match bound_account_id {
+                            Some(id) => Some(id),
+                            None => codex_auth.default_account_id().await,
+                        }
                     };
 
                     let token_result = match &resolved_account_id {
@@ -2313,10 +2370,35 @@ impl RequestForwarder {
                     let xai_state = app_handle.state::<XaiOAuthState>();
                     let xai_auth: tokio::sync::RwLockReadGuard<'_, XaiOAuthManager> =
                         xai_state.0.read().await;
-                    let account_id = provider
+                    let bound_account_id = provider
                         .meta
                         .as_ref()
                         .and_then(|meta| meta.managed_account_id_for("xai_oauth"));
+                    // 订阅内多账号故障转移开启时在健康账号中改选；关闭时沿用原路径。
+                    let account_id = if self.subscription_account_failover {
+                        let candidates: Vec<String> = xai_auth
+                            .list_accounts()
+                            .await
+                            .into_iter()
+                            .filter(|a| !a.requires_reauth)
+                            .map(|a| a.id)
+                            .collect();
+                        let preferred = match bound_account_id {
+                            Some(id) => Some(id),
+                            None => xai_auth.default_account_id().await,
+                        };
+                        let chosen = self.router.choose_managed_account(
+                            "xai_oauth",
+                            preferred,
+                            &candidates,
+                        );
+                        if let Some(id) = &chosen {
+                            used_managed_account = Some(("xai_oauth", id.clone()));
+                        }
+                        chosen
+                    } else {
+                        bound_account_id
+                    };
                     let token_result = match &account_id {
                         Some(id) => xai_auth.get_valid_token_for_account(id).await,
                         None => xai_auth.get_valid_token().await,
@@ -2943,6 +3025,20 @@ impl RequestForwarder {
             Ok((response, resolved_claude_api_format, outbound_model))
         } else {
             let status_code = status.as_u16();
+
+            // 订阅内多账号故障转移：鉴权失效/限流（401/403/429）时，把本次使用的托管账号
+            // 送入冷却，同订阅池内后续请求自动改选其它健康账号。本调用是进程内 map 写入，
+            // 绝不阻断当前响应（当前请求仍按原样把上游错误回传给客户端）。
+            if self.subscription_account_failover && matches!(status_code, 401 | 403 | 429) {
+                if let Some((auth_provider, account_id)) = &used_managed_account {
+                    self.router.record_account_cooldown(auth_provider, account_id);
+                    log::warn!(
+                        "[AccountFailover] {auth_provider} 账号 {account_id} 收到 {status_code}，进入 {}s 冷却",
+                        crate::proxy::provider_router::ACCOUNT_COOLDOWN_TTL.as_secs()
+                    );
+                }
+            }
+
             // 错误响应同样可能被上游压缩（content-encoding）。reqwest 未启用任何
             // 自动解压 feature，这里拿到的是原始字节；不解压的话，压缩过的错误体会
             // 在 from_utf8 处变成非 UTF-8 而被丢弃，隐藏掉上游的限流/鉴权等详情。
@@ -4823,6 +4919,7 @@ mod tests {
             optimizer_config: OptimizerConfig::default(),
             copilot_optimizer_config: CopilotOptimizerConfig::default(),
             request_middleware: crate::proxy::request_middleware::RequestMiddlewareConfig::default(),
+            subscription_account_failover: false,
             non_streaming_timeout,
             streaming_first_byte_timeout,
             max_attempts: 1,

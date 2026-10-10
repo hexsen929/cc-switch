@@ -142,6 +142,31 @@ impl Database {
         self.set_fork_setting(&key, script)
     }
 
+    // ==================== 订阅内多账号故障转移（Fork 扩展） ====================
+
+    /// 获取某应用的「订阅内多账号故障转移」开关（默认关闭）。
+    ///
+    /// 开启后，当某托管 OAuth 账号（Copilot/Codex/xAI）收到 401/403/429 时，
+    /// 该账号会进入短暂冷却，同一订阅池内后续请求自动改选其它健康账号。
+    /// 关闭时账号解析逻辑与改造前完全一致（绑定账号或管理器默认账号）。
+    pub fn get_subscription_account_failover_enabled(
+        &self,
+        app_type: &str,
+    ) -> Result<bool, AppError> {
+        let key = format!("fork_subscription_account_failover_{app_type}");
+        Ok(Self::parse_setting_bool(self.get_fork_setting(&key)?, false))
+    }
+
+    /// 设置某应用的「订阅内多账号故障转移」开关
+    pub fn set_subscription_account_failover_enabled(
+        &self,
+        app_type: &str,
+        enabled: bool,
+    ) -> Result<(), AppError> {
+        let key = format!("fork_subscription_account_failover_{app_type}");
+        self.set_fork_setting(&key, if enabled { "1" } else { "0" })
+    }
+
     // ==================== Claude 模型路由策略（Fork 扩展） ====================
 
     /// 获取 Claude 模型路由全局设置
