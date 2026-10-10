@@ -83,6 +83,33 @@ pub struct RequestContext {
     pub is_stack: bool,
 }
 
+/// 意图路由命中且带模型改写时：复用「声明式请求改写」的 model-map 把上游模型改写成目标。
+///
+/// - 若用户已开启 request_rewrite：在其 model_map 最前插入一条精确规则（优先于用户已有规则，
+///   `apply_request_rewrite` 命中精确匹配即返回）。
+/// - 若未开启：用一条「仅含该规则且开启」的全新配置替换本地副本——绝不激活用户原本关闭的其它规则，
+///   因此在意图路由关闭/未命中时行为与改造前逐字节一致。
+fn inject_intent_model_rewrite(
+    rewrite: &mut crate::proxy::request_rewrite::RequestRewriteConfig,
+    from_model: &str,
+    to_model: &str,
+) {
+    use crate::proxy::request_rewrite::{ModelMapRule, RequestRewriteConfig};
+    let rule = ModelMapRule {
+        from: from_model.to_string(),
+        to: to_model.to_string(),
+    };
+    if rewrite.enabled {
+        rewrite.model_map.insert(0, rule);
+    } else {
+        *rewrite = RequestRewriteConfig {
+            enabled: true,
+            model_map: vec![rule],
+            ..Default::default()
+        };
+    }
+}
+
 impl RequestContext {
     /// 创建请求上下文
     ///
@@ -138,7 +165,8 @@ impl RequestContext {
         };
 
         // Fork 扩展：读取声明式请求改写预设（默认空配置/关闭；坏数据回落默认，fail-safe）
-        let request_rewrite = state
+        // 可被意图路由在命中带模型改写的规则时就地注入一条高优先 model-map。
+        let mut request_rewrite = state
             .db
             .get_request_rewrite_config(app_type_str)
             .unwrap_or_default();
@@ -205,13 +233,64 @@ impl RequestContext {
                     .unwrap_or("unknown")
                     .to_string();
 
+                // Fork 扩展：意图路由（默认关闭、fail-safe）。命中则把目标 provider 软置顶为
+                // 失败转移链 P1，可选改写上游模型；未命中/关闭/目标不存在 → 原样走，零行为变化。
+                let intent_cfg = state
+                    .db
+                    .get_intent_routing_config(app_type_str)
+                    .unwrap_or_default();
+                let intent_target: Option<Provider> = if intent_cfg.is_active() {
+                    let has_anthropic_beta = headers.contains_key("anthropic-beta");
+                    crate::proxy::intent_routing::pick(
+                        &intent_cfg,
+                        body,
+                        has_anthropic_beta,
+                        &request_model,
+                    )
+                    .and_then(|rule| {
+                        match state
+                            .db
+                            .get_provider_by_id(&rule.target_provider_id, app_type_str)
+                        {
+                            Ok(Some(target)) => {
+                                // 可选：改写上游模型（复用声明式请求改写的 model-map 路径）
+                                if let Some(m) = rule.model.as_deref().filter(|m| !m.is_empty()) {
+                                    inject_intent_model_rewrite(
+                                        &mut request_rewrite,
+                                        &request_model,
+                                        m,
+                                    );
+                                }
+                                log::debug!(
+                                    "[{}] 意图路由命中规则「{}」→ 置顶 provider {}",
+                                    tag,
+                                    rule.name,
+                                    target.name
+                                );
+                                Some(target)
+                            }
+                            // 目标不存在/读取失败 → 静默回落默认路由
+                            _ => None,
+                        }
+                    })
+                } else {
+                    None
+                };
+
+                // 意图命中时，把「当前供应商」与其 id 都对齐到目标：既作为链头候选，又避免
+                // 成功回答后被误判为「发生故障转移」而 churn 托盘；未命中保持原值。
+                let (routing_current, current_provider_id) = match &intent_target {
+                    Some(target) => (Some(target.clone()), target.id.clone()),
+                    None => (current_provider, current_provider_id),
+                };
+
                 // Stack 模式不做故障转移：只发往默认那家，和故障转移关着时一样跳过熔断器选家；
                 // 队列留着，回到路由模式恢复。故障转移本来就关着时不用读模式。
                 let stack_mode = app_config.auto_failover_enabled
                     && crate::mode::stack::stack_mode_now(&app_type);
                 let providers = if stack_mode {
                     app_config.auto_failover_enabled = false;
-                    vec![current_provider.ok_or(ProxyError::NoProvidersConfigured)?]
+                    vec![routing_current.ok_or(ProxyError::NoProvidersConfigured)?]
                 } else {
                     // 使用共享的 ProviderRouter 选择 Provider（熔断器状态跨请求保持）
                     // 注意：只在这里调用一次，结果传递给 forwarder，避免重复消耗 HalfOpen 名额。
@@ -222,11 +301,11 @@ impl RequestContext {
                     } else {
                         None
                     };
-                    state
+                    let mut selected = state
                         .provider_router
                         .select_providers_with_current(
                             app_type_str,
-                            current_provider,
+                            routing_current,
                             sticky_session,
                         )
                         .await
@@ -238,7 +317,21 @@ impl RequestContext {
                                 ProxyError::NoProvidersConfigured
                             }
                             _ => ProxyError::DatabaseError(e.to_string()),
-                        })?
+                        })?;
+                    // 意图命中：把目标置顶为 P1（已在链中则前移，否则插到最前），其余作为降级尾。
+                    // 失败转移开启时 ProviderRouter 的链路来自队列、不保证含目标，这里补齐置顶，
+                    // 同时保留熔断/失败转移语义（后续家仍可降级）。
+                    if let Some(target) = &intent_target {
+                        match selected.iter().position(|p| p.id == target.id) {
+                            Some(0) => {}
+                            Some(pos) => {
+                                let hit = selected.remove(pos);
+                                selected.insert(0, hit);
+                            }
+                            None => selected.insert(0, target.clone()),
+                        }
+                    }
+                    selected
                 };
 
                 let provider = providers

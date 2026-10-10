@@ -1650,6 +1650,9 @@ pub fn run() {
             commands::set_request_rewrite_config,
             commands::get_response_middleware_config,
             commands::set_response_middleware_config,
+            // Fork 意图路由（intent routing）
+            commands::get_intent_routing_config,
+            commands::set_intent_routing_config,
             // Fork failover (model-level queues + chain)
             commands::get_failover_queue_for_model,
             commands::get_available_providers_for_model_failover,

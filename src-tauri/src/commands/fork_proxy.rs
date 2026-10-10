@@ -225,3 +225,28 @@ pub async fn set_response_middleware_config(
         .set_response_middleware_config(&app_type, &config)
         .map_err(|e| e.to_string())
 }
+
+/// 获取某应用的意图路由配置（Fork 扩展）
+#[tauri::command]
+pub async fn get_intent_routing_config(
+    state: tauri::State<'_, AppState>,
+    app_type: String,
+) -> Result<crate::proxy::intent_routing::IntentRoutingConfig, String> {
+    state
+        .db
+        .get_intent_routing_config(&app_type)
+        .map_err(|e| e.to_string())
+}
+
+/// 设置某应用的意图路由配置（Fork 扩展）
+#[tauri::command]
+pub async fn set_intent_routing_config(
+    state: tauri::State<'_, AppState>,
+    app_type: String,
+    config: crate::proxy::intent_routing::IntentRoutingConfig,
+) -> Result<(), String> {
+    state
+        .db
+        .set_intent_routing_config(&app_type, &config)
+        .map_err(|e| e.to_string())
+}

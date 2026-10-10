@@ -300,3 +300,51 @@ export const EMPTY_RESPONSE_MIDDLEWARE: ResponseMiddlewareConfig = {
   onResponse: { enabled: false, script: "" },
   onEvent: { enabled: false, script: "" },
 };
+
+/** 意图路由（Fork 扩展）——与后端 intent_routing.rs 对齐（camelCase + tagged matcher）。 */
+export type IntentKind =
+  | "background"
+  | "thinking"
+  | "long-context"
+  | "web-search"
+  | "subagent";
+
+/** 按点号路径取 body 字段后做 equals / contains（两者都给时同时满足）。 */
+export interface IntentBodyFieldMatch {
+  path: string;
+  equals?: string | null;
+  contains?: string | null;
+}
+
+/** 自定义谓词：各字段可选且 AND，全部提供的条件都满足才命中（空谓词不命中）。 */
+export interface IntentPredicate {
+  modelGlob?: string | null;
+  bodyField?: IntentBodyFieldMatch | null;
+  minInputTokens?: number | null;
+  hasTool?: string | null;
+}
+
+/** matcher：内置语义意图 或 自定义谓词（serde internally tagged by `type`）。 */
+export type IntentMatcher =
+  | { type: "intent"; intent: IntentKind }
+  | { type: "predicate"; predicate: IntentPredicate };
+
+/** 单条意图路由规则：命中后把 targetProviderId 软置顶为失败转移链 P1，可选改写上游模型。 */
+export interface IntentRule {
+  id: string;
+  name: string;
+  enabled: boolean;
+  matcher: IntentMatcher;
+  targetProviderId: string;
+  model?: string | null;
+}
+
+export interface IntentRoutingConfig {
+  enabled: boolean;
+  rules: IntentRule[];
+}
+
+export const EMPTY_INTENT_ROUTING: IntentRoutingConfig = {
+  enabled: false,
+  rules: [],
+};

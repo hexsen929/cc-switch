@@ -24,6 +24,7 @@ import { AutoFailoverConfigPanel } from "@/components/proxy/AutoFailoverConfigPa
 import { RequestMiddlewarePanel } from "@/components/proxy/RequestMiddlewarePanel";
 import { RequestRewritePanel } from "@/components/proxy/RequestRewritePanel";
 import { ResponseMiddlewarePanel } from "@/components/proxy/ResponseMiddlewarePanel";
+import { IntentRoutingPanel } from "@/components/proxy/IntentRoutingPanel";
 import { RectifierConfigPanel } from "@/components/settings/RectifierConfigPanel";
 import { APP_DISPLAY_NAME, AppGlyph } from "@/components/shell/AppGlyph";
 import { MODE_TONE } from "@/components/providers/mode/ModeTabs";
@@ -86,6 +87,7 @@ export function RoutingSection({ onOpenApp }: RoutingSectionProps) {
   const [rewriteApp, setRewriteApp] = useState<ProxyAppId>("claude");
   const [respMiddlewareApp, setRespMiddlewareApp] =
     useState<ProxyAppId>("claude");
+  const [intentApp, setIntentApp] = useState<ProxyAppId>("claude");
 
   useEffect(() => {
     if (config) {
@@ -466,6 +468,31 @@ export function RoutingSection({ onOpenApp }: RoutingSectionProps) {
             key={respMiddlewareApp}
             appType={respMiddlewareApp}
           />
+        </div>
+      </SettingsBlock>
+
+      <SettingsBlock
+        title={t("proxy.intentRouting.title", "意图路由")}
+        help={{
+          title: t("proxy.intentRouting.title", "意图路由"),
+          body: t(
+            "proxy.intentRouting.hint",
+            "按请求「意图」把目标供应商置顶为故障转移链的第一家，可选改写上游模型。按顺序取第一条命中的规则；默认关闭、未命中或目标不存在时原样放行。",
+          ),
+        }}
+      >
+        <div className="space-y-4 rounded-panel border border-border bg-surface p-5">
+          <SegmentedControl
+            size="sm"
+            aria-label={t("proxy.intentRouting.title", "意图路由")}
+            value={intentApp}
+            onValueChange={setIntentApp}
+            items={PROXY_APP_IDS.map((app) => ({
+              value: app,
+              label: APP_DISPLAY_NAME[app],
+            }))}
+          />
+          <IntentRoutingPanel key={intentApp} appType={intentApp} />
         </div>
       </SettingsBlock>
 

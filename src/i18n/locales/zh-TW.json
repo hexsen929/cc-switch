@@ -3887,6 +3887,38 @@
         "warn": "每個 SSE 事件都會執行一次腳本（50ms CPU 上限）；邏輯務必精簡。任何報錯/逾時/非物件回傳都會原樣放行該事件，絕不中斷你的串流。"
       }
     },
+    "intentRouting": {
+      "title": "意圖路由",
+      "hint": "按請求「意圖」把目標供應商置頂為故障轉移鏈的第一家，可選改寫上游模型。按順序取第一條命中的規則；預設關閉、未命中或目標不存在時原樣放行。",
+      "on": "已開啟",
+      "off": "已關閉",
+      "saved": "意圖路由已儲存",
+      "saveFailed": "儲存失敗",
+      "rules": "規則（按順序取首個命中）",
+      "addRule": "新增規則",
+      "empty": "無規則。新增規則後，命中請求會被路由到指定供應商。",
+      "ruleName": "規則名（可選）",
+      "matcher": "匹配方式",
+      "matcherIntent": "語義意圖",
+      "matcherPredicate": "自訂謂詞",
+      "intent": {
+        "background": "後台/輕量（warmup·compact）",
+        "thinking": "擴展思考 / reasoning",
+        "long-context": "超長上下文",
+        "web-search": "聯網搜尋工具",
+        "subagent": "子代理（subagent）"
+      },
+      "pred": {
+        "modelGlob": "模型名 glob，如 *haiku*（留空不限）",
+        "hasTool": "帶某工具（type/name 含該子串，留空不限）",
+        "minTokens": "最小輸入 token 估算（留空不限）",
+        "fieldPath": "body 欄位路徑，如 metadata.user_id",
+        "fieldContains": "包含子串"
+      },
+      "selectProvider": "選擇目標供應商",
+      "noProviders": "暫無供應商",
+      "modelOverride": "改寫模型（可選）"
+    },
     "autoFailover": {
       "info": "當故障轉移佇列中設定了多個供應商時，系統會在請求失敗時按優先順序依次嘗試。當某個供應商連續失敗達到閾值時，斷路器會打開並在一段時間內跳過該供應商。",
       "configSaved": "自動故障轉移設定已儲存",

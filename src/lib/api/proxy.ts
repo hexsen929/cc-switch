@@ -15,6 +15,7 @@ import type {
   StartupAttachFailure,
   RequestRewriteConfig,
   ResponseMiddlewareConfig,
+  IntentRoutingConfig,
 } from "@/types/proxy";
 import { PROVIDER_ROUTING_STRATEGIES } from "@/types/proxy";
 
@@ -275,6 +276,20 @@ export const proxyApi = {
     config: ResponseMiddlewareConfig,
   ): Promise<void> {
     return invoke("set_response_middleware_config", { appType, config });
+  },
+
+  // 意图路由（Fork 扩展）：按请求意图把目标 provider 软置顶为失败转移链 P1，可选改写上游模型
+  async getIntentRoutingConfig(appType: string): Promise<IntentRoutingConfig> {
+    return invoke<IntentRoutingConfig>("get_intent_routing_config", {
+      appType,
+    });
+  },
+
+  async setIntentRoutingConfig(
+    appType: string,
+    config: IntentRoutingConfig,
+  ): Promise<void> {
+    return invoke("set_intent_routing_config", { appType, config });
   },
 
   // ========== 计费默认配置 API ==========
