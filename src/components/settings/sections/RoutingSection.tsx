@@ -22,6 +22,7 @@ import { SegmentedControl } from "@/components/ui/segmented-control";
 import { ConfirmDialog } from "@/components/ConfirmDialog";
 import { AutoFailoverConfigPanel } from "@/components/proxy/AutoFailoverConfigPanel";
 import { RequestMiddlewarePanel } from "@/components/proxy/RequestMiddlewarePanel";
+import { RequestRewritePanel } from "@/components/proxy/RequestRewritePanel";
 import { RectifierConfigPanel } from "@/components/settings/RectifierConfigPanel";
 import { APP_DISPLAY_NAME, AppGlyph } from "@/components/shell/AppGlyph";
 import { MODE_TONE } from "@/components/providers/mode/ModeTabs";
@@ -81,6 +82,7 @@ export function RoutingSection({ onOpenApp }: RoutingSectionProps) {
   const [confirmExitAll, setConfirmExitAll] = useState(false);
   const [failoverApp, setFailoverApp] = useState<ProxyAppId>("claude");
   const [middlewareApp, setMiddlewareApp] = useState<ProxyAppId>("claude");
+  const [rewriteApp, setRewriteApp] = useState<ProxyAppId>("claude");
 
   useEffect(() => {
     if (config) {
@@ -408,6 +410,31 @@ export function RoutingSection({ onOpenApp }: RoutingSectionProps) {
             }))}
           />
           <RequestMiddlewarePanel key={middlewareApp} appType={middlewareApp} />
+        </div>
+      </SettingsBlock>
+
+      <SettingsBlock
+        title={t("proxy.rewrite.title", "现成请求中间件（无代码）")}
+        help={{
+          title: t("proxy.rewrite.title", "现成请求中间件（无代码）"),
+          body: t(
+            "proxy.rewrite.hint",
+            "用结构化配置完成最常见的三类改写：改模型名、覆盖参数、注入 system 提示——不必写脚本。先于可编程脚本执行，默认关闭、失败放行。",
+          ),
+        }}
+      >
+        <div className="space-y-4 rounded-panel border border-border bg-surface p-5">
+          <SegmentedControl
+            size="sm"
+            aria-label={t("proxy.rewrite.title", "现成请求中间件（无代码）")}
+            value={rewriteApp}
+            onValueChange={setRewriteApp}
+            items={PROXY_APP_IDS.map((app) => ({
+              value: app,
+              label: APP_DISPLAY_NAME[app],
+            }))}
+          />
+          <RequestRewritePanel key={rewriteApp} appType={rewriteApp} />
         </div>
       </SettingsBlock>
 

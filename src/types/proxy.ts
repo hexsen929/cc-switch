@@ -254,3 +254,31 @@ export interface AppProxyConfig {
   circuitErrorRateThreshold: number;
   circuitMinRequests: number;
 }
+
+/** 声明式「现成请求中间件」（无代码预设）——与后端 request_rewrite.rs 对齐（camelCase）。 */
+export interface ModelMapRule {
+  from: string;
+  to: string;
+}
+
+export type SystemPromptMode = "off" | "prepend" | "append" | "replace";
+
+export interface SystemPromptRule {
+  mode: SystemPromptMode;
+  text: string;
+}
+
+export interface RequestRewriteConfig {
+  enabled: boolean;
+  modelMap: ModelMapRule[];
+  /** 顶层参数覆盖（value=null 表示删除该键） */
+  paramOverrides: Record<string, unknown>;
+  systemPrompt: SystemPromptRule;
+}
+
+export const EMPTY_REQUEST_REWRITE: RequestRewriteConfig = {
+  enabled: false,
+  modelMap: [],
+  paramOverrides: {},
+  systemPrompt: { mode: "off", text: "" },
+};

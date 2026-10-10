@@ -362,6 +362,8 @@ pub struct RequestForwarder {
     copilot_optimizer_config: CopilotOptimizerConfig,
     /// 用户可编程 onRequest 中间件配置（Fork 扩展，默认关闭、fail-open）
     request_middleware: crate::proxy::request_middleware::RequestMiddlewareConfig,
+    /// 声明式请求改写预设（Fork 扩展，无代码「现成中间件」，默认关闭、fail-safe）
+    request_rewrite: crate::proxy::request_rewrite::RequestRewriteConfig,
     /// 订阅内多账号故障转移开关（Fork 扩展，默认关闭）。
     /// 开启后托管 OAuth 账号收到 401/403/429 会进入冷却，同池内改选健康账号。
     subscription_account_failover: bool,
@@ -512,6 +514,7 @@ impl RequestForwarder {
         optimizer_config: OptimizerConfig,
         copilot_optimizer_config: CopilotOptimizerConfig,
         request_middleware: crate::proxy::request_middleware::RequestMiddlewareConfig,
+        request_rewrite: crate::proxy::request_rewrite::RequestRewriteConfig,
         subscription_account_failover: bool,
         max_retries: u32,
     ) -> Self {
@@ -533,6 +536,7 @@ impl RequestForwarder {
             optimizer_config,
             copilot_optimizer_config,
             request_middleware,
+            request_rewrite,
             subscription_account_failover,
             non_streaming_timeout: std::time::Duration::from_secs(non_streaming_timeout),
             streaming_first_byte_timeout: std::time::Duration::from_secs(
@@ -2240,6 +2244,16 @@ impl RequestForwarder {
                     }
                 }
             }
+        }
+        // Fork 扩展：声明式「现成中间件」预设（改模型名 / 覆盖参数 / 注入 system）。
+        // 放在可编程 onRequest JS 之前，让脚本能看到并进一步覆盖预设结果。默认关闭、fail-safe：
+        // 顶层非对象或无规则时为 no-op，绝不破坏请求。
+        if self.request_rewrite.is_active() {
+            crate::proxy::request_rewrite::apply_request_rewrite(
+                &mut filtered_body,
+                app_type,
+                &self.request_rewrite,
+            );
         }
         // Fork 扩展：用户可编程 onRequest 中间件。放在所有内置转换之后、出站 body 定稿时执行，
         // 让脚本看到最终形态并能改写参数 / 模型 / system。默认关闭；执行失败一律放行（fail-open），
@@ -5027,6 +5041,7 @@ mod tests {
             optimizer_config: OptimizerConfig::default(),
             copilot_optimizer_config: CopilotOptimizerConfig::default(),
             request_middleware: crate::proxy::request_middleware::RequestMiddlewareConfig::default(),
+            request_rewrite: crate::proxy::request_rewrite::RequestRewriteConfig::default(),
             subscription_account_failover: false,
             non_streaming_timeout,
             streaming_first_byte_timeout,

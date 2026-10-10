@@ -175,3 +175,28 @@ pub async fn set_request_middleware_script(
         .set_request_middleware_script(&app_type, &script)
         .map_err(|e| e.to_string())
 }
+
+/// 获取某应用的声明式请求改写配置（Fork 扩展，无代码「现成中间件」）
+#[tauri::command]
+pub async fn get_request_rewrite_config(
+    state: tauri::State<'_, AppState>,
+    app_type: String,
+) -> Result<crate::proxy::request_rewrite::RequestRewriteConfig, String> {
+    state
+        .db
+        .get_request_rewrite_config(&app_type)
+        .map_err(|e| e.to_string())
+}
+
+/// 设置某应用的声明式请求改写配置（Fork 扩展）
+#[tauri::command]
+pub async fn set_request_rewrite_config(
+    state: tauri::State<'_, AppState>,
+    app_type: String,
+    config: crate::proxy::request_rewrite::RequestRewriteConfig,
+) -> Result<(), String> {
+    state
+        .db
+        .set_request_rewrite_config(&app_type, &config)
+        .map_err(|e| e.to_string())
+}

@@ -3840,6 +3840,35 @@
       "contract": "The script must be an expression that evaluates to a function with the signature (request, meta) => any. Return an object to use it as the new body; return a non-object to pass through unchanged.",
       "security": "The script runs in an isolated sandbox: no network, no filesystem, 1s CPU limit. Any error or timeout passes the original request through without interrupting forwarding."
     },
+    "rewrite": {
+      "title": "Ready-made request middleware (no code)",
+      "hint": "Handle the three most common rewrites with structured config: remap the model name, override params, inject a system prompt — no scripting needed. Runs before the programmable script; default off, fail-safe.",
+      "on": "On",
+      "off": "Off",
+      "saved": "Presets saved",
+      "saveFailed": "Failed to save",
+      "paramsInvalid": "Param overrides must be a valid JSON object",
+      "modelMap": {
+        "title": "Model name mapping",
+        "add": "Add rule",
+        "empty": "No rules. Use * as the \"from\" to catch any model that no exact rule matched.",
+        "from": "Source model / *",
+        "to": "Target model"
+      },
+      "params": {
+        "title": "Param overrides",
+        "hint": "A top-level JSON object that overrides/adds outbound params; set a value to null to delete that param."
+      },
+      "system": {
+        "title": "System prompt injection",
+        "off": "Off",
+        "prepend": "Prepend",
+        "append": "Append",
+        "replace": "Replace",
+        "placeholder": "System text to inject",
+        "claudeOnly": "Applies to Claude only (Anthropic native system field); use the programmable script for other apps."
+      }
+    },
     "autoFailover": {
       "info": "When the failover queue has multiple providers, the system will try them in priority order when requests fail. When a provider reaches the consecutive failure threshold, the circuit breaker will open and skip it temporarily.",
       "configSaved": "Auto failover config saved",

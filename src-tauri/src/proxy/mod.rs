@@ -25,6 +25,7 @@ pub mod opaque_state_rectifier;
 pub mod provider_router;
 pub mod providers;
 pub mod request_middleware;
+pub mod request_rewrite;
 pub mod response_processor;
 pub(crate) mod server;
 pub mod session;

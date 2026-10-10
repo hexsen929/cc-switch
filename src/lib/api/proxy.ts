@@ -13,6 +13,7 @@ import type {
   CodexDaemonRestartOutcome,
   AppModeView,
   StartupAttachFailure,
+  RequestRewriteConfig,
 } from "@/types/proxy";
 import { PROVIDER_ROUTING_STRATEGIES } from "@/types/proxy";
 
@@ -241,6 +242,22 @@ export const proxyApi = {
     script: string,
   ): Promise<void> {
     return invoke("set_request_middleware_script", { appType, script });
+  },
+
+  // 声明式请求改写预设（Fork 扩展）：无代码「现成中间件」——改模型名 / 覆盖参数 / 注入 system
+  async getRequestRewriteConfig(
+    appType: string,
+  ): Promise<RequestRewriteConfig> {
+    return invoke<RequestRewriteConfig>("get_request_rewrite_config", {
+      appType,
+    });
+  },
+
+  async setRequestRewriteConfig(
+    appType: string,
+    config: RequestRewriteConfig,
+  ): Promise<void> {
+    return invoke("set_request_rewrite_config", { appType, config });
   },
 
   // ========== 计费默认配置 API ==========
