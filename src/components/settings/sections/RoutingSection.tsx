@@ -21,6 +21,7 @@ import { HelpTip, DisabledReason } from "@/components/ui/help-tip";
 import { SegmentedControl } from "@/components/ui/segmented-control";
 import { ConfirmDialog } from "@/components/ConfirmDialog";
 import { AutoFailoverConfigPanel } from "@/components/proxy/AutoFailoverConfigPanel";
+import { RequestMiddlewarePanel } from "@/components/proxy/RequestMiddlewarePanel";
 import { RectifierConfigPanel } from "@/components/settings/RectifierConfigPanel";
 import { APP_DISPLAY_NAME, AppGlyph } from "@/components/shell/AppGlyph";
 import { MODE_TONE } from "@/components/providers/mode/ModeTabs";
@@ -79,6 +80,7 @@ export function RoutingSection({ onOpenApp }: RoutingSectionProps) {
   const [portError, setPortError] = useState<string | null>(null);
   const [confirmExitAll, setConfirmExitAll] = useState(false);
   const [failoverApp, setFailoverApp] = useState<ProxyAppId>("claude");
+  const [middlewareApp, setMiddlewareApp] = useState<ProxyAppId>("claude");
 
   useEffect(() => {
     if (config) {
@@ -381,6 +383,31 @@ export function RoutingSection({ onOpenApp }: RoutingSectionProps) {
       >
         <div className="rounded-panel border border-border bg-surface p-5">
           <RectifierConfigPanel />
+        </div>
+      </SettingsBlock>
+
+      <SettingsBlock
+        title={t("proxy.middleware.title", "可编程请求中间件")}
+        help={{
+          title: t("proxy.middleware.title", "可编程请求中间件"),
+          body: t(
+            "proxy.middleware.hint",
+            "对出站请求体运行你自己的 onRequest 脚本，用于参数覆盖、模型映射、system 提示注入等。开关与脚本在「保存」后一起生效。",
+          ),
+        }}
+      >
+        <div className="space-y-4 rounded-panel border border-border bg-surface p-5">
+          <SegmentedControl
+            size="sm"
+            aria-label={t("proxy.middleware.title", "可编程请求中间件")}
+            value={middlewareApp}
+            onValueChange={setMiddlewareApp}
+            items={PROXY_APP_IDS.map((app) => ({
+              value: app,
+              label: APP_DISPLAY_NAME[app],
+            }))}
+          />
+          <RequestMiddlewarePanel key={middlewareApp} appType={middlewareApp} />
         </div>
       </SettingsBlock>
 

@@ -71,6 +71,8 @@ pub struct RequestContext {
     pub optimizer_config: OptimizerConfig,
     /// Copilot 优化器配置
     pub copilot_optimizer_config: CopilotOptimizerConfig,
+    /// 用户可编程 onRequest 中间件配置（Fork 扩展，默认关闭）
+    pub request_middleware: crate::proxy::request_middleware::RequestMiddlewareConfig,
     /// Stack 模型的请求（`mode::stack`）：直达 Stack 里的那一家，不读也不写任何路由状态。
     pub is_stack: bool,
 }
@@ -111,6 +113,23 @@ impl RequestContext {
         let rectifier_config = state.db.get_rectifier_config().unwrap_or_default();
         let optimizer_config = state.db.get_optimizer_config().unwrap_or_default();
         let copilot_optimizer_config = state.db.get_copilot_optimizer_config().unwrap_or_default();
+
+        // Fork 扩展：读取用户 onRequest 中间件配置（关闭时跳过脚本读取，省一次 DB 访问）
+        let request_middleware = {
+            let enabled = state
+                .db
+                .get_request_middleware_enabled(app_type_str)
+                .unwrap_or(false);
+            let script = if enabled {
+                state
+                    .db
+                    .get_request_middleware_script(app_type_str)
+                    .unwrap_or_default()
+            } else {
+                String::new()
+            };
+            crate::proxy::request_middleware::RequestMiddlewareConfig { enabled, script }
+        };
 
         // 提取 Session ID
         let session_result = extract_session_id(headers, body, app_type_str);
@@ -231,6 +250,7 @@ impl RequestContext {
             rectifier_config,
             optimizer_config,
             copilot_optimizer_config,
+            request_middleware,
             is_stack,
         })
     }
@@ -299,6 +319,7 @@ impl RequestContext {
             self.rectifier_config.clone(),
             self.optimizer_config.clone(),
             self.copilot_optimizer_config.clone(),
+            self.request_middleware.clone(),
             max_retries,
         )
         .stack_request(self.is_stack)

@@ -360,6 +360,8 @@ pub struct RequestForwarder {
     optimizer_config: OptimizerConfig,
     /// Copilot 优化器配置
     copilot_optimizer_config: CopilotOptimizerConfig,
+    /// 用户可编程 onRequest 中间件配置（Fork 扩展，默认关闭、fail-open）
+    request_middleware: crate::proxy::request_middleware::RequestMiddlewareConfig,
     /// 非流式请求超时（秒）
     non_streaming_timeout: std::time::Duration,
     /// 流式请求响应头等待超时（秒）
@@ -376,6 +378,49 @@ pub struct RequestForwarder {
 }
 
 impl RequestForwarder {
+    /// Fork 扩展：执行用户 onRequest 中间件脚本，就地改写出站请求体。
+    ///
+    /// 在 `spawn_blocking` 中运行受沙箱约束的脚本（内存 / 栈 / 1s CPU 中断上限），
+    /// 任何错误（语法 / 运行 / 超时 / join 失败）都走 fail-open：保留原始请求体并记一条
+    /// 警告日志，绝不阻断请求。调用方已保证 `self.request_middleware.is_active()`。
+    async fn apply_request_middleware(
+        &self,
+        body: &mut Value,
+        app_type: &AppType,
+        provider: &Provider,
+    ) {
+        let script = self.request_middleware.script.clone();
+        let meta = crate::proxy::request_middleware::RequestMiddlewareMeta {
+            app_type: app_type.as_str().to_string(),
+            provider_id: provider.id.clone(),
+            provider_name: provider.name.clone(),
+            model: body
+                .get("model")
+                .and_then(|m| m.as_str())
+                .unwrap_or_default()
+                .to_string(),
+        };
+        let input = body.clone();
+
+        let result = tokio::task::spawn_blocking(move || {
+            crate::proxy::request_middleware::run_request_middleware(&script, &input, &meta)
+        })
+        .await;
+
+        match result {
+            Ok(Ok(new_body)) => {
+                *body = new_body;
+                log::debug!("[Middleware] onRequest 已应用 (app={})", app_type.as_str());
+            }
+            Ok(Err(e)) => {
+                log::warn!("[Middleware] onRequest 执行失败，放行原始请求 (app={}): {e}", app_type.as_str());
+            }
+            Err(join_err) => {
+                log::warn!("[Middleware] onRequest 任务异常，放行原始请求: {join_err}");
+            }
+        }
+    }
+
     /// 预防式 media 降级：发送前对 text-only 模型把图片块替换为标记。
     ///
     /// 受 `enabled && request_media_fallback` 管辖；其中"启发式模型名单预测"
@@ -463,6 +508,7 @@ impl RequestForwarder {
         rectifier_config: RectifierConfig,
         optimizer_config: OptimizerConfig,
         copilot_optimizer_config: CopilotOptimizerConfig,
+        request_middleware: crate::proxy::request_middleware::RequestMiddlewareConfig,
         max_retries: u32,
     ) -> Self {
         // max_retries 是「失败后重试次数」语义，attempt 上限 = retries + 1。
@@ -482,6 +528,7 @@ impl RequestForwarder {
             rectifier_config,
             optimizer_config,
             copilot_optimizer_config,
+            request_middleware,
             non_streaming_timeout: std::time::Duration::from_secs(non_streaming_timeout),
             streaming_first_byte_timeout: std::time::Duration::from_secs(
                 streaming_first_byte_timeout,
@@ -2101,6 +2148,14 @@ impl RequestForwarder {
                 }
             }
         }
+        // Fork 扩展：用户可编程 onRequest 中间件。放在所有内置转换之后、出站 body 定稿时执行，
+        // 让脚本看到最终形态并能改写参数 / 模型 / system。默认关闭；执行失败一律放行（fail-open），
+        // 绝不因脚本问题阻断用户请求。
+        if self.request_middleware.is_active() {
+            self.apply_request_middleware(&mut filtered_body, app_type, provider)
+                .await;
+        }
+
         // 出站 body 定稿后刷新真值（覆盖 Codex chat 上游模型覆写、转换层模型改写）
         if let Some(m) = filtered_body
             .get("model")
@@ -4767,6 +4822,7 @@ mod tests {
             rectifier_config: RectifierConfig::default(),
             optimizer_config: OptimizerConfig::default(),
             copilot_optimizer_config: CopilotOptimizerConfig::default(),
+            request_middleware: crate::proxy::request_middleware::RequestMiddlewareConfig::default(),
             non_streaming_timeout,
             streaming_first_byte_timeout,
             max_attempts: 1,

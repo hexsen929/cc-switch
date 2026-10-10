@@ -199,6 +199,29 @@ export const proxyApi = {
     return invoke("set_provider_sticky_enabled", { appType, enabled });
   },
 
+  // 可编程请求中间件（Fork 扩展）：用户 onRequest JS 脚本，沙箱执行、默认关闭、失败放行
+  async getRequestMiddlewareEnabled(appType: string): Promise<boolean> {
+    return invoke<boolean>("get_request_middleware_enabled", { appType });
+  },
+
+  async setRequestMiddlewareEnabled(
+    appType: string,
+    enabled: boolean,
+  ): Promise<void> {
+    return invoke("set_request_middleware_enabled", { appType, enabled });
+  },
+
+  async getRequestMiddlewareScript(appType: string): Promise<string> {
+    return invoke<string>("get_request_middleware_script", { appType });
+  },
+
+  async setRequestMiddlewareScript(
+    appType: string,
+    script: string,
+  ): Promise<void> {
+    return invoke("set_request_middleware_script", { appType, script });
+  },
+
   // ========== 计费默认配置 API ==========
 
   // 获取计费模式来源

@@ -100,3 +100,53 @@ pub async fn set_provider_sticky_enabled(
         .set_provider_sticky_enabled(&app_type, enabled)
         .map_err(|e| e.to_string())
 }
+
+/// 获取某应用的 onRequest 中间件开关（Fork 扩展）
+#[tauri::command]
+pub async fn get_request_middleware_enabled(
+    state: tauri::State<'_, AppState>,
+    app_type: String,
+) -> Result<bool, String> {
+    state
+        .db
+        .get_request_middleware_enabled(&app_type)
+        .map_err(|e| e.to_string())
+}
+
+/// 设置某应用的 onRequest 中间件开关（Fork 扩展）
+#[tauri::command]
+pub async fn set_request_middleware_enabled(
+    state: tauri::State<'_, AppState>,
+    app_type: String,
+    enabled: bool,
+) -> Result<(), String> {
+    state
+        .db
+        .set_request_middleware_enabled(&app_type, enabled)
+        .map_err(|e| e.to_string())
+}
+
+/// 获取某应用的 onRequest 中间件脚本（Fork 扩展）
+#[tauri::command]
+pub async fn get_request_middleware_script(
+    state: tauri::State<'_, AppState>,
+    app_type: String,
+) -> Result<String, String> {
+    state
+        .db
+        .get_request_middleware_script(&app_type)
+        .map_err(|e| e.to_string())
+}
+
+/// 设置某应用的 onRequest 中间件脚本（Fork 扩展）
+#[tauri::command]
+pub async fn set_request_middleware_script(
+    state: tauri::State<'_, AppState>,
+    app_type: String,
+    script: String,
+) -> Result<(), String> {
+    state
+        .db
+        .set_request_middleware_script(&app_type, &script)
+        .map_err(|e| e.to_string())
+}

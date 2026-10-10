@@ -1626,6 +1626,10 @@ pub fn run() {
             commands::set_provider_routing_strategy,
             commands::get_provider_sticky_enabled,
             commands::set_provider_sticky_enabled,
+            commands::get_request_middleware_enabled,
+            commands::set_request_middleware_enabled,
+            commands::get_request_middleware_script,
+            commands::set_request_middleware_script,
             // Fork failover (model-level queues + chain)
             commands::get_failover_queue_for_model,
             commands::get_available_providers_for_model_failover,

@@ -3818,6 +3818,16 @@
       "saved": "Conversation stickiness saved",
       "saveFailed": "Failed to save conversation stickiness"
     },
+    "middleware": {
+      "title": "Programmable request middleware",
+      "hint": "Run your own onRequest script against the outbound request body for param overrides, model mapping, system-prompt injection, and more. The toggle and script take effect together on Save.",
+      "on": "On",
+      "off": "Off",
+      "saved": "Middleware saved",
+      "saveFailed": "Failed to save middleware",
+      "contract": "The script must be an expression that evaluates to a function with the signature (request, meta) => any. Return an object to use it as the new body; return a non-object to pass through unchanged.",
+      "security": "The script runs in an isolated sandbox: no network, no filesystem, 1s CPU limit. Any error or timeout passes the original request through without interrupting forwarding."
+    },
     "autoFailover": {
       "info": "When the failover queue has multiple providers, the system will try them in priority order when requests fail. When a provider reaches the consecutive failure threshold, the circuit breaker will open and skip it temporarily.",
       "configSaved": "Auto failover config saved",

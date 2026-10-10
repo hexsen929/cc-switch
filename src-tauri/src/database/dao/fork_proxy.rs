@@ -108,6 +108,40 @@ impl Database {
         self.set_fork_setting(&key, if enabled { "1" } else { "0" })
     }
 
+    // ==================== 可编程请求中间件（Fork 扩展） ====================
+
+    /// 获取某应用的 onRequest 中间件开关（默认关闭）
+    pub fn get_request_middleware_enabled(&self, app_type: &str) -> Result<bool, AppError> {
+        let key = format!("fork_request_middleware_enabled_{app_type}");
+        Ok(Self::parse_setting_bool(self.get_fork_setting(&key)?, false))
+    }
+
+    /// 设置某应用的 onRequest 中间件开关
+    pub fn set_request_middleware_enabled(
+        &self,
+        app_type: &str,
+        enabled: bool,
+    ) -> Result<(), AppError> {
+        let key = format!("fork_request_middleware_enabled_{app_type}");
+        self.set_fork_setting(&key, if enabled { "1" } else { "0" })
+    }
+
+    /// 获取某应用的 onRequest 中间件脚本（默认空串）
+    pub fn get_request_middleware_script(&self, app_type: &str) -> Result<String, AppError> {
+        let key = format!("fork_request_middleware_script_{app_type}");
+        Ok(self.get_fork_setting(&key)?.unwrap_or_default())
+    }
+
+    /// 设置某应用的 onRequest 中间件脚本
+    pub fn set_request_middleware_script(
+        &self,
+        app_type: &str,
+        script: &str,
+    ) -> Result<(), AppError> {
+        let key = format!("fork_request_middleware_script_{app_type}");
+        self.set_fork_setting(&key, script)
+    }
+
     // ==================== Claude 模型路由策略（Fork 扩展） ====================
 
     /// 获取 Claude 模型路由全局设置
