@@ -452,6 +452,7 @@ mod tests {
                 output_tokens: 5,
                 cache_read_tokens: 2,
                 cache_creation_tokens: 0,
+                cache_creation_1h_tokens: 0,
                 model: None,
                 message_id: Some("resp-1".to_string()),
             },
@@ -490,6 +491,7 @@ mod tests {
             output_tokens: 500,
             cache_read_tokens: 0,
             cache_creation_tokens: 0,
+            cache_creation_1h_tokens: 0,
             model: None,
             message_id: None,
         };
@@ -643,6 +645,7 @@ mod tests {
             output_tokens: 5,
             cache_read_tokens: 2,
             cache_creation_tokens: 1,
+            cache_creation_1h_tokens: 0,
             model: Some("claude-sonnet-4-5".to_string()),
             message_id: Some("msg_desktop".to_string()),
         };
