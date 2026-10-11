@@ -4998,6 +4998,13 @@
       "chatgptHelp": "Claude Code、Claude Desktop の ChatGPT プリセットと、Codex の公式ログインのバインドで使います。アカウントを指定していないプロバイダーは「デフォルト」のアカウントを使います。",
       "xaiHelp": "Claude Code、Claude Desktop、Codex の xAI プリセットで使います。アカウントを指定していないプロバイダーは「デフォルト」のアカウントを使います。"
     },
+    "nativeCodex": {
+      "title": "ローカルの ChatGPT ログインを検出しました",
+      "hint": "Codex 経由ですでに ChatGPT にログイン済みです（{{who}}）。インポートすれば再ログイン不要で cc-switch からそのまま使えます。",
+      "import": "インポート",
+      "imported": "ローカルの ChatGPT ログインをインポートしました",
+      "importFailed": "インポートに失敗しました"
+    },
     "addAccount": "アカウントを追加",
     "groupMenu": "{{service}} のその他の操作",
     "accountMenu": "{{login}} のその他の操作",

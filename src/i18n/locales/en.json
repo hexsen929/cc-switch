@@ -4998,6 +4998,13 @@
       "chatgptHelp": "Used by ChatGPT presets in Claude Code and Claude Desktop, and by Codex's official-login binding. Providers without a chosen account use the Default one.",
       "xaiHelp": "Used by xAI presets in Claude Code, Claude Desktop and Codex. Providers without a chosen account use the Default one."
     },
+    "nativeCodex": {
+      "title": "Detected a local ChatGPT login",
+      "hint": "You're already signed in to ChatGPT via Codex ({{who}}). Import it to use it in cc-switch directly — no need to log in again.",
+      "import": "Import",
+      "imported": "Imported the local ChatGPT login",
+      "importFailed": "Import failed"
+    },
     "addAccount": "Add account",
     "groupMenu": "More actions for {{service}}",
     "accountMenu": "More actions for {{login}}",

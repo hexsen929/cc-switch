@@ -255,6 +255,100 @@ pub async fn auth_cancel_login(
     Ok(codex_state.0.cancel_device_flow(&device_code).await)
 }
 
+/// 本机原生 ChatGPT 登录探测结果（授权中心「检测 + 一键导入」用）。
+#[derive(Debug, Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct NativeCodexLoginInfo {
+    pub email: Option<String>,
+    pub plan: Option<String>,
+    pub chatgpt_account_id: Option<String>,
+    /// 该本机登录是否已被 cc-switch 托管（已托管则无需再导入）。
+    pub already_managed: bool,
+}
+
+/// 探测本机 `~/.codex/auth.json` 是否已有 ChatGPT（codex login）登录态。
+/// 只读，不写任何文件；未检测到返回 None。
+#[tauri::command(rename_all = "camelCase")]
+pub async fn detect_native_codex_login(
+    codex_state: State<'_, CodexOAuthState>,
+) -> Result<Option<NativeCodexLoginInfo>, String> {
+    let Some(native) = crate::codex_config::read_native_codex_chatgpt_login() else {
+        return Ok(None);
+    };
+    let already_managed = codex_state
+        .0
+        .find_managed_account_for_native(&native)
+        .await
+        .is_some();
+    Ok(Some(NativeCodexLoginInfo {
+        email: native.email,
+        plan: native.plan,
+        chatgpt_account_id: native.chatgpt_account_id,
+        already_managed,
+    }))
+}
+
+/// 一键把本机原生 ChatGPT 登录采纳为 cc-switch 受管账号。
+/// 已托管则幂等返回现有账号；否则读取 `~/.codex/auth.json` 的现成 tokens 落库，
+/// 并像设备码登录成功那样回写托管 auth.json + 标记、重投影当前路由。
+#[tauri::command(rename_all = "camelCase")]
+pub async fn adopt_native_codex_login(
+    app_state: State<'_, AppState>,
+    codex_state: State<'_, CodexOAuthState>,
+) -> Result<Option<ManagedAuthAccount>, String> {
+    let auth_manager = &codex_state.0;
+
+    match crate::codex_config::read_native_codex_chatgpt_login() {
+        None => return Err("未检测到本机 ChatGPT 登录（~/.codex/auth.json）".to_string()),
+        Some(native) => {
+            if let Some(existing) = auth_manager.find_managed_account_for_native(&native).await {
+                let default_account_id = auth_manager.get_status().await.default_account_id;
+                return Ok(Some(map_account(
+                    AUTH_PROVIDER_CODEX_OAUTH,
+                    existing,
+                    default_account_id.as_deref(),
+                )));
+            }
+        }
+    }
+
+    let adopted = auth_manager
+        .adopt_native_login(|| async {
+            app_state
+                .proxy_service
+                .lock_switch_for_app(AppType::Codex.as_str())
+                .await
+        })
+        .await
+        .map_err(|e| e.to_string())?;
+
+    let Some((account, codex_live_auth, _switch_guard)) = adopted else {
+        return Err("未检测到本机 ChatGPT 登录（~/.codex/auth.json）".to_string());
+    };
+
+    if let Err(error) = crate::services::provider::codex_direct::install_managed_login(
+        &app_state.db,
+        &account.id,
+        &codex_live_auth,
+    ) {
+        log::warn!("写入 Codex ChatGPT 登录态失败: {error}");
+    } else {
+        let mut settings = crate::settings::get_settings();
+        settings.preserve_codex_official_auth_on_switch = true;
+        crate::settings::update_settings(settings).map_err(|e| e.to_string())?;
+        if let Err(error) = crate::mode::controller::refresh_codex_auth_locked(&app_state).await {
+            log::warn!("Codex 登录已导入，但当前路由重投影失败: {error}");
+        }
+    }
+
+    let default_account_id = auth_manager.get_status().await.default_account_id;
+    Ok(Some(map_account(
+        AUTH_PROVIDER_CODEX_OAUTH,
+        account,
+        default_account_id.as_deref(),
+    )))
+}
+
 #[tauri::command(rename_all = "camelCase")]
 pub async fn auth_list_accounts(
     auth_provider: String,

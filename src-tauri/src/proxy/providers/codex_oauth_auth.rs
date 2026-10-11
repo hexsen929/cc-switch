@@ -701,6 +701,93 @@ impl CodexOAuthManager {
         Ok(Some((account, codex_live_auth, commit_guard)))
     }
 
+    /// 探测本机原生 ChatGPT 登录是否已被 cc-switch 托管（按跨刷新稳定身份或 workspace 去重）。
+    pub async fn find_managed_account_for_native(
+        &self,
+        native: &crate::codex_config::NativeCodexChatgptLogin,
+    ) -> Option<GitHubAccount> {
+        let accounts = self.accounts.read().await;
+        accounts
+            .values()
+            .find(|data| {
+                let identity_match = data
+                    .id_token
+                    .as_deref()
+                    .and_then(crate::codex_config::extract_codex_id_token_user_identity)
+                    .as_deref()
+                    == Some(native.user_identity.as_str());
+                let workspace_match = matches!(
+                    (
+                        data.chatgpt_account_id.as_deref(),
+                        native.chatgpt_account_id.as_deref(),
+                    ),
+                    (Some(a), Some(b)) if a == b
+                );
+                identity_match || workspace_match
+            })
+            .map(GitHubAccount::from)
+    }
+
+    /// 把本机原生 ChatGPT 登录（`~/.codex/auth.json`）采纳为受管账号（授权中心「一键导入」）。
+    /// 读取现成 tokens，走与设备码登录相同的落库尾段；返回
+    /// (账号, 可写回原生 auth.json 的 bundle, 提交守卫)。未检测到有效登录 → Ok(None)。
+    pub async fn adopt_native_login<BeforeCommit, CommitFuture, CommitGuard>(
+        &self,
+        before_commit: BeforeCommit,
+    ) -> Result<Option<(GitHubAccount, serde_json::Value, CommitGuard)>, CodexOAuthError>
+    where
+        BeforeCommit: FnOnce() -> CommitFuture,
+        CommitFuture: std::future::Future<Output = CommitGuard>,
+    {
+        let Some(native) = crate::codex_config::read_native_codex_chatgpt_login() else {
+            return Ok(None);
+        };
+
+        let tokens = OAuthTokenResponse {
+            access_token: native.access_token.clone(),
+            refresh_token: Some(native.refresh_token.clone()),
+            id_token: Some(native.id_token.clone()),
+            expires_in: None,
+        };
+        let refresh_token = native.refresh_token.clone();
+        let (chatgpt_account_id, email) = extract_account_metadata_from_tokens(&tokens);
+        let chatgpt_account_id = chatgpt_account_id
+            .or_else(|| native.chatgpt_account_id.clone())
+            .ok_or_else(|| {
+                CodexOAuthError::ParseError(
+                    "无法从本机 Codex 登录中提取 chatgpt_account_id".to_string(),
+                )
+            })?;
+        let id_token = native.id_token.clone();
+        if crate::codex_config::extract_codex_id_token_subject(&id_token).is_none() {
+            return Err(CodexOAuthError::TokenFetchFailed(
+                "本机 Codex 登录无法确认稳定用户身份".to_string(),
+            ));
+        }
+
+        let codex_live_auth =
+            Self::build_codex_live_auth_from_tokens(&tokens, &chatgpt_account_id, email.as_deref());
+        // 与设备码登录一致：拿到提交守卫后再写账号；原生 access_token 不缓存，
+        // 首次使用时按 refresh_token 取新 token，避免写入一个可能临期的 access_token。
+        let commit_guard = before_commit().await;
+        let account = self
+            .add_account_internal(
+                chatgpt_account_id,
+                refresh_token,
+                email,
+                Some(id_token),
+                None,
+                AccountLoginContext {
+                    target_account_id: None,
+                    pending_device_code: None,
+                    target_generation: None,
+                },
+            )
+            .await?;
+
+        Ok(Some((account, codex_live_auth, commit_guard)))
+    }
+
     /// Build a Codex CLI-compatible `auth.json` payload from a freshly
     /// completed ChatGPT device login.
     ///

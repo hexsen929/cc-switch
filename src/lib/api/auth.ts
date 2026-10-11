@@ -117,6 +117,25 @@ export async function authLogout(
   });
 }
 
+/** 本机原生 ChatGPT（codex login）登录探测结果。 */
+export interface NativeCodexLoginInfo {
+  email: string | null;
+  plan: string | null;
+  chatgptAccountId: string | null;
+  /** 该本机登录是否已被 cc-switch 托管（已托管则无需再导入）。 */
+  alreadyManaged: boolean;
+}
+
+/** 探测本机 ~/.codex/auth.json 是否已有 ChatGPT 登录态（只读，未检测到返回 null）。 */
+export async function detectNativeCodexLogin(): Promise<NativeCodexLoginInfo | null> {
+  return invoke<NativeCodexLoginInfo | null>("detect_native_codex_login");
+}
+
+/** 一键把本机原生 ChatGPT 登录采纳为 cc-switch 受管账号。 */
+export async function adoptNativeCodexLogin(): Promise<ManagedAuthAccount | null> {
+  return invoke<ManagedAuthAccount | null>("adopt_native_codex_login");
+}
+
 export const authApi = {
   authStartLogin,
   authPollForAccount,
@@ -126,4 +145,6 @@ export const authApi = {
   authRemoveAccount,
   authSetDefaultAccount,
   authLogout,
+  detectNativeCodexLogin,
+  adoptNativeCodexLogin,
 };

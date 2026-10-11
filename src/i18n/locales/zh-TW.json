@@ -4999,6 +4999,13 @@
       "chatgptHelp": "用於 Claude Code、Claude Desktop 的 ChatGPT 預設，以及 Codex 官方登入綁定。沒指定帳號的供應商用「預設」帳號。",
       "xaiHelp": "用於 Claude Code、Claude Desktop、Codex 的 xAI 預設。沒指定帳號的供應商用「預設」帳號。"
     },
+    "nativeCodex": {
+      "title": "偵測到本機 ChatGPT 登入",
+      "hint": "你已透過 Codex 登入 ChatGPT（{{who}}）。匯入後即可在 cc-switch 直接使用，無需再登入一次。",
+      "import": "匯入",
+      "imported": "已匯入本機 ChatGPT 登入",
+      "importFailed": "匯入失敗"
+    },
     "addAccount": "新增帳號",
     "groupMenu": "{{service}} 的更多操作",
     "accountMenu": "{{login}} 的更多操作",

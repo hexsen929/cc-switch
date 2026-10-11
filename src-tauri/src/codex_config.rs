@@ -424,6 +424,91 @@ pub(crate) fn test_codex_id_token(subject: &str) -> String {
     format!("{header}.{payload}.")
 }
 
+/// 解码 JWT id_token 的 payload（不验签——这是用户自己的 token）。仅取 claims 做展示/身份。
+fn decode_codex_id_token_payload(id_token: &str) -> Option<Value> {
+    let mut segments = id_token.split('.');
+    let _header = segments.next()?;
+    let payload = segments.next()?;
+    URL_SAFE_NO_PAD
+        .decode(payload)
+        .ok()
+        .and_then(|decoded| serde_json::from_slice::<Value>(&decoded).ok())
+}
+
+/// 从本机原生 `~/.codex/auth.json`（`codex login` 写入）检测到的 ChatGPT 登录态。
+/// 对齐 magpie：只静态读取 auth.json，不发网络、不碰 keychain。
+#[derive(Debug, Clone)]
+pub struct NativeCodexChatgptLogin {
+    /// 上游 ChatGPT workspace id（tokens.account_id，可空时回落 JWT 的 chatgpt_account_id）
+    pub chatgpt_account_id: Option<String>,
+    pub email: Option<String>,
+    pub plan: Option<String>,
+    pub access_token: String,
+    pub refresh_token: String,
+    pub id_token: String,
+    /// 跨刷新稳定的用户身份（`sub:<subject>`），用于与已托管账号去重匹配。
+    pub user_identity: String,
+}
+
+/// 读取本机原生 ChatGPT（Codex）登录态。判定逻辑对齐 magpie 并更稳一点：
+/// `auth_mode == "chatgpt"`、`tokens.access_token` 非空、具备可刷新的 `refresh_token`、
+/// 且 `id_token` 能解出稳定身份（否则无法安全纳入托管）。路径走 `get_codex_auth_path()`
+/// （比 magpie 多尊重 Codex 覆盖目录）。任一不满足或读取失败 → None（= 未检测到）。
+pub fn read_native_codex_chatgpt_login() -> Option<NativeCodexChatgptLogin> {
+    let bytes = std::fs::read(get_codex_auth_path()).ok()?;
+    let auth: Value = serde_json::from_slice(&bytes).ok()?;
+    parse_native_codex_chatgpt_login(&auth)
+}
+
+/// 纯解析（无 IO），便于单测：从一份 auth.json 的 JSON 判定并提取 ChatGPT 登录态。
+pub(crate) fn parse_native_codex_chatgpt_login(auth: &Value) -> Option<NativeCodexChatgptLogin> {
+    if auth.get("auth_mode").and_then(Value::as_str) != Some("chatgpt") {
+        return None;
+    }
+    let tokens = auth.get("tokens")?.as_object()?;
+    let field = |key: &str| {
+        tokens
+            .get(key)
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .map(str::to_string)
+    };
+    let access_token = field("access_token")?;
+    let refresh_token = field("refresh_token")?;
+    let id_token = field("id_token")?;
+    let user_identity = extract_codex_id_token_user_identity(&id_token)?;
+
+    let claims = decode_codex_id_token_payload(&id_token);
+    let claim_str = |value: Option<&Value>| {
+        value
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .map(str::to_string)
+    };
+    let email = claims.as_ref().and_then(|c| claim_str(c.get("email")));
+    let openai_auth = claims
+        .as_ref()
+        .and_then(|c| c.get("https://api.openai.com/auth"));
+    let plan = claim_str(openai_auth.and_then(|a| a.get("chatgpt_plan_type")))
+        .or_else(|| claim_str(claims.as_ref().and_then(|c| c.get("chatgpt_plan_type"))));
+    let chatgpt_account_id = field("account_id").or_else(|| {
+        claim_str(openai_auth.and_then(|a| a.get("chatgpt_account_id")))
+            .or_else(|| claim_str(claims.as_ref().and_then(|c| c.get("chatgpt_account_id"))))
+    });
+
+    Some(NativeCodexChatgptLogin {
+        chatgpt_account_id,
+        email,
+        plan,
+        access_token,
+        refresh_token,
+        id_token,
+        user_identity,
+    })
+}
+
 /// Build the native-shaped ChatGPT auth bundle shared by cc-switch and Codex CLI.
 pub fn codex_managed_oauth_auth_value(
     account_id: &str,
@@ -2970,6 +3055,70 @@ mod tests {
     use serde_json::json;
     use serial_test::serial;
     use std::ffi::OsString;
+
+    fn fake_jwt(payload: serde_json::Value) -> String {
+        let header = URL_SAFE_NO_PAD.encode(br#"{"alg":"RS256","typ":"JWT"}"#);
+        let body = URL_SAFE_NO_PAD.encode(payload.to_string());
+        format!("{header}.{body}.sig")
+    }
+
+    #[test]
+    fn native_chatgpt_login_parses_identity_email_plan() {
+        let id_token = fake_jwt(json!({
+            "sub": "user-123",
+            "email": "me@example.com",
+            "https://api.openai.com/auth": {
+                "chatgpt_account_id": "ws-abc",
+                "chatgpt_plan_type": "pro"
+            }
+        }));
+        let auth = json!({
+            "auth_mode": "chatgpt",
+            "OPENAI_API_KEY": null,
+            "tokens": {
+                "access_token": "at",
+                "refresh_token": "rt",
+                "id_token": id_token,
+                "account_id": "ws-abc"
+            }
+        });
+        let got = parse_native_codex_chatgpt_login(&auth).expect("should detect");
+        assert_eq!(got.access_token, "at");
+        assert_eq!(got.refresh_token, "rt");
+        assert_eq!(got.email.as_deref(), Some("me@example.com"));
+        assert_eq!(got.plan.as_deref(), Some("pro"));
+        assert_eq!(got.chatgpt_account_id.as_deref(), Some("ws-abc"));
+        assert_eq!(got.user_identity, "sub:user-123");
+    }
+
+    #[test]
+    fn native_chatgpt_login_rejects_apikey_and_incomplete() {
+        let id_token = fake_jwt(json!({ "sub": "u" }));
+        // auth_mode=apikey → 不是 ChatGPT 登录。
+        assert!(parse_native_codex_chatgpt_login(&json!({
+            "auth_mode": "apikey",
+            "tokens": { "access_token": "at", "refresh_token": "rt", "id_token": id_token }
+        }))
+        .is_none());
+        // 缺 refresh_token → 无法纳入托管。
+        assert!(parse_native_codex_chatgpt_login(&json!({
+            "auth_mode": "chatgpt",
+            "tokens": { "access_token": "at", "id_token": fake_jwt(json!({"sub":"u"})) }
+        }))
+        .is_none());
+        // 缺 access_token。
+        assert!(parse_native_codex_chatgpt_login(&json!({
+            "auth_mode": "chatgpt",
+            "tokens": { "refresh_token": "rt", "id_token": fake_jwt(json!({"sub":"u"})) }
+        }))
+        .is_none());
+        // id_token 无 sub → 无稳定身份。
+        assert!(parse_native_codex_chatgpt_login(&json!({
+            "auth_mode": "chatgpt",
+            "tokens": { "access_token": "at", "refresh_token": "rt", "id_token": fake_jwt(json!({"email":"x@y.z"})) }
+        }))
+        .is_none());
+    }
 
     #[test]
     fn official_proxy_route_is_recognized_by_its_address() {
