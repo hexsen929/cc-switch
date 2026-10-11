@@ -364,7 +364,10 @@ impl Database {
             .map_err(|e| AppError::Database(e.to_string()))?;
         conn.execute("CREATE INDEX IF NOT EXISTS idx_request_logs_created_at ON proxy_request_logs(created_at)", [])
             .map_err(|e| AppError::Database(e.to_string()))?;
-        // Fork：局域网网关 per-key 配额窗口按 (gateway_key_id, created_at) 聚合用量，建索引加速。
+        // Fork：旧库的 proxy_request_logs 由上面的 CREATE TABLE IF NOT EXISTS 跳过、拿不到
+        // gateway_key_id 列，必须在建索引之前补列（新库则已带列，add_column_if_missing 返回 false）。
+        Self::add_column_if_missing(conn, "proxy_request_logs", "gateway_key_id", "TEXT")?;
+        // 局域网网关 per-key 配额窗口按 (gateway_key_id, created_at) 聚合用量，建索引加速。
         conn.execute("CREATE INDEX IF NOT EXISTS idx_request_logs_gateway_key ON proxy_request_logs(gateway_key_id, created_at)", [])
             .map_err(|e| AppError::Database(e.to_string()))?;
         conn.execute(
@@ -949,8 +952,6 @@ impl Database {
         )?;
         Self::add_column_if_missing(conn, "proxy_request_logs", "first_token_ms", "INTEGER")?;
         Self::add_column_if_missing(conn, "proxy_request_logs", "duration_ms", "INTEGER")?;
-        // Fork：局域网网关 per-key 配额归因列（旧库补列；NULL = 非网关密钥流量）。
-        Self::add_column_if_missing(conn, "proxy_request_logs", "gateway_key_id", "TEXT")?;
 
         // model_pricing 表
         conn.execute(
@@ -3990,6 +3991,50 @@ impl Database {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // Fork 回归：旧库已有 proxy_request_logs（无 gateway_key_id 列）时，create_tables_on_conn
+    // 必须先补列、再建 (gateway_key_id, created_at) 索引，否则 CREATE INDEX 会报
+    // 「no such column: gateway_key_id」导致数据库初始化失败。
+    #[test]
+    fn create_tables_backfills_gateway_key_id_before_indexing_existing_logs(
+    ) -> Result<(), AppError> {
+        let conn = Connection::open_in_memory()?;
+        conn.execute("ATTACH DATABASE ':memory:' AS forkdb", [])?;
+        // 模拟升级前的 proxy_request_logs：带 data_source、但没有 gateway_key_id。
+        conn.execute(
+            "CREATE TABLE proxy_request_logs (
+                request_id TEXT PRIMARY KEY, provider_id TEXT NOT NULL, app_type TEXT NOT NULL, model TEXT NOT NULL,
+                request_model TEXT, pricing_model TEXT,
+                input_tokens INTEGER NOT NULL DEFAULT 0, output_tokens INTEGER NOT NULL DEFAULT 0,
+                cache_read_tokens INTEGER NOT NULL DEFAULT 0, cache_creation_tokens INTEGER NOT NULL DEFAULT 0,
+                input_token_semantics INTEGER NOT NULL DEFAULT 0,
+                input_cost_usd TEXT NOT NULL DEFAULT '0', output_cost_usd TEXT NOT NULL DEFAULT '0',
+                cache_read_cost_usd TEXT NOT NULL DEFAULT '0', cache_creation_cost_usd TEXT NOT NULL DEFAULT '0',
+                total_cost_usd TEXT NOT NULL DEFAULT '0', latency_ms INTEGER NOT NULL, first_token_ms INTEGER,
+                duration_ms INTEGER, status_code INTEGER NOT NULL, error_message TEXT, session_id TEXT,
+                provider_type TEXT, is_streaming INTEGER NOT NULL DEFAULT 0,
+                cost_multiplier TEXT NOT NULL DEFAULT '1.0', created_at INTEGER NOT NULL,
+                data_source TEXT NOT NULL DEFAULT 'proxy'
+            )",
+            [],
+        )?;
+
+        // 修复前这里会因缺列报错；修复后应顺利补列并建索引。
+        Database::create_tables_on_conn(&conn)?;
+
+        assert!(Database::has_column(
+            &conn,
+            "proxy_request_logs",
+            "gateway_key_id"
+        )?);
+        let index_exists: i64 = conn.query_row(
+            "SELECT COUNT(*) FROM sqlite_master WHERE type='index' AND name='idx_request_logs_gateway_key'",
+            [],
+            |row| row.get(0),
+        )?;
+        assert_eq!(index_exists, 1);
+        Ok(())
+    }
 
     #[test]
     fn migrate_v12_to_v13_adds_input_token_semantics_columns() -> Result<(), AppError> {
