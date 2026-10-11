@@ -3937,6 +3937,30 @@
       "noProviders": "暂无供应商",
       "modelOverride": "改写模型（可选）"
     },
+    "pii": {
+      "title": "出站脱敏",
+      "hint": "转发给上游之前，把消息文本里命中的敏感信息替换为占位符。只改消息文本，不碰模型名/角色/工具结构；默认关闭，正则出错时原样放行。",
+      "on": "已开启",
+      "off": "已关闭",
+      "saved": "脱敏配置已保存",
+      "saveFailed": "保存失败",
+      "builtins": "内置模式（高置信度）",
+      "builtin": {
+        "creditCard": "信用卡号",
+        "usSsn": "美国 SSN",
+        "iban": "IBAN",
+        "email": "邮箱",
+        "awsAccessKeyId": "AWS Access Key",
+        "privateKeyBlock": "私钥块",
+        "jwt": "JWT"
+      },
+      "customRules": "自定义正则",
+      "addRule": "添加规则",
+      "noRules": "无自定义规则。可按需添加正则匹配。",
+      "ruleName": "标签（可选）",
+      "rulePattern": "正则，如 sk-[A-Za-z0-9]+",
+      "placeholder": "占位符模板，支持 {label}；留空用 [REDACTED:{label}]"
+    },
     "lanGateway": {
       "title": "局域网网关",
       "hint": "默认关闭时只有本机可用代理。开启「局域网共享」后，非环回入站必须携带某个已启用的网关密钥才放行，否则 401；共享仍关闭时非环回入站一律 403。为每个客户端单独建密钥，便于启停与吊销。",

@@ -403,3 +403,47 @@ export interface GatewayKey {
 /** 配额窗口可选值。 */
 export const GATEWAY_LIMIT_WINDOWS = ["none", "day", "week", "month"] as const;
 export type GatewayLimitWindow = (typeof GATEWAY_LIMIT_WINDOWS)[number];
+
+// ==================== 出站请求脱敏（Fork 扩展，默认关闭） ====================
+
+/** 内置高置信度脱敏模式开关（低误伤）。 */
+export interface PiiBuiltinToggles {
+  creditCard: boolean;
+  usSsn: boolean;
+  iban: boolean;
+  email: boolean;
+  awsAccessKeyId: boolean;
+  privateKeyBlock: boolean;
+  jwt: boolean;
+}
+
+/** 自定义脱敏规则：name 作标签，pattern 为正则（Rust regex 语法）。 */
+export interface PiiCustomRule {
+  name: string;
+  pattern: string;
+}
+
+export interface PiiRedactionConfig {
+  enabled: boolean;
+  builtins: PiiBuiltinToggles;
+  customRules: PiiCustomRule[];
+  /** 占位符模板，支持 {label}；留空用默认 [REDACTED:{label}]。 */
+  placeholder: string;
+}
+
+export const EMPTY_PII_BUILTINS: PiiBuiltinToggles = {
+  creditCard: false,
+  usSsn: false,
+  iban: false,
+  email: false,
+  awsAccessKeyId: false,
+  privateKeyBlock: false,
+  jwt: false,
+};
+
+export const EMPTY_PII_REDACTION: PiiRedactionConfig = {
+  enabled: false,
+  builtins: { ...EMPTY_PII_BUILTINS },
+  customRules: [],
+  placeholder: "",
+};

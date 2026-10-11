@@ -25,6 +25,7 @@ import { RequestMiddlewarePanel } from "@/components/proxy/RequestMiddlewarePane
 import { RequestRewritePanel } from "@/components/proxy/RequestRewritePanel";
 import { ResponseMiddlewarePanel } from "@/components/proxy/ResponseMiddlewarePanel";
 import { IntentRoutingPanel } from "@/components/proxy/IntentRoutingPanel";
+import { PiiRedactionPanel } from "@/components/proxy/PiiRedactionPanel";
 import { GatewayKeysPanel } from "@/components/proxy/GatewayKeysPanel";
 import { RectifierConfigPanel } from "@/components/settings/RectifierConfigPanel";
 import { APP_DISPLAY_NAME, AppGlyph } from "@/components/shell/AppGlyph";
@@ -89,6 +90,7 @@ export function RoutingSection({ onOpenApp }: RoutingSectionProps) {
   const [respMiddlewareApp, setRespMiddlewareApp] =
     useState<ProxyAppId>("claude");
   const [intentApp, setIntentApp] = useState<ProxyAppId>("claude");
+  const [piiApp, setPiiApp] = useState<ProxyAppId>("claude");
 
   useEffect(() => {
     if (config) {
@@ -494,6 +496,31 @@ export function RoutingSection({ onOpenApp }: RoutingSectionProps) {
             }))}
           />
           <IntentRoutingPanel key={intentApp} appType={intentApp} />
+        </div>
+      </SettingsBlock>
+
+      <SettingsBlock
+        title={t("proxy.pii.title", "出站脱敏")}
+        help={{
+          title: t("proxy.pii.title", "出站脱敏"),
+          body: t(
+            "proxy.pii.hint",
+            "转发给上游之前，把消息文本里命中的敏感信息替换为占位符。只改消息文本，不碰模型名/角色/工具结构；默认关闭，正则出错时原样放行。",
+          ),
+        }}
+      >
+        <div className="space-y-4 rounded-panel border border-border bg-surface p-5">
+          <SegmentedControl
+            size="sm"
+            aria-label={t("proxy.pii.title", "出站脱敏")}
+            value={piiApp}
+            onValueChange={setPiiApp}
+            items={PROXY_APP_IDS.map((app) => ({
+              value: app,
+              label: APP_DISPLAY_NAME[app],
+            }))}
+          />
+          <PiiRedactionPanel key={piiApp} appType={piiApp} />
         </div>
       </SettingsBlock>
 

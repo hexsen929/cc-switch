@@ -1654,6 +1654,9 @@ pub fn run() {
             // Fork 意图路由（intent routing）
             commands::get_intent_routing_config,
             commands::set_intent_routing_config,
+            // Fork 出站请求脱敏（PII / secret redaction）
+            commands::get_pii_redaction_config,
+            commands::set_pii_redaction_config,
             // Fork 局域网网关（LAN gateway，默认关闭 + 强制 per-key 鉴权）
             commands::get_lan_share_enabled,
             commands::set_lan_share_enabled,

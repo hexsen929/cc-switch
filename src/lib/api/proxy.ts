@@ -16,6 +16,7 @@ import type {
   RequestRewriteConfig,
   ResponseMiddlewareConfig,
   IntentRoutingConfig,
+  PiiRedactionConfig,
   GatewayKey,
   GatewayKeyView,
 } from "@/types/proxy";
@@ -298,6 +299,18 @@ export const proxyApi = {
     config: IntentRoutingConfig,
   ): Promise<void> {
     return invoke("set_intent_routing_config", { appType, config });
+  },
+
+  // 出站请求脱敏（Fork 扩展）：转发前把敏感信息打码；默认关闭、fail-open
+  async getPiiRedactionConfig(appType: string): Promise<PiiRedactionConfig> {
+    return invoke<PiiRedactionConfig>("get_pii_redaction_config", { appType });
+  },
+
+  async setPiiRedactionConfig(
+    appType: string,
+    config: PiiRedactionConfig,
+  ): Promise<void> {
+    return invoke("set_pii_redaction_config", { appType, config });
   },
 
   // ========== 局域网网关（Fork 扩展，默认关闭 + 强制 per-key 鉴权） ==========

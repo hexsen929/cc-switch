@@ -3937,6 +3937,30 @@
       "noProviders": "No providers",
       "modelOverride": "Rewrite model (optional)"
     },
+    "pii": {
+      "title": "Outbound redaction",
+      "hint": "Before forwarding upstream, replace sensitive matches in message text with a placeholder. Only message text is touched, never model/role/tool structure; default off, fail-open on bad regex.",
+      "on": "On",
+      "off": "Off",
+      "saved": "Redaction config saved",
+      "saveFailed": "Save failed",
+      "builtins": "Built-in patterns (high-confidence)",
+      "builtin": {
+        "creditCard": "Credit card",
+        "usSsn": "US SSN",
+        "iban": "IBAN",
+        "email": "Email",
+        "awsAccessKeyId": "AWS Access Key",
+        "privateKeyBlock": "Private key block",
+        "jwt": "JWT"
+      },
+      "customRules": "Custom regex",
+      "addRule": "Add rule",
+      "noRules": "No custom rules. Add regex patterns as needed.",
+      "ruleName": "Label (optional)",
+      "rulePattern": "Regex, e.g. sk-[A-Za-z0-9]+",
+      "placeholder": "Placeholder template, supports {label}; empty = [REDACTED:{label}]"
+    },
     "lanGateway": {
       "title": "LAN gateway",
       "hint": "By default only this machine can use the proxy. After you enable \"Share on local network\", non-loopback requests must carry an enabled gateway key or get 401; while sharing stays off, non-loopback requests always get 403. Create a separate key per client so you can disable or revoke them individually.",

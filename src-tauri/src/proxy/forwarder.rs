@@ -368,6 +368,8 @@ pub struct RequestForwarder {
     request_rewrite: crate::proxy::request_rewrite::RequestRewriteConfig,
     /// 响应侧可编程中间件（Fork 扩展，onResponse 非流式 / onEvent 流式，默认关闭、fail-open）
     response_middleware: crate::proxy::response_middleware::ResponseMiddlewareConfig,
+    /// 出站请求脱敏（Fork 扩展，PII / secret redaction，默认关闭、fail-open）
+    pii_redaction: crate::proxy::pii_redaction::PiiRedactionConfig,
     /// 订阅内多账号故障转移开关（Fork 扩展，默认关闭）。
     /// 开启后托管 OAuth 账号收到 401/403/429 会进入冷却，同池内改选健康账号。
     subscription_account_failover: bool,
@@ -592,6 +594,7 @@ impl RequestForwarder {
         request_middleware: crate::proxy::request_middleware::RequestMiddlewareConfig,
         request_rewrite: crate::proxy::request_rewrite::RequestRewriteConfig,
         response_middleware: crate::proxy::response_middleware::ResponseMiddlewareConfig,
+        pii_redaction: crate::proxy::pii_redaction::PiiRedactionConfig,
         subscription_account_failover: bool,
         max_retries: u32,
     ) -> Self {
@@ -615,6 +618,7 @@ impl RequestForwarder {
             request_middleware,
             request_rewrite,
             response_middleware,
+            pii_redaction,
             subscription_account_failover,
             non_streaming_timeout: std::time::Duration::from_secs(non_streaming_timeout),
             streaming_first_byte_timeout: std::time::Duration::from_secs(
@@ -2339,6 +2343,16 @@ impl RequestForwarder {
         if self.request_middleware.is_active() {
             self.apply_request_middleware(&mut filtered_body, app_type, provider)
                 .await;
+        }
+
+        // Fork 扩展：出站请求脱敏（PII / secret redaction）。放在最后——所有改写/脚本定稿后、
+        // 转发前——的唯一收口点，确保连用户脚本注入的内容也一并打码。默认关闭、fail-open。
+        if self.pii_redaction.is_active() {
+            let hits =
+                crate::proxy::pii_redaction::apply_pii_redaction(&mut filtered_body, &self.pii_redaction);
+            if hits > 0 {
+                log::debug!("[PII] 出站请求已脱敏 {hits} 处");
+            }
         }
 
         // 出站 body 定稿后刷新真值（覆盖 Codex chat 上游模型覆写、转换层模型改写）
@@ -5146,6 +5160,7 @@ mod tests {
             request_rewrite: crate::proxy::request_rewrite::RequestRewriteConfig::default(),
             response_middleware:
                 crate::proxy::response_middleware::ResponseMiddlewareConfig::default(),
+            pii_redaction: crate::proxy::pii_redaction::PiiRedactionConfig::default(),
             subscription_account_failover: false,
             non_streaming_timeout,
             streaming_first_byte_timeout,

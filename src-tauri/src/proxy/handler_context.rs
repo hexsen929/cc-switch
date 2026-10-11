@@ -77,6 +77,8 @@ pub struct RequestContext {
     pub request_rewrite: crate::proxy::request_rewrite::RequestRewriteConfig,
     /// 响应侧可编程中间件（Fork 扩展，onResponse / onEvent，默认关闭）
     pub response_middleware: crate::proxy::response_middleware::ResponseMiddlewareConfig,
+    /// 出站请求脱敏（Fork 扩展，PII / secret redaction，默认关闭）
+    pub pii_redaction: crate::proxy::pii_redaction::PiiRedactionConfig,
     /// 订阅内多账号故障转移开关（Fork 扩展，默认关闭）
     pub subscription_account_failover: bool,
     /// Stack 模型的请求（`mode::stack`）：直达 Stack 里的那一家，不读也不写任何路由状态。
@@ -182,6 +184,12 @@ impl RequestContext {
         let response_middleware = state
             .db
             .get_response_middleware_config(app_type_str)
+            .unwrap_or_default();
+
+        // Fork 扩展：读取出站请求脱敏配置（默认关闭；坏数据回落默认，fail-open）
+        let pii_redaction = state
+            .db
+            .get_pii_redaction_config(app_type_str)
             .unwrap_or_default();
 
         // Fork 扩展：读取「订阅内多账号故障转移」开关（默认关闭）
@@ -444,6 +452,7 @@ impl RequestContext {
             request_middleware,
             request_rewrite,
             response_middleware,
+            pii_redaction,
             subscription_account_failover,
             is_stack,
             gateway_key_id: authed.map(|ak| ak.id.clone()),
@@ -517,6 +526,7 @@ impl RequestContext {
             self.request_middleware.clone(),
             self.request_rewrite.clone(),
             self.response_middleware.clone(),
+            self.pii_redaction.clone(),
             self.subscription_account_failover,
             max_retries,
         )

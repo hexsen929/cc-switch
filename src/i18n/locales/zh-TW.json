@@ -3938,6 +3938,30 @@
       "noProviders": "暫無供應商",
       "modelOverride": "改寫模型（可選）"
     },
+    "pii": {
+      "title": "出站脫敏",
+      "hint": "轉發給上游之前，把訊息文字裡命中的敏感資訊替換為佔位符。只改訊息文字，不碰模型名/角色/工具結構；預設關閉，正則出錯時原樣放行。",
+      "on": "已開啟",
+      "off": "已關閉",
+      "saved": "脫敏設定已儲存",
+      "saveFailed": "儲存失敗",
+      "builtins": "內建模式（高置信度）",
+      "builtin": {
+        "creditCard": "信用卡號",
+        "usSsn": "美國 SSN",
+        "iban": "IBAN",
+        "email": "電子郵件",
+        "awsAccessKeyId": "AWS Access Key",
+        "privateKeyBlock": "私鑰區塊",
+        "jwt": "JWT"
+      },
+      "customRules": "自訂正則",
+      "addRule": "新增規則",
+      "noRules": "無自訂規則。可按需新增正則比對。",
+      "ruleName": "標籤（可選）",
+      "rulePattern": "正則，如 sk-[A-Za-z0-9]+",
+      "placeholder": "佔位符範本，支援 {label}；留空用 [REDACTED:{label}]"
+    },
     "lanGateway": {
       "title": "區域網路閘道",
       "hint": "預設關閉時只有本機可用代理。開啟「區域網路共享」後，非回環入站必須攜帶某個已啟用的閘道金鑰才放行，否則 401；共享仍關閉時非回環入站一律 403。為每個用戶端單獨建立金鑰，便於啟停與撤銷。",

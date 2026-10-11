@@ -238,6 +238,34 @@ impl Database {
         self.set_fork_setting(&key, &json)
     }
 
+    // ==================== 出站请求脱敏（Fork 扩展） ====================
+
+    /// 获取某应用的出站请求脱敏配置（默认关闭；坏数据回落默认，fail-open）。
+    pub fn get_pii_redaction_config(
+        &self,
+        app_type: &str,
+    ) -> Result<crate::proxy::pii_redaction::PiiRedactionConfig, AppError> {
+        let key = format!("fork_pii_redaction_{app_type}");
+        match self.get_fork_setting(&key)? {
+            Some(raw) if !raw.trim().is_empty() => {
+                Ok(serde_json::from_str(&raw).unwrap_or_default())
+            }
+            _ => Ok(Default::default()),
+        }
+    }
+
+    /// 设置某应用的出站请求脱敏配置（整体 JSON 覆盖写）。
+    pub fn set_pii_redaction_config(
+        &self,
+        app_type: &str,
+        config: &crate::proxy::pii_redaction::PiiRedactionConfig,
+    ) -> Result<(), AppError> {
+        let key = format!("fork_pii_redaction_{app_type}");
+        let json = serde_json::to_string(config)
+            .map_err(|e| AppError::Database(format!("序列化脱敏配置失败: {e}")))?;
+        self.set_fork_setting(&key, &json)
+    }
+
     // ==================== 订阅内多账号故障转移（Fork 扩展） ====================
 
     /// 获取某应用的「订阅内多账号故障转移」开关（默认关闭）。
