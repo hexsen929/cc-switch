@@ -26,6 +26,7 @@ import { RequestRewritePanel } from "@/components/proxy/RequestRewritePanel";
 import { ResponseMiddlewarePanel } from "@/components/proxy/ResponseMiddlewarePanel";
 import { IntentRoutingPanel } from "@/components/proxy/IntentRoutingPanel";
 import { PiiRedactionPanel } from "@/components/proxy/PiiRedactionPanel";
+import { ReliabilityPanel } from "@/components/proxy/ReliabilityPanel";
 import { GatewayKeysPanel } from "@/components/proxy/GatewayKeysPanel";
 import { RectifierConfigPanel } from "@/components/settings/RectifierConfigPanel";
 import { APP_DISPLAY_NAME, AppGlyph } from "@/components/shell/AppGlyph";
@@ -91,6 +92,7 @@ export function RoutingSection({ onOpenApp }: RoutingSectionProps) {
     useState<ProxyAppId>("claude");
   const [intentApp, setIntentApp] = useState<ProxyAppId>("claude");
   const [piiApp, setPiiApp] = useState<ProxyAppId>("claude");
+  const [reliabilityApp, setReliabilityApp] = useState<ProxyAppId>("claude");
 
   useEffect(() => {
     if (config) {
@@ -521,6 +523,31 @@ export function RoutingSection({ onOpenApp }: RoutingSectionProps) {
             }))}
           />
           <PiiRedactionPanel key={piiApp} appType={piiApp} />
+        </div>
+      </SettingsBlock>
+
+      <SettingsBlock
+        title={t("proxy.reliability.title", "代理可靠性")}
+        help={{
+          title: t("proxy.reliability.title", "代理可靠性"),
+          body: t(
+            "proxy.reliability.hint",
+            "三项流式健壮性加固：上游静默时 SSE keep-alive、死循环检测切断、非 API(HTML/CF 挑战页)响应转失败转移。各自默认关闭。",
+          ),
+        }}
+      >
+        <div className="space-y-4 rounded-panel border border-border bg-surface p-5">
+          <SegmentedControl
+            size="sm"
+            aria-label={t("proxy.reliability.title", "代理可靠性")}
+            value={reliabilityApp}
+            onValueChange={setReliabilityApp}
+            items={PROXY_APP_IDS.map((app) => ({
+              value: app,
+              label: APP_DISPLAY_NAME[app],
+            }))}
+          />
+          <ReliabilityPanel key={reliabilityApp} appType={reliabilityApp} />
         </div>
       </SettingsBlock>
 

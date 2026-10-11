@@ -751,9 +751,13 @@ pub fn create_logged_passthrough_stream(
         let mut utf8_remainder: Vec<u8> = Vec::new();
         let mut collector = usage_collector;
         let mut finish_guard = collector.clone().map(SseUsageFinishGuard::new);
+        // Fork：loop_guard 开启时也需要解析 SSE（累计文本做死循环检测）。
+        let loop_guard = timeout_config.loop_guard;
         let inspect_sse_events =
-            collector.is_some() || log::log_enabled!(log::Level::Debug);
+            collector.is_some() || log::log_enabled!(log::Level::Debug) || loop_guard;
         let mut is_first_chunk = true;
+        // Fork：死循环检测的滚动文本窗口（只保留尾部若干 KB 以限成本）。
+        let mut loop_text = String::new();
 
         // 超时配置
         let first_byte_timeout = if timeout_config.first_byte_timeout > 0 {
@@ -766,32 +770,61 @@ pub fn create_logged_passthrough_stream(
         } else {
             None
         };
+        // Fork：上游静默时的 keep-alive 间隔（0=关闭）。
+        let keepalive = if timeout_config.keepalive_secs > 0 {
+            Some(Duration::from_secs(timeout_config.keepalive_secs))
+        } else {
+            None
+        };
 
         tokio::pin!(stream);
 
-        loop {
-            // 选择超时时间：首字节超时或静默期超时
-            let timeout_duration = if is_first_chunk {
+        'outer: loop {
+            // 硬超时：首字节超时或静默期超时（None = 无上限）
+            let phase_timeout = if is_first_chunk {
                 first_byte_timeout
             } else {
                 idle_timeout
             };
 
-            let chunk_result = match timeout_duration {
-                Some(duration) => {
-                    match tokio::time::timeout(duration, stream.next()).await {
-                        Ok(Some(chunk)) => Some(chunk),
-                        Ok(None) => None, // 流结束
+            // 等待下一包时穿插 keep-alive 注释（上游静默），同时保持 phase_timeout 为硬上限。
+            let mut waited = Duration::ZERO;
+            let chunk_result = loop {
+                let tick = match (keepalive, phase_timeout) {
+                    (Some(k), Some(t)) => Some(k.min(t.saturating_sub(waited))),
+                    (Some(k), None) => Some(k),
+                    (None, Some(t)) => Some(t.saturating_sub(waited)),
+                    (None, None) => None,
+                };
+                match tick {
+                    Some(duration) => match tokio::time::timeout(duration, stream.next()).await {
+                        Ok(got) => break got,
                         Err(_) => {
-                            // 超时
-                            let timeout_type = if is_first_chunk { "首字节" } else { "静默期" };
-                            log::error!("[{tag}] 流式响应{}超时 ({}秒)", timeout_type, duration.as_secs());
-                            yield Err(std::io::Error::other(format!("流式响应{timeout_type}超时")));
-                            break;
+                            waited += duration;
+                            if let Some(t) = phase_timeout {
+                                if waited >= t {
+                                    let timeout_type =
+                                        if is_first_chunk { "首字节" } else { "静默期" };
+                                    log::error!(
+                                        "[{tag}] 流式响应{}超时 ({}秒)",
+                                        timeout_type,
+                                        t.as_secs()
+                                    );
+                                    yield Err(std::io::Error::other(format!(
+                                        "流式响应{timeout_type}超时"
+                                    )));
+                                    break 'outer;
+                                }
+                            }
+                            if keepalive.is_some() {
+                                yield Ok(Bytes::from_static(
+                                    crate::proxy::reliability::KEEPALIVE_COMMENT,
+                                ));
+                            }
                         }
-                    }
+                    },
+                    None => break stream.next().await, // 无超时且无 keep-alive：直接等
                 }
-                None => stream.next().await, // 无超时限制
             };
 
             match chunk_result {
@@ -831,6 +864,38 @@ pub fn create_logged_passthrough_stream(
                                                 }
                                                 _ => false,
                                             };
+                                            // Fork：死循环检测——累计文本增量，尾部短语级重复则切断。
+                                            if loop_guard {
+                                                if let Ok(jv) =
+                                                    serde_json::from_str::<Value>(data)
+                                                {
+                                                    let delta =
+                                                        crate::proxy::reliability::extract_text_delta(&jv);
+                                                    if !delta.is_empty() {
+                                                        loop_text.push_str(delta);
+                                                        if loop_text.len() > 8192 {
+                                                            let mut cut = loop_text.len() - 8192;
+                                                            while cut < loop_text.len()
+                                                                && !loop_text.is_char_boundary(cut)
+                                                            {
+                                                                cut += 1;
+                                                            }
+                                                            loop_text.drain(..cut);
+                                                        }
+                                                        if crate::proxy::reliability::tail_is_repeating(
+                                                            &loop_text, 128, 30,
+                                                        ) {
+                                                            log::warn!(
+                                                                "[{tag}] 检测到流式死循环，切断响应"
+                                                            );
+                                                            yield Err(std::io::Error::other(
+                                                                "检测到流式死循环，已切断",
+                                                            ));
+                                                            break 'outer;
+                                                        }
+                                                    }
+                                                }
+                                            }
                                             log::trace!(
                                                 "[{tag}] <<< SSE data: bytes={}, usage_collected={collected} (content omitted)",
                                                 data.len()
@@ -994,6 +1059,8 @@ mod tests {
             StreamingTimeoutConfig {
                 first_byte_timeout: 0,
                 idle_timeout: 0,
+                keepalive_secs: 0,
+                loop_guard: false,
             },
             None,
         );

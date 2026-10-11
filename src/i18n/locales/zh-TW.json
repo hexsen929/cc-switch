@@ -3974,6 +3974,28 @@
       "rulePattern": "正則，如 sk-[A-Za-z0-9]+",
       "placeholder": "佔位符範本，支援 {label}；留空用 [REDACTED:{label}]"
     },
+    "reliability": {
+      "title": "代理可靠性",
+      "hint": "三項串流健壯性加固：上游靜默時 SSE keep-alive、死迴圈偵測切斷、非 API(HTML/CF 挑戰頁)回應轉故障轉移。各自預設關閉。",
+      "on": "已開啟",
+      "off": "已關閉",
+      "saved": "可靠性設定已儲存",
+      "saveFailed": "儲存失敗",
+      "keepalive": {
+        "title": "SSE keep-alive",
+        "desc": "上游靜默時週期性發送 SSE 註解行，避免中間層（Cloudflare/反代）~125s 閒置斷線。註解被用戶端忽略，無語意影響。",
+        "interval": "間隔（秒）",
+        "hint": "留空/0 用 15；上限 300"
+      },
+      "loopGuard": {
+        "title": "死迴圈偵測",
+        "desc": "串流輸出陷入短語級死迴圈時乾淨切斷（跳過分隔線/空白等合法重複，閾值較高）。"
+      },
+      "nonApi": {
+        "title": "非 API 回應故障轉移",
+        "desc": "上游回傳 2xx 卻是 HTML/Cloudflare 挑戰頁時，轉成可重試錯誤走故障轉移，而不是把錯誤頁當回應下發。"
+      }
+    },
     "lanGateway": {
       "title": "區域網路閘道",
       "hint": "預設關閉時只有本機可用代理。開啟「區域網路共享」後，非回環入站必須攜帶某個已啟用的閘道金鑰才放行，否則 401；共享仍關閉時非回環入站一律 403。為每個用戶端單獨建立金鑰，便於啟停與撤銷。",

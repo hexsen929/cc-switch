@@ -17,6 +17,7 @@ import type {
   ResponseMiddlewareConfig,
   IntentRoutingConfig,
   PiiRedactionConfig,
+  ReliabilityConfig,
   GatewayKey,
   GatewayKeyView,
 } from "@/types/proxy";
@@ -311,6 +312,18 @@ export const proxyApi = {
     config: PiiRedactionConfig,
   ): Promise<void> {
     return invoke("set_pii_redaction_config", { appType, config });
+  },
+
+  // 代理可靠性（Fork 扩展）：keep-alive / loop-guard / non-API→failover；默认全关
+  async getReliabilityConfig(appType: string): Promise<ReliabilityConfig> {
+    return invoke<ReliabilityConfig>("get_reliability_config", { appType });
+  },
+
+  async setReliabilityConfig(
+    appType: string,
+    config: ReliabilityConfig,
+  ): Promise<void> {
+    return invoke("set_reliability_config", { appType, config });
   },
 
   // ========== 局域网网关（Fork 扩展，默认关闭 + 强制 per-key 鉴权） ==========

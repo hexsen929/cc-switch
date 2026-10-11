@@ -460,3 +460,23 @@ export const EMPTY_PII_REDACTION: PiiRedactionConfig = {
   customRules: [],
   placeholder: "",
 };
+
+// ==================== 代理可靠性（Fork 扩展，默认全关） ====================
+
+export interface ReliabilityConfig {
+  /** 上游静默时发 SSE keep-alive 注释。 */
+  keepaliveEnabled: boolean;
+  /** keep-alive 间隔（秒）；启用但 0 时后端回落 15，上限 300。 */
+  keepaliveIntervalSecs: number;
+  /** 流式死循环检测并切断。 */
+  loopGuard: boolean;
+  /** 2xx 非 API 响应（HTML/CF 挑战页）→ 失败转移。 */
+  nonApiFailover: boolean;
+}
+
+export const EMPTY_RELIABILITY: ReliabilityConfig = {
+  keepaliveEnabled: false,
+  keepaliveIntervalSecs: 15,
+  loopGuard: false,
+  nonApiFailover: false,
+};

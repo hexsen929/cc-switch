@@ -1657,6 +1657,9 @@ pub fn run() {
             // Fork 出站请求脱敏（PII / secret redaction）
             commands::get_pii_redaction_config,
             commands::set_pii_redaction_config,
+            // Fork 代理可靠性（keep-alive / loop-guard / non-API failover）
+            commands::get_reliability_config,
+            commands::set_reliability_config,
             // Fork 局域网网关（LAN gateway，默认关闭 + 强制 per-key 鉴权）
             commands::get_lan_share_enabled,
             commands::set_lan_share_enabled,

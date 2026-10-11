@@ -26,6 +26,7 @@ pub mod model_mapper;
 pub mod opaque_state_rectifier;
 pub mod pii_redaction;
 pub mod provider_router;
+pub mod reliability;
 pub mod providers;
 pub mod request_middleware;
 pub mod request_rewrite;

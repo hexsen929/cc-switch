@@ -370,6 +370,9 @@ pub struct RequestForwarder {
     response_middleware: crate::proxy::response_middleware::ResponseMiddlewareConfig,
     /// 出站请求脱敏（Fork 扩展，PII / secret redaction，默认关闭、fail-open）
     pii_redaction: crate::proxy::pii_redaction::PiiRedactionConfig,
+    /// 代理可靠性三件套（Fork 扩展，默认全关）。此处只用 non_api_failover（流式侧 keep-alive /
+    /// loop-guard 走 StreamingTimeoutConfig）。
+    reliability: crate::proxy::reliability::ReliabilityConfig,
     /// 订阅内多账号故障转移开关（Fork 扩展，默认关闭）。
     /// 开启后托管 OAuth 账号收到 401/403/429 会进入冷却，同池内改选健康账号。
     subscription_account_failover: bool,
@@ -595,6 +598,7 @@ impl RequestForwarder {
         request_rewrite: crate::proxy::request_rewrite::RequestRewriteConfig,
         response_middleware: crate::proxy::response_middleware::ResponseMiddlewareConfig,
         pii_redaction: crate::proxy::pii_redaction::PiiRedactionConfig,
+        reliability: crate::proxy::reliability::ReliabilityConfig,
         subscription_account_failover: bool,
         max_retries: u32,
     ) -> Self {
@@ -619,6 +623,7 @@ impl RequestForwarder {
             request_rewrite,
             response_middleware,
             pii_redaction,
+            reliability,
             subscription_account_failover,
             non_streaming_timeout: std::time::Duration::from_secs(non_streaming_timeout),
             streaming_first_byte_timeout: std::time::Duration::from_secs(
@@ -3198,6 +3203,19 @@ impl RequestForwarder {
         let status = response.status();
 
         if status.is_success() {
+            // Fork 扩展：2xx 却是 HTML/Cloudflare 挑战页（非 API 响应）→ 转成可重试的
+            // ForwardFailed，交给失败转移，而不是把错误页当 SSE/JSON 原样下发。默认关闭。
+            if self.reliability.non_api_failover
+                && crate::proxy::reliability::looks_like_non_api_response(response.content_type())
+            {
+                log::warn!(
+                    "[reliability] 上游 2xx 非 API 响应 (content-type={:?})，转失败转移",
+                    response.content_type()
+                );
+                return Err(ProxyError::ForwardFailed(
+                    "upstream returned a non-API (HTML) response".to_string(),
+                ));
+            }
             let mut response = self
                 .prepare_success_response_for_failover(response, request_is_streaming)
                 .await?;
@@ -5161,6 +5179,7 @@ mod tests {
             response_middleware:
                 crate::proxy::response_middleware::ResponseMiddlewareConfig::default(),
             pii_redaction: crate::proxy::pii_redaction::PiiRedactionConfig::default(),
+            reliability: crate::proxy::reliability::ReliabilityConfig::default(),
             subscription_account_failover: false,
             non_streaming_timeout,
             streaming_first_byte_timeout,

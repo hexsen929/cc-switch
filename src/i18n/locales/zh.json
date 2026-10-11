@@ -3973,6 +3973,28 @@
       "rulePattern": "正则，如 sk-[A-Za-z0-9]+",
       "placeholder": "占位符模板，支持 {label}；留空用 [REDACTED:{label}]"
     },
+    "reliability": {
+      "title": "代理可靠性",
+      "hint": "三项流式健壮性加固：上游静默时 SSE keep-alive、死循环检测切断、非 API(HTML/CF 挑战页)响应转失败转移。各自默认关闭。",
+      "on": "已开启",
+      "off": "已关闭",
+      "saved": "可靠性配置已保存",
+      "saveFailed": "保存失败",
+      "keepalive": {
+        "title": "SSE keep-alive",
+        "desc": "上游静默时周期性发送 SSE 注释行，避免中间层（Cloudflare/反代）~125s 空闲断连。注释被客户端忽略，无语义影响。",
+        "interval": "间隔（秒）",
+        "hint": "留空/0 用 15；上限 300"
+      },
+      "loopGuard": {
+        "title": "死循环检测",
+        "desc": "流式输出陷入短语级死循环时干净切断（跳过分隔线/空白等合法重复，阈值较高）。"
+      },
+      "nonApi": {
+        "title": "非 API 响应失败转移",
+        "desc": "上游返回 2xx 却是 HTML/Cloudflare 挑战页时，转成可重试错误走失败转移，而不是把错误页当响应下发。"
+      }
+    },
     "lanGateway": {
       "title": "局域网网关",
       "hint": "默认关闭时只有本机可用代理。开启「局域网共享」后，非环回入站必须携带某个已启用的网关密钥才放行，否则 401；共享仍关闭时非环回入站一律 403。为每个客户端单独建密钥，便于启停与吊销。",

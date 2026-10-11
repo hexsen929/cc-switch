@@ -3973,6 +3973,28 @@
       "rulePattern": "Regex, e.g. sk-[A-Za-z0-9]+",
       "placeholder": "Placeholder template, supports {label}; empty = [REDACTED:{label}]"
     },
+    "reliability": {
+      "title": "Proxy reliability",
+      "hint": "Three streaming hardening options: SSE keep-alive while upstream is silent, loop-guard that cuts a stuck stream, and failover when a 2xx response is a non-API (HTML/CF challenge) page. Each default-off.",
+      "on": "On",
+      "off": "Off",
+      "saved": "Reliability config saved",
+      "saveFailed": "Save failed",
+      "keepalive": {
+        "title": "SSE keep-alive",
+        "desc": "Periodically send an SSE comment line while the upstream is silent, to avoid ~125s idle disconnects by intermediaries (Cloudflare/proxies). Comments are ignored by clients.",
+        "interval": "Interval (sec)",
+        "hint": "blank/0 = 15; max 300"
+      },
+      "loopGuard": {
+        "title": "Loop guard",
+        "desc": "Cleanly cut a streaming reply stuck in a phrase-level loop (skips separators/whitespace; high threshold)."
+      },
+      "nonApi": {
+        "title": "Non-API response failover",
+        "desc": "When a 2xx response is actually an HTML/Cloudflare challenge page, turn it into a retryable error and fail over instead of relaying the error page."
+      }
+    },
     "lanGateway": {
       "title": "LAN gateway",
       "hint": "By default only this machine can use the proxy. After you enable \"Share on local network\", non-loopback requests must carry an enabled gateway key or get 401; while sharing stays off, non-loopback requests always get 403. Create a separate key per client so you can disable or revoke them individually.",

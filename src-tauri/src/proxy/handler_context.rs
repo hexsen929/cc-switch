@@ -22,6 +22,10 @@ pub struct StreamingTimeoutConfig {
     pub first_byte_timeout: u64,
     /// 静默期超时（秒），0 表示禁用
     pub idle_timeout: u64,
+    /// Fork：上游静默时发 SSE keep-alive 注释的间隔（秒），0 表示关闭。
+    pub keepalive_secs: u64,
+    /// Fork：流式死循环检测并切断。
+    pub loop_guard: bool,
 }
 
 /// 请求上下文
@@ -79,6 +83,8 @@ pub struct RequestContext {
     pub response_middleware: crate::proxy::response_middleware::ResponseMiddlewareConfig,
     /// 出站请求脱敏（Fork 扩展，PII / secret redaction，默认关闭）
     pub pii_redaction: crate::proxy::pii_redaction::PiiRedactionConfig,
+    /// 代理可靠性三件套（Fork 扩展，keep-alive / loop-guard / non-API→failover，默认关闭）
+    pub reliability: crate::proxy::reliability::ReliabilityConfig,
     /// 订阅内多账号故障转移开关（Fork 扩展，默认关闭）
     pub subscription_account_failover: bool,
     /// Stack 模型的请求（`mode::stack`）：直达 Stack 里的那一家，不读也不写任何路由状态。
@@ -190,6 +196,12 @@ impl RequestContext {
         let pii_redaction = state
             .db
             .get_pii_redaction_config(app_type_str)
+            .unwrap_or_default();
+
+        // Fork 扩展：读取代理可靠性配置（默认全关；坏数据回落默认）
+        let reliability = state
+            .db
+            .get_reliability_config(app_type_str)
             .unwrap_or_default();
 
         // Fork 扩展：读取「订阅内多账号故障转移」开关（默认关闭）
@@ -463,6 +475,7 @@ impl RequestContext {
             request_rewrite,
             response_middleware,
             pii_redaction,
+            reliability,
             subscription_account_failover,
             is_stack,
             gateway_key_id: authed.map(|ak| ak.id.clone()),
@@ -537,6 +550,7 @@ impl RequestContext {
             self.request_rewrite.clone(),
             self.response_middleware.clone(),
             self.pii_redaction.clone(),
+            self.reliability.clone(),
             self.subscription_account_failover,
             max_retries,
         )
@@ -563,17 +577,24 @@ impl RequestContext {
     /// - 故障转移关闭：返回 0（禁用超时检查）
     #[inline]
     pub fn streaming_timeout_config(&self) -> StreamingTimeoutConfig {
+        // keep-alive / loop_guard 不随失败转移开关走——它们是独立的可靠性加固。
+        let keepalive_secs = self.reliability.effective_keepalive_secs();
+        let loop_guard = self.reliability.loop_guard;
         if self.app_config.auto_failover_enabled {
             // 故障转移开启：使用配置的值（0 = 禁用超时）
             StreamingTimeoutConfig {
                 first_byte_timeout: self.app_config.streaming_first_byte_timeout as u64,
                 idle_timeout: self.app_config.streaming_idle_timeout as u64,
+                keepalive_secs,
+                loop_guard,
             }
         } else {
             // 故障转移关闭：禁用流式超时检查
             StreamingTimeoutConfig {
                 first_byte_timeout: 0,
                 idle_timeout: 0,
+                keepalive_secs,
+                loop_guard,
             }
         }
     }

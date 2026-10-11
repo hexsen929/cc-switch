@@ -276,6 +276,31 @@ pub async fn set_pii_redaction_config(
         .map_err(|e| e.to_string())
 }
 
+/// 获取某应用的代理可靠性配置（Fork 扩展）
+#[tauri::command]
+pub async fn get_reliability_config(
+    state: tauri::State<'_, AppState>,
+    app_type: String,
+) -> Result<crate::proxy::reliability::ReliabilityConfig, String> {
+    state
+        .db
+        .get_reliability_config(&app_type)
+        .map_err(|e| e.to_string())
+}
+
+/// 设置某应用的代理可靠性配置（Fork 扩展）
+#[tauri::command]
+pub async fn set_reliability_config(
+    state: tauri::State<'_, AppState>,
+    app_type: String,
+    config: crate::proxy::reliability::ReliabilityConfig,
+) -> Result<(), String> {
+    state
+        .db
+        .set_reliability_config(&app_type, &config)
+        .map_err(|e| e.to_string())
+}
+
 // ==================== 局域网网关（Fork 扩展，默认关闭） ====================
 
 /// 列表视图：token 只回末 4 位，避免在管理界面泄露完整明文。caps 允许表随列表回传供编辑。

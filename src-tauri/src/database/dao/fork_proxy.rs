@@ -266,6 +266,32 @@ impl Database {
         self.set_fork_setting(&key, &json)
     }
 
+    /// 获取某应用的代理可靠性配置（默认全关；坏数据回落默认）。
+    pub fn get_reliability_config(
+        &self,
+        app_type: &str,
+    ) -> Result<crate::proxy::reliability::ReliabilityConfig, AppError> {
+        let key = format!("fork_reliability_{app_type}");
+        match self.get_fork_setting(&key)? {
+            Some(raw) if !raw.trim().is_empty() => {
+                Ok(serde_json::from_str(&raw).unwrap_or_default())
+            }
+            _ => Ok(Default::default()),
+        }
+    }
+
+    /// 设置某应用的代理可靠性配置（整体 JSON 覆盖写）。
+    pub fn set_reliability_config(
+        &self,
+        app_type: &str,
+        config: &crate::proxy::reliability::ReliabilityConfig,
+    ) -> Result<(), AppError> {
+        let key = format!("fork_reliability_{app_type}");
+        let json = serde_json::to_string(config)
+            .map_err(|e| AppError::Database(format!("序列化可靠性配置失败: {e}")))?;
+        self.set_fork_setting(&key, &json)
+    }
+
     // ==================== 订阅内多账号故障转移（Fork 扩展） ====================
 
     /// 获取某应用的「订阅内多账号故障转移」开关（默认关闭）。
