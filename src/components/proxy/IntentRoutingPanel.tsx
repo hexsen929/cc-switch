@@ -387,6 +387,101 @@ function RuleCard({
               className="font-mono text-xs"
             />
           </div>
+          <div className="flex flex-wrap items-center gap-1.5">
+            <Button
+              variant={predicate?.compaction ? "solid" : "neutral"}
+              size="sm"
+              disabled={disabled}
+              onClick={() =>
+                updatePredicate({ compaction: !predicate?.compaction })
+              }
+            >
+              {t("proxy.intentRouting.pred.compaction", "压缩阶段")}
+            </Button>
+            <Button
+              variant={predicate?.hasImage ? "solid" : "neutral"}
+              size="sm"
+              disabled={disabled}
+              onClick={() =>
+                updatePredicate({ hasImage: !predicate?.hasImage })
+              }
+            >
+              {t("proxy.intentRouting.pred.hasImage", "带图片")}
+            </Button>
+          </div>
+          <div className="flex flex-wrap items-center gap-1.5">
+            <span className="text-xs text-fg-3">
+              {t("proxy.intentRouting.pred.timeWindow", "时间窗")}
+            </span>
+            {[0, 1, 2, 3, 4, 5, 6].map((d) => {
+              const cur = predicate?.timeWindow ?? {
+                days: [],
+                start: "",
+                end: "",
+              };
+              const on = cur.days.includes(d);
+              return (
+                <Button
+                  key={d}
+                  variant={on ? "solid" : "neutral"}
+                  size="sm"
+                  disabled={disabled}
+                  onClick={() =>
+                    updatePredicate({
+                      timeWindow: {
+                        ...cur,
+                        days: on
+                          ? cur.days.filter((x) => x !== d)
+                          : [...cur.days, d],
+                      },
+                    })
+                  }
+                >
+                  {t(
+                    `proxy.intentRouting.pred.day.${d}`,
+                    ["一", "二", "三", "四", "五", "六", "日"][d],
+                  )}
+                </Button>
+              );
+            })}
+            <Input
+              value={predicate?.timeWindow?.start ?? ""}
+              disabled={disabled}
+              onChange={(e) =>
+                updatePredicate({
+                  timeWindow: {
+                    ...(predicate?.timeWindow ?? {
+                      days: [],
+                      start: "",
+                      end: "",
+                    }),
+                    start: e.target.value,
+                  },
+                })
+              }
+              placeholder="09:00"
+              className="w-20 font-mono text-xs"
+            />
+            <span className="text-xs text-fg-3">–</span>
+            <Input
+              value={predicate?.timeWindow?.end ?? ""}
+              disabled={disabled}
+              onChange={(e) =>
+                updatePredicate({
+                  timeWindow: {
+                    ...(predicate?.timeWindow ?? {
+                      days: [],
+                      start: "",
+                      end: "",
+                    }),
+                    end: e.target.value,
+                  },
+                })
+              }
+              placeholder="18:00"
+              className="w-20 font-mono text-xs"
+            />
+          </div>
         </div>
       )}
       <div className="flex items-center gap-2">

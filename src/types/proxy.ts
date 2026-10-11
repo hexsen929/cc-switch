@@ -339,12 +339,25 @@ export interface IntentBodyFieldMatch {
   contains?: string | null;
 }
 
+/** 本地时间窗：days 空=每天（0=周一..6=周日）；start/end 为 "HH:MM"（留空=全天）。 */
+export interface IntentTimeWindow {
+  days: number[];
+  start: string;
+  end: string;
+}
+
 /** 自定义谓词：各字段可选且 AND，全部提供的条件都满足才命中（空谓词不命中）。 */
 export interface IntentPredicate {
   modelGlob?: string | null;
   bodyField?: IntentBodyFieldMatch | null;
   minInputTokens?: number | null;
   hasTool?: string | null;
+  /** 命中 Claude Code 上下文压缩（compact）请求。 */
+  compaction?: boolean | null;
+  /** 请求体是否带图片内容（多模态）。 */
+  hasImage?: boolean | null;
+  /** 本地时间窗。 */
+  timeWindow?: IntentTimeWindow | null;
 }
 
 /** matcher：内置语义意图 或 自定义谓词（serde internally tagged by `type`）。 */

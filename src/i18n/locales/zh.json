@@ -3927,6 +3927,18 @@
         "subagent": "子代理（subagent）"
       },
       "pred": {
+        "compaction": "压缩阶段",
+        "hasImage": "带图片",
+        "timeWindow": "时间窗",
+        "day": {
+          "0": "一",
+          "1": "二",
+          "2": "三",
+          "3": "四",
+          "4": "五",
+          "5": "六",
+          "6": "日"
+        },
         "modelGlob": "模型名 glob，如 *haiku*（留空不限）",
         "hasTool": "带某工具（type/name 含该子串，留空不限）",
         "minTokens": "最小输入 token 估算（留空不限）",

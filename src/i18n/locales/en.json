@@ -3927,6 +3927,18 @@
         "subagent": "Subagent"
       },
       "pred": {
+        "compaction": "Compaction",
+        "hasImage": "Has image",
+        "timeWindow": "Time window",
+        "day": {
+          "0": "Mon",
+          "1": "Tue",
+          "2": "Wed",
+          "3": "Thu",
+          "4": "Fri",
+          "5": "Sat",
+          "6": "Sun"
+        },
         "modelGlob": "Model-name glob, e.g. *haiku* (blank = any)",
         "hasTool": "Has a tool (type/name contains this substring; blank = any)",
         "minTokens": "Min estimated input tokens (blank = any)",

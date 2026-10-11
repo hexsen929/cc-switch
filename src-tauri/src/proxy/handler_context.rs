@@ -256,11 +256,21 @@ impl RequestContext {
                     .unwrap_or_default();
                 let intent_target: Option<Provider> = if intent_cfg.is_active() {
                     let has_anthropic_beta = headers.contains_key("anthropic-beta");
+                    // 当前本地时间（供「时间窗」谓词用）。chrono::Local 在生产可用；纯函数侧只收上下文。
+                    let time_ctx = {
+                        use chrono::{Datelike, Timelike};
+                        let now = chrono::Local::now();
+                        crate::proxy::intent_routing::TimeContext {
+                            weekday_mon0: now.weekday().num_days_from_monday() as u8,
+                            minute_of_day: (now.hour() * 60 + now.minute()) as u16,
+                        }
+                    };
                     crate::proxy::intent_routing::pick(
                         &intent_cfg,
                         body,
                         has_anthropic_beta,
                         &request_model,
+                        Some(time_ctx),
                     )
                     .and_then(|rule| {
                         match state

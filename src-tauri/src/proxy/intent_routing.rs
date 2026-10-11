@@ -49,6 +49,34 @@ pub struct BodyFieldMatch {
     pub contains: Option<String>,
 }
 
+/// 本地时间窗（Fork 扩展路由维度）。`days` 空 = 每天；否则 0=周一..6=周日。
+/// `start`/`end` 为 24h `"HH:MM"`；留空当作全天。`start<=end` 为日内窗，`start>end` 视为跨午夜窗。
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct TimeWindow {
+    #[serde(default)]
+    pub days: Vec<u8>,
+    #[serde(default)]
+    pub start: String,
+    #[serde(default)]
+    pub end: String,
+}
+
+impl TimeWindow {
+    fn is_set(&self) -> bool {
+        !self.days.is_empty() || !self.start.trim().is_empty() || !self.end.trim().is_empty()
+    }
+}
+
+/// 当前本地时间上下文：由 `handler_context` 计算后传入，保持 matcher 为纯函数、可单测。
+#[derive(Debug, Clone, Copy)]
+pub struct TimeContext {
+    /// 0=周一 .. 6=周日。
+    pub weekday_mon0: u8,
+    /// 当日分钟数 `0..1440`。
+    pub minute_of_day: u16,
+}
+
 /// 自定义谓词：各字段均为「可选且 AND」，全部提供的条件都满足才算命中。
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
 #[serde(rename_all = "camelCase")]
@@ -65,9 +93,20 @@ pub struct Predicate {
     /// tools 里存在 type/name 含该子串的工具。
     #[serde(default)]
     pub has_tool: Option<String>,
+    /// 命中 Claude Code 上下文压缩（compact）请求（机器特征，用户无法手动设置）。
+    #[serde(default)]
+    pub compaction: Option<bool>,
+    /// 请求体是否带图片内容（多模态请求）。
+    #[serde(default)]
+    pub has_image: Option<bool>,
+    /// 本地时间窗；命中需要 `handler_context` 传入当前时间（否则该条件视为未命中）。
+    #[serde(default)]
+    pub time_window: Option<TimeWindow>,
 }
 
 /// 规则的匹配条件：内置语义意图或自定义谓词。
+// Predicate 比 Intent 大是刻意的（配置结构、非热路径高频分配），不值得为此 Box 一层间接。
+#[allow(clippy::large_enum_variant)]
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(tag = "type", rename_all = "lowercase")]
 pub enum Matcher {
@@ -132,6 +171,7 @@ pub fn pick<'a>(
     body: &Value,
     has_anthropic_beta: bool,
     request_model: &str,
+    time: Option<TimeContext>,
 ) -> Option<&'a IntentRule> {
     let est_input_tokens = estimate_input_tokens(body);
     cfg.rules.iter().find(|rule| {
@@ -143,6 +183,7 @@ pub fn pick<'a>(
                 has_anthropic_beta,
                 request_model,
                 est_input_tokens,
+                time,
             )
     })
 }
@@ -159,6 +200,7 @@ fn matcher_hits(
     has_anthropic_beta: bool,
     request_model: &str,
     est_input_tokens: u64,
+    time: Option<TimeContext>,
 ) -> bool {
     match matcher {
         Matcher::Intent { intent } => match intent {
@@ -169,12 +211,18 @@ fn matcher_hits(
             IntentKind::Subagent => is_subagent(body),
         },
         Matcher::Predicate { predicate } => {
-            predicate_hits(predicate, body, request_model, est_input_tokens)
+            predicate_hits(predicate, body, request_model, est_input_tokens, time)
         }
     }
 }
 
-fn predicate_hits(p: &Predicate, body: &Value, request_model: &str, est_input_tokens: u64) -> bool {
+fn predicate_hits(
+    p: &Predicate,
+    body: &Value,
+    request_model: &str,
+    est_input_tokens: u64,
+    time: Option<TimeContext>,
+) -> bool {
     // 空谓词（无任何条件）视为未命中：避免「空规则」误伤所有请求。
     let mut has_condition = false;
 
@@ -201,6 +249,24 @@ fn predicate_hits(p: &Predicate, body: &Value, request_model: &str, est_input_to
     if let Some(tool) = p.has_tool.as_deref().filter(|t| !t.is_empty()) {
         has_condition = true;
         if !has_tool_matching(body, tool) {
+            return false;
+        }
+    }
+    if p.compaction == Some(true) {
+        has_condition = true;
+        if !is_compact(body) {
+            return false;
+        }
+    }
+    if p.has_image == Some(true) {
+        has_condition = true;
+        if !body_has_image(body) {
+            return false;
+        }
+    }
+    if let Some(win) = p.time_window.as_ref().filter(|w| w.is_set()) {
+        has_condition = true;
+        if !time_window_hits(win, time) {
             return false;
         }
     }
@@ -306,6 +372,69 @@ fn has_tool_matching(body: &Value, needle: &str) -> bool {
             .is_some_and(|n| n.contains(needle));
         type_hit || name_hit
     })
+}
+
+/// 请求体是否带图片内容（多模态）。跨 API 保守识别：任意对象的 `type` 含 "image"
+/// （Anthropic `image` / OpenAI `image_url` / Responses `input_image`），或出现
+/// `image_url` / `inlineData` / `inline_data`（Gemini）键。
+fn body_has_image(body: &Value) -> bool {
+    match body {
+        Value::Object(map) => {
+            if map
+                .get("type")
+                .and_then(Value::as_str)
+                .is_some_and(|t| t.contains("image"))
+            {
+                return true;
+            }
+            if map.contains_key("image_url")
+                || map.contains_key("inlineData")
+                || map.contains_key("inline_data")
+            {
+                return true;
+            }
+            map.values().any(body_has_image)
+        }
+        Value::Array(arr) => arr.iter().any(body_has_image),
+        _ => false,
+    }
+}
+
+/// 解析 `"HH:MM"` → 当日分钟数 `0..=1439`；非法返回 None。
+fn parse_hhmm(s: &str) -> Option<u16> {
+    let s = s.trim();
+    let (h, m) = s.split_once(':')?;
+    let h: u16 = h.trim().parse().ok()?;
+    let m: u16 = m.trim().parse().ok()?;
+    if h > 23 || m > 59 {
+        return None;
+    }
+    Some(h * 60 + m)
+}
+
+/// 时间窗命中：需要当前本地时间上下文；无（None）则视为未命中（安全）。
+/// days 空=每天；start/end 为空或非法=全天。start<=end 日内窗；start>end 跨午夜窗。
+fn time_window_hits(win: &TimeWindow, time: Option<TimeContext>) -> bool {
+    let Some(now) = time else {
+        return false;
+    };
+    let day_ok = win.days.is_empty() || win.days.contains(&now.weekday_mon0);
+    if !day_ok {
+        return false;
+    }
+    match (parse_hhmm(&win.start), parse_hhmm(&win.end)) {
+        (Some(start), Some(end)) => {
+            let m = now.minute_of_day;
+            if start <= end {
+                m >= start && m < end
+            } else {
+                // 跨午夜：如 22:00-06:00
+                m >= start || m < end
+            }
+        }
+        // 起止缺失/非法：按「仅限这些星期几、全天」处理。
+        _ => true,
+    }
 }
 
 /// 极简 glob：支持首尾 `*`（`*x`、`x*`、`*x*`、`x`、`*`）。大小写不敏感。
@@ -443,7 +572,7 @@ mod tests {
         )]);
         let body =
             json!({ "model": "claude", "thinking": { "type": "enabled", "budget_tokens": 2048 } });
-        let hit = pick(&c, &body, false, "claude").expect("should hit");
+        let hit = pick(&c, &body, false, "claude", None).expect("should hit");
         assert_eq!(hit.target_provider_id, "p-think");
     }
 
@@ -456,7 +585,7 @@ mod tests {
             "p-think",
         )]);
         let body = json!({ "model": "gpt", "reasoning_effort": "high" });
-        assert!(pick(&c, &body, false, "gpt").is_some());
+        assert!(pick(&c, &body, false, "gpt", None).is_some());
     }
 
     #[test]
@@ -468,7 +597,7 @@ mod tests {
             "p-think",
         )]);
         let body = json!({ "model": "claude", "messages": [] });
-        assert!(pick(&c, &body, false, "claude").is_none());
+        assert!(pick(&c, &body, false, "claude", None).is_none());
     }
 
     #[test]
@@ -481,11 +610,11 @@ mod tests {
         )]);
         let anthropic =
             json!({ "tools": [{ "type": "web_search_20250305", "name": "web_search" }] });
-        assert!(pick(&c, &anthropic, false, "claude").is_some());
+        assert!(pick(&c, &anthropic, false, "claude", None).is_some());
         let openai = json!({ "tools": [{ "type": "web_search_preview" }] });
-        assert!(pick(&c, &openai, false, "gpt").is_some());
+        assert!(pick(&c, &openai, false, "gpt", None).is_some());
         let none = json!({ "tools": [{ "type": "code_interpreter" }] });
-        assert!(pick(&c, &none, false, "gpt").is_none());
+        assert!(pick(&c, &none, false, "gpt", None).is_none());
     }
 
     #[test]
@@ -498,12 +627,12 @@ mod tests {
         )]);
         let body = json!({ "model": "claude", "messages": [] });
         // 无 anthropic-beta → 不是 warmup
-        assert!(pick(&c, &body, false, "claude").is_none());
+        assert!(pick(&c, &body, false, "claude", None).is_none());
         // 有 anthropic-beta + 无 tools → warmup → background
-        assert!(pick(&c, &body, true, "claude").is_some());
+        assert!(pick(&c, &body, true, "claude", None).is_some());
         // 有 tools → 不是 warmup
         let with_tools = json!({ "model": "claude", "tools": [{ "name": "x" }] });
-        assert!(pick(&c, &with_tools, true, "claude").is_none());
+        assert!(pick(&c, &with_tools, true, "claude", None).is_none());
     }
 
     #[test]
@@ -518,7 +647,7 @@ mod tests {
             "model": "claude",
             "messages": [{ "role": "user", "content": "please. CRITICAL: Respond with TEXT ONLY. Do NOT call any tools." }]
         });
-        assert!(pick(&c, &body, false, "claude").is_some());
+        assert!(pick(&c, &body, false, "claude", None).is_some());
     }
 
     #[test]
@@ -530,11 +659,11 @@ mod tests {
             "p-sa",
         )]);
         let meta = json!({ "metadata": { "user_id": "user_agent_123" } });
-        assert!(pick(&c, &meta, false, "claude").is_some());
+        assert!(pick(&c, &meta, false, "claude", None).is_some());
         let marker = json!({ "system": "role __SUBAGENT_MARKER__ x" });
-        assert!(pick(&c, &marker, false, "claude").is_some());
+        assert!(pick(&c, &marker, false, "claude", None).is_some());
         let plain = json!({ "metadata": { "user_id": "alice" } });
-        assert!(pick(&c, &plain, false, "claude").is_none());
+        assert!(pick(&c, &plain, false, "claude", None).is_none());
     }
 
     #[test]
@@ -548,7 +677,7 @@ mod tests {
         )]);
         let body =
             json!({ "model": "claude", "messages": [{ "role": "user", "content": "hello" }] });
-        assert!(pick(&c, &body, false, "claude").is_some());
+        assert!(pick(&c, &body, false, "claude", None).is_some());
     }
 
     #[test]
@@ -563,8 +692,8 @@ mod tests {
             "p-glob",
         )]);
         let body = json!({ "model": "claude-3-5-haiku-20241022" });
-        assert!(pick(&c, &body, false, "claude-3-5-haiku-20241022").is_some());
-        assert!(pick(&c, &body, false, "claude-opus-4").is_none());
+        assert!(pick(&c, &body, false, "claude-3-5-haiku-20241022", None).is_some());
+        assert!(pick(&c, &body, false, "claude-opus-4", None).is_none());
     }
 
     #[test]
@@ -579,11 +708,11 @@ mod tests {
             "p-big",
         )]);
         let small = json!({ "model": "m", "messages": [] });
-        assert!(pick(&c, &small, false, "m").is_none());
+        assert!(pick(&c, &small, false, "m", None).is_none());
         // 构造一个足够大的 body
         let big_text = "x".repeat(5_000_000);
         let big = json!({ "model": "m", "messages": [{ "role": "user", "content": big_text }] });
-        assert!(pick(&c, &big, false, "m").is_some());
+        assert!(pick(&c, &big, false, "m", None).is_some());
     }
 
     #[test]
@@ -602,9 +731,9 @@ mod tests {
             "p-field",
         )]);
         let hit = json!({ "metadata": { "user_id": "x_agent_y" } });
-        assert!(pick(&c, &hit, false, "m").is_some());
+        assert!(pick(&c, &hit, false, "m", None).is_some());
         let miss = json!({ "metadata": { "user_id": "alice" } });
-        assert!(pick(&c, &miss, false, "m").is_none());
+        assert!(pick(&c, &miss, false, "m", None).is_none());
     }
 
     #[test]
@@ -616,7 +745,7 @@ mod tests {
             "p-empty",
         )]);
         let body = json!({ "model": "m" });
-        assert!(pick(&c, &body, false, "m").is_none());
+        assert!(pick(&c, &body, false, "m", None).is_none());
     }
 
     #[test]
@@ -636,7 +765,7 @@ mod tests {
         );
         let c = cfg(vec![r1, r2]);
         let body = json!({ "thinking": { "type": "enabled" } });
-        let hit = pick(&c, &body, false, "m").expect("hit");
+        let hit = pick(&c, &body, false, "m", None).expect("hit");
         assert_eq!(hit.target_provider_id, "p-second");
     }
 
@@ -677,5 +806,100 @@ mod tests {
         assert_eq!(s, r#"{"type":"intent","intent":"web-search"}"#);
         let back: Matcher = serde_json::from_str(&s).unwrap();
         assert_eq!(back, m);
+    }
+
+    fn pred_rule(p: Predicate, provider: &str) -> IntentRule {
+        rule(Matcher::Predicate { predicate: p }, provider)
+    }
+
+    #[test]
+    fn predicate_compaction_matches_only_compact() {
+        let c = cfg(vec![pred_rule(
+            Predicate {
+                compaction: Some(true),
+                ..Default::default()
+            },
+            "p-compact",
+        )]);
+        let compact = json!({
+            "model": "claude",
+            "messages": [ { "role": "user", "content": "CRITICAL: Respond with TEXT ONLY. Do NOT call any tools." } ]
+        });
+        let plain = json!({ "model": "claude", "messages": [ { "role": "user", "content": "hi" } ] });
+        assert!(pick(&c, &compact, false, "claude", None).is_some());
+        assert!(pick(&c, &plain, false, "claude", None).is_none());
+    }
+
+    #[test]
+    fn predicate_has_image_detects_multimodal_shapes() {
+        let c = cfg(vec![pred_rule(
+            Predicate {
+                has_image: Some(true),
+                ..Default::default()
+            },
+            "p-img",
+        )]);
+        let anthropic = json!({ "messages": [ { "role": "user", "content": [
+            { "type": "text", "text": "look" },
+            { "type": "image", "source": { "type": "base64", "data": "x" } }
+        ] } ] });
+        let openai = json!({ "messages": [ { "role": "user", "content": [
+            { "type": "image_url", "image_url": { "url": "data:image/png;base64,x" } }
+        ] } ] });
+        let gemini = json!({ "contents": [ { "parts": [ { "inlineData": { "mimeType": "image/png", "data": "x" } } ] } ] });
+        let text_only = json!({ "messages": [ { "role": "user", "content": "no pics" } ] });
+        assert!(pick(&c, &anthropic, false, "m", None).is_some());
+        assert!(pick(&c, &openai, false, "m", None).is_some());
+        assert!(pick(&c, &gemini, false, "m", None).is_some());
+        assert!(pick(&c, &text_only, false, "m", None).is_none());
+    }
+
+    #[test]
+    fn predicate_time_window_day_and_hour() {
+        let c = cfg(vec![pred_rule(
+            Predicate {
+                time_window: Some(TimeWindow {
+                    days: vec![0, 1, 2, 3, 4], // 周一..周五
+                    start: "09:00".into(),
+                    end: "18:00".into(),
+                }),
+                ..Default::default()
+            },
+            "p-work",
+        )]);
+        let body = json!({ "model": "m" });
+        // 周三 10:30 命中
+        let wed_morning = TimeContext {
+            weekday_mon0: 2,
+            minute_of_day: 10 * 60 + 30,
+        };
+        assert!(pick(&c, &body, false, "m", Some(wed_morning)).is_some());
+        // 周三 20:00 不命中（超出时段）
+        let wed_evening = TimeContext {
+            weekday_mon0: 2,
+            minute_of_day: 20 * 60,
+        };
+        assert!(pick(&c, &body, false, "m", Some(wed_evening)).is_none());
+        // 周日 10:30 不命中（不在 days）
+        let sunday = TimeContext {
+            weekday_mon0: 6,
+            minute_of_day: 10 * 60 + 30,
+        };
+        assert!(pick(&c, &body, false, "m", Some(sunday)).is_none());
+        // 无时间上下文 → 不命中（安全）
+        assert!(pick(&c, &body, false, "m", None).is_none());
+    }
+
+    #[test]
+    fn time_window_overnight_wrap() {
+        let win = TimeWindow {
+            days: vec![],
+            start: "22:00".into(),
+            end: "06:00".into(),
+        };
+        let at = |m: u16| time_window_hits(&win, Some(TimeContext { weekday_mon0: 0, minute_of_day: m }));
+        assert!(at(23 * 60)); // 23:00 命中
+        assert!(at(2 * 60)); // 02:00 命中
+        assert!(!at(12 * 60)); // 12:00 不命中
     }
 }
