@@ -91,11 +91,22 @@ pub struct RequestLog {
 /// 使用量记录器
 pub struct UsageLogger<'a> {
     db: &'a Database,
+    diagnostic_logging: bool,
 }
 
 impl<'a> UsageLogger<'a> {
     pub fn new(db: &'a Database) -> Self {
-        Self { db }
+        Self {
+            db,
+            diagnostic_logging: true,
+        }
+    }
+
+    /// Disabling diagnostics still accounts for attributed gateway usage, but
+    /// never stores the request's model/session/error metadata in request logs.
+    pub fn with_diagnostic_logging(mut self, enabled: bool) -> Self {
+        self.diagnostic_logging = enabled;
+        self
     }
 
     /// 记录成功的请求
@@ -129,6 +140,19 @@ impl<'a> UsageLogger<'a> {
                 INPUT_TOKEN_SEMANTICS_FRESH
             };
         let semantic = UsageSemantic::from_log(log, input_token_semantics);
+        if let Some(key_id) = log.gateway_key_id.as_deref() {
+            Self::record_gateway_usage_on_conn(
+                &conn,
+                &log.request_id,
+                key_id,
+                &semantic,
+                &total_cost,
+                created_at,
+            )?;
+        }
+        if !self.diagnostic_logging {
+            return Ok(());
+        }
         let existing = Self::load_existing_semantic(&conn, &log.request_id)?;
 
         let (request_id, replace_session_log, collision) = match existing {
@@ -221,6 +245,79 @@ impl<'a> UsageLogger<'a> {
             crate::usage_events::notify_log_recorded();
         }
 
+        Ok(())
+    }
+
+    fn record_gateway_usage_on_conn(
+        conn: &rusqlite::Connection,
+        request_id: &str,
+        key_id: &str,
+        semantic: &UsageSemantic,
+        total_cost_usd: &str,
+        created_at: i64,
+    ) -> Result<(), AppError> {
+        let semantic_hash = semantic.sha256();
+        // Diagnostic collisions have deterministic suffixes. Normalize only
+        // this exact suffix so importing those rows and replaying the original
+        // upstream response produce the same durable accounting identity.
+        let collision_suffix = format!(":collision:{semantic_hash}");
+        let base_request_id = request_id
+            .strip_suffix(&collision_suffix)
+            .unwrap_or(request_id);
+        let identity = serde_json::to_vec(&(key_id, base_request_id, semantic_hash))
+            .expect("gateway usage identity is serializable");
+        let usage_id = Sha256::digest(identity)
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect::<String>();
+        let tokens = i64::from(semantic.input_tokens)
+            + i64::from(semantic.output_tokens)
+            + i64::from(semantic.cache_creation_tokens);
+        conn.execute(
+            "INSERT OR IGNORE INTO forkdb.gateway_usage_ledger
+             (usage_id, gateway_key_id, billable_tokens, total_cost_usd, created_at)
+             VALUES (?1, ?2, ?3, ?4, ?5)",
+            rusqlite::params![usage_id, key_id, tokens, total_cost_usd, created_at],
+        )
+        .map_err(|e| AppError::Database(format!("记录网关配额用量失败: {e}")))?;
+        Ok(())
+    }
+
+    /// Called during schema initialization, before diagnostic-log pruning.
+    /// The same identity as live accounting makes repeated migrations/imports
+    /// and subsequent response replays harmless, including collision rows.
+    pub(crate) fn backfill_gateway_usage_on_conn(
+        conn: &rusqlite::Connection,
+    ) -> Result<(), AppError> {
+        let mut statement = conn.prepare(
+            "SELECT request_id, gateway_key_id, app_type, provider_id, model,
+                    input_token_semantics, input_tokens, output_tokens,
+                    cache_read_tokens, cache_creation_tokens, status_code,
+                    total_cost_usd, created_at
+             FROM proxy_request_logs WHERE gateway_key_id IS NOT NULL",
+        )?;
+        let mut rows = statement.query([])?;
+        while let Some(row) = rows.next()? {
+            let semantic = UsageSemantic {
+                app_type: row.get(2)?,
+                provider_id: row.get(3)?,
+                model: row.get(4)?,
+                input_token_semantics: row.get(5)?,
+                input_tokens: row.get::<_, i64>(6)? as u32,
+                output_tokens: row.get::<_, i64>(7)? as u32,
+                cache_read_tokens: row.get::<_, i64>(8)? as u32,
+                cache_creation_tokens: row.get::<_, i64>(9)? as u32,
+                status_code: row.get::<_, i64>(10)? as u16,
+            };
+            Self::record_gateway_usage_on_conn(
+                conn,
+                &row.get::<_, String>(0)?,
+                &row.get::<_, String>(1)?,
+                &semantic,
+                &row.get::<_, String>(11)?,
+                row.get(12)?,
+            )?;
+        }
         Ok(())
     }
 
@@ -545,6 +642,33 @@ mod tests {
         )?;
         assert_eq!(count, 1);
         assert_eq!(crate::usage_events::take_test_notify_count(), 1);
+        Ok(())
+    }
+
+    #[test]
+    fn gateway_usage_survives_disabled_diagnostic_logging_without_request_log(
+    ) -> Result<(), AppError> {
+        let db = Database::memory()?;
+        let mut log = request_log("gateway-only", 10);
+        log.gateway_key_id = Some("key-1".to_string());
+
+        UsageLogger::new(&db)
+            .with_diagnostic_logging(false)
+            .log_request(&log)?;
+
+        let conn = crate::database::lock_conn!(db.conn);
+        let diagnostic_rows: i64 = conn.query_row(
+            "SELECT COUNT(*) FROM proxy_request_logs WHERE request_id = 'gateway-only'",
+            [],
+            |row| row.get(0),
+        )?;
+        let ledger_rows: i64 = conn.query_row(
+            "SELECT COUNT(*) FROM forkdb.gateway_usage_ledger WHERE gateway_key_id = 'key-1'",
+            [],
+            |row| row.get(0),
+        )?;
+        assert_eq!(diagnostic_rows, 0);
+        assert_eq!(ledger_rows, 1);
         Ok(())
     }
 

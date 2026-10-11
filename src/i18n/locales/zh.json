@@ -3922,7 +3922,7 @@
       "intent": {
         "background": "后台/轻量（warmup·compact）",
         "thinking": "扩展思考 / reasoning",
-        "long-context": "超长上下文",
+        "long-context": "超长上下文（估算 ≥100,000 tokens）",
         "web-search": "联网搜索工具",
         "subagent": "子代理（subagent）"
       },

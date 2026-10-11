@@ -47,6 +47,43 @@ use tokio::sync::RwLock;
 
 const PROXY_AUTH_PLACEHOLDER: &str = "PROXY_MANAGED";
 
+/// Credentials and binding resolved once for an entire forwarding attempt, including
+/// Copilot model discovery and endpoint selection before the Authorization header.
+struct PreparedManagedAccount {
+    provider: Provider,
+    auth_provider: &'static str,
+    account_id: String,
+    token: String,
+}
+
+fn provider_with_managed_account(
+    provider: &Provider,
+    auth_provider: &str,
+    account_id: &str,
+) -> Provider {
+    let mut effective = provider.clone();
+    effective
+        .meta
+        .get_or_insert_with(Default::default)
+        .auth_binding = Some(crate::provider::AuthBinding {
+        source: crate::provider::AuthBindingSource::ManagedAccount,
+        auth_provider: Some(auth_provider.to_string()),
+        account_id: Some(account_id.to_string()),
+    });
+    effective
+}
+
+fn is_managed_account_retryable(error: &ProxyError) -> bool {
+    matches!(error, ProxyError::ManagedAccountAuthError(_))
+        || matches!(
+            error,
+            ProxyError::UpstreamError {
+                status: 401 | 403,
+                ..
+            }
+        )
+}
+
 /// Whether the upstream belongs to the OpenCode gateway (`opencode.ai`).
 ///
 /// That gateway (<https://opencode.ai/docs/go/>) expects clients to identify
@@ -366,6 +403,8 @@ pub struct RequestForwarder {
     request_middleware: crate::proxy::request_middleware::RequestMiddlewareConfig,
     /// 声明式请求改写预设（Fork 扩展，无代码「现成中间件」，默认关闭、fail-safe）
     request_rewrite: crate::proxy::request_rewrite::RequestRewriteConfig,
+    /// 路由规则指定的最终模型，在协议转换之前应用。
+    intent_model: Option<String>,
     /// 响应侧可编程中间件（Fork 扩展，onResponse 非流式 / onEvent 流式，默认关闭、fail-open）
     response_middleware: crate::proxy::response_middleware::ResponseMiddlewareConfig,
     /// 出站请求脱敏（Fork 扩展，PII / secret redaction，默认关闭、fail-open）
@@ -427,7 +466,10 @@ impl RequestForwarder {
                 log::debug!("[Middleware] onRequest 已应用 (app={})", app_type.as_str());
             }
             Ok(Err(e)) => {
-                log::warn!("[Middleware] onRequest 执行失败，放行原始请求 (app={}): {e}", app_type.as_str());
+                log::warn!(
+                    "[Middleware] onRequest 执行失败，放行原始请求 (app={}): {e}",
+                    app_type.as_str()
+                );
             }
             Err(join_err) => {
                 log::warn!("[Middleware] onRequest 任务异常，放行原始请求: {join_err}");
@@ -621,6 +663,7 @@ impl RequestForwarder {
             copilot_optimizer_config,
             request_middleware,
             request_rewrite,
+            intent_model: None,
             response_middleware,
             pii_redaction,
             reliability,
@@ -637,6 +680,11 @@ impl RequestForwarder {
     /// 标记为 Stack 模型的请求。
     pub fn stack_request(mut self, stack_request: bool) -> Self {
         self.stack_request = stack_request;
+        self
+    }
+
+    pub fn intent_model(mut self, model: Option<String>) -> Self {
+        self.intent_model = model.filter(|m| !m.is_empty());
         self
     }
 
@@ -772,6 +820,11 @@ impl RequestForwarder {
         };
         if !self.routing_state_enabled() {
             return result;
+        }
+
+        if self.session_client_provided {
+            self.router
+                .remember_successful_provider(app_type_str, &self.session_id, &provider.id);
         }
 
         // 普通闭合熔断状态异步记录，避免阻塞流式首包返回；
@@ -957,6 +1010,145 @@ impl RequestForwarder {
         Some(count)
     }
 
+    fn managed_token_failure(
+        &self,
+        auth_provider: &str,
+        account_id: &str,
+        credentials_rejected: bool,
+        message: String,
+    ) -> ProxyError {
+        if self.subscription_account_failover && credentials_rejected {
+            self.router
+                .record_account_cooldown(auth_provider, account_id);
+            ProxyError::ManagedAccountAuthError(message)
+        } else {
+            ProxyError::AuthError(message)
+        }
+    }
+
+    async fn prepare_managed_account(
+        &self,
+        provider: &Provider,
+        adapter: &dyn ProviderAdapter,
+    ) -> Result<Option<PreparedManagedAccount>, ProxyError> {
+        if !self.subscription_account_failover {
+            return Ok(None);
+        }
+        let Some(app_handle) = self.app_handle.as_ref() else {
+            return Ok(None);
+        };
+        let Some(auth) = adapter.extract_auth(provider) else {
+            return Ok(None);
+        };
+        let (auth_provider, candidates, default_account) = match auth.strategy {
+            AuthStrategy::GitHubCopilot => {
+                let state = app_handle.state::<CopilotAuthState>();
+                let manager = state.0.read().await;
+                let candidates: Vec<String> = manager
+                    .list_accounts()
+                    .await
+                    .into_iter()
+                    .filter(|a| !a.reauth_required)
+                    .map(|a| a.id)
+                    .collect();
+                // list_accounts keeps the configured default first.
+                let default = candidates.first().cloned();
+                ("github_copilot", candidates, default)
+            }
+            AuthStrategy::CodexOAuth => {
+                let state = app_handle.state::<CodexOAuthState>();
+                let candidates = state
+                    .0
+                    .list_accounts()
+                    .await
+                    .into_iter()
+                    .filter(|a| !a.reauth_required)
+                    .map(|a| a.id)
+                    .collect();
+                (
+                    "codex_oauth",
+                    candidates,
+                    state.0.default_account_id().await,
+                )
+            }
+            AuthStrategy::XaiOAuth => {
+                let state = app_handle.state::<XaiOAuthState>();
+                let manager = state.0.read().await;
+                let candidates = manager
+                    .list_accounts()
+                    .await
+                    .into_iter()
+                    .filter(|a| !a.requires_reauth)
+                    .map(|a| a.id)
+                    .collect();
+                ("xai_oauth", candidates, manager.default_account_id().await)
+            }
+            _ => return Ok(None),
+        };
+        let preferred = provider
+            .meta
+            .as_ref()
+            .and_then(|meta| meta.managed_account_id_for(auth_provider))
+            .or(default_account);
+        let Some(account_id) =
+            self.router
+                .choose_managed_account(auth_provider, preferred, &candidates)
+        else {
+            return Ok(None);
+        };
+        // Resolve credentials before model/endpoint discovery. A rejected refresh must
+        // advance the account loop even if no inference request could be sent yet.
+        let token = match auth.strategy {
+            AuthStrategy::GitHubCopilot => {
+                let state = app_handle.state::<CopilotAuthState>();
+                let manager = state.0.read().await;
+                manager
+                    .get_valid_token_for_account(&account_id)
+                    .await
+                    .map_err(|error| {
+                        let rejected = matches!(
+                            error,
+                            CopilotAuthError::GitHubTokenInvalid
+                                | CopilotAuthError::NoCopilotSubscription
+                        );
+                        self.managed_token_failure(
+                            auth_provider,
+                            &account_id,
+                            rejected,
+                            format!("GitHub Copilot 认证失败: {error}"),
+                        )
+                    })?
+            }
+            AuthStrategy::CodexOAuth => {
+                let state = app_handle.state::<CodexOAuthState>();
+                state.0.get_valid_token_for_account(&account_id).await.map_err(|error| {
+                    let rejected = matches!(error,
+                        crate::proxy::providers::codex_oauth_auth::CodexOAuthError::RefreshTokenInvalid);
+                    self.managed_token_failure(auth_provider, &account_id, rejected,
+                        format!("Codex OAuth 认证失败: {error}"))
+                })?
+            }
+            AuthStrategy::XaiOAuth => {
+                let state = app_handle.state::<XaiOAuthState>();
+                let manager = state.0.read().await;
+                manager.get_valid_token_for_account(&account_id).await.map_err(|error| {
+                    let rejected = matches!(error,
+                        crate::proxy::providers::xai_oauth_auth::XaiOAuthError::RefreshTokenInvalid
+                        | crate::proxy::providers::xai_oauth_auth::XaiOAuthError::ReauthRequired(_));
+                    self.managed_token_failure(auth_provider, &account_id, rejected,
+                        format!("xAI OAuth 认证失败: {error}"))
+                })?
+            }
+            _ => unreachable!("only managed auth strategies reach token acquisition"),
+        };
+        Ok(Some(PreparedManagedAccount {
+            provider: provider_with_managed_account(provider, auth_provider, &account_id),
+            auth_provider,
+            account_id,
+            token,
+        }))
+    }
+
     /// 实际转发逻辑（不包含客户端维度的入口/出口计数）
     ///
     /// # Arguments
@@ -1099,11 +1291,10 @@ impl RequestForwarder {
                     .await;
 
                 if account_auth_retries_left > 0
-                    && matches!(
-                        &result,
-                        Err(ProxyError::UpstreamError { status, .. })
-                            if *status == 401 || *status == 403
-                    )
+                    && result
+                        .as_ref()
+                        .err()
+                        .is_some_and(is_managed_account_retryable)
                 {
                     account_auth_retries_left -= 1;
                     log::warn!(
@@ -1114,7 +1305,10 @@ impl RequestForwarder {
                     continue;
                 }
 
-                break result;
+                break result.map_err(|error| match error {
+                    ProxyError::ManagedAccountAuthError(message) => ProxyError::AuthError(message),
+                    other => other,
+                });
             };
 
             match forwarded_result {
@@ -1613,6 +1807,22 @@ impl RequestForwarder {
         codex_upstream_format_out: &mut Option<CodexUpstreamFormat>,
     ) -> Result<(ProxyResponse, Option<String>, Option<String>), ProxyError> {
         *codex_upstream_format_out = None;
+        if matches!(app_type, AppType::Codex)
+            && extensions.get::<super::gateway_auth::AuthedKey>().is_some()
+            && super::providers::is_codex_official_provider(provider)
+        {
+            return Err(ProxyError::Forbidden(
+                "Codex 原生官方登录路由不支持 LAN 网关，请选择可代理的供应商".to_string(),
+            ));
+        }
+        let prepared_account = self.prepare_managed_account(provider, adapter).await?;
+        let provider = prepared_account
+            .as_ref()
+            .map(|account| &account.provider)
+            .unwrap_or(provider);
+        let used_managed_account = prepared_account
+            .as_ref()
+            .map(|account| (account.auth_provider, account.account_id.clone()));
         // 使用适配器提取 base_url
         let mut base_url = adapter.extract_base_url(provider)?;
 
@@ -1706,6 +1916,50 @@ impl RequestForwarder {
             && super::providers::is_codex_responses_endpoint(endpoint);
         let is_copilot_claude_body = is_copilot && !matches!(app_type, AppType::Codex);
 
+        // 先确定供应商模型，再应用声明式模型/system 与意图目标，最后构造协议及 URL。
+        // Codex 的行模型原本在协议转换中覆写，会把提前决定的意图模型覆盖掉。
+        if !self.keeps_resolved_model() && !is_copilot_codex_responses {
+            if codex_responses_to_chat {
+                super::providers::apply_codex_chat_upstream_model(provider, &mut mapped_body);
+            } else if codex_responses_to_anthropic || matches!(app_type, AppType::GrokBuild) {
+                super::providers::apply_codex_upstream_model(provider, &mut mapped_body);
+            }
+        }
+        let before_rewrite_model = mapped_body.get("model").cloned();
+        let mut gemini_url_model = matches!(app_type, AppType::Gemini)
+            .then(|| super::handler_context::extract_gemini_model_from_path(endpoint))
+            .flatten();
+        if self.request_rewrite.is_active() {
+            super::request_rewrite::apply_semantic_rewrite(
+                &mut mapped_body,
+                app_type,
+                &self.request_rewrite,
+            );
+            if let Some(model) = gemini_url_model.as_deref() {
+                let mut model_body = serde_json::json!({"model": model});
+                super::request_rewrite::apply_semantic_rewrite(
+                    &mut model_body,
+                    app_type,
+                    &self.request_rewrite,
+                );
+                gemini_url_model = model_body
+                    .get("model")
+                    .and_then(Value::as_str)
+                    .map(str::to_owned);
+            }
+        }
+        if let Some(model) = &self.intent_model {
+            if matches!(app_type, AppType::Gemini) {
+                if gemini_url_model.is_some() {
+                    gemini_url_model = Some(model.clone());
+                }
+            } else if let Some(obj) = mapped_body.as_object_mut() {
+                obj.insert("model".to_string(), Value::String(model.clone()));
+            }
+        }
+        let explicit_model = self.intent_model.is_some()
+            || before_rewrite_model.as_ref() != mapped_body.get("model");
+
         // The OpenCode gateway wants a stable per-conversation session id (see the
         // injection site below). It has to be derived here: `mapped_body` is moved
         // by the format conversion further down.
@@ -1730,13 +1984,6 @@ impl RequestForwarder {
         } else {
             None
         };
-
-        // Grok Build exposes a stable client-side model profile in config.toml.
-        // Route requests to the provider's real upstream model before applying
-        // the optional Responses -> Chat/Anthropic bridge.
-        if matches!(app_type, AppType::GrokBuild) {
-            super::providers::apply_codex_upstream_model(provider, &mut mapped_body);
-        }
 
         if is_copilot_claude_body {
             mapped_body =
@@ -1979,6 +2226,13 @@ impl RequestForwarder {
                     .as_deref()
                     .unwrap_or_else(|| super::providers::get_claude_api_format(provider));
                 rewrite_claude_transform_endpoint(endpoint, api_format, is_copilot, &mapped_body)
+            } else if let Some(model) = gemini_url_model.as_deref() {
+                (
+                    rewrite_gemini_endpoint_model(endpoint, model)?,
+                    split_endpoint_and_query(endpoint)
+                        .1
+                        .map(ToString::to_string),
+                )
             } else {
                 (
                     endpoint.to_string(),
@@ -2042,11 +2296,13 @@ impl RequestForwarder {
         // 记录映射后的出站模型名（此时 mapped_body 已完成接管映射 / [1m] 剥离 /
         // Copilot 归一化）。格式转换后若 body 仍带 model 字段会在下方刷新覆盖；
         // gemini_native 等模型在 URL 中的格式则保留此处的转换前真值。
-        let mut outbound_model = mapped_body
-            .get("model")
-            .and_then(|m| m.as_str())
-            .filter(|m| !m.is_empty())
-            .map(str::to_string);
+        let mut outbound_model = gemini_url_model.or_else(|| {
+            mapped_body
+                .get("model")
+                .and_then(|m| m.as_str())
+                .filter(|m| !m.is_empty())
+                .map(str::to_string)
+        });
 
         // Codex→Anthropic: when the model name carries the [1m] marker, strip the
         // suffix and add the context-1m beta header.
@@ -2067,9 +2323,6 @@ impl RequestForwarder {
                 log::debug!(
                     "[Codex] Restored or enriched {restored} cached function call item(s) for Chat upstream"
                 );
-            }
-            if !self.keeps_resolved_model() && !is_copilot_codex_responses {
-                super::providers::apply_codex_chat_upstream_model(provider, &mut mapped_body);
             }
             let reasoning_config =
                 super::providers::resolve_codex_chat_reasoning_config(provider, &mapped_body);
@@ -2095,9 +2348,6 @@ impl RequestForwarder {
             }
         } else if codex_responses_to_anthropic {
             let mut mapped_body = mapped_body;
-            if !self.keeps_resolved_model() {
-                super::providers::apply_codex_upstream_model(provider, &mut mapped_body);
-            }
             // Per-provider output ceiling override. Codex does not forward its
             // `model_max_output_tokens` in the request body, so honor the value
             // configured on the provider here — it takes precedence over any
@@ -2231,7 +2481,7 @@ impl RequestForwarder {
                 );
             }
             // Stack 请求只做字段兼容。
-            let upstream_model = if self.keeps_resolved_model() {
+            let upstream_model = if self.keeps_resolved_model() || explicit_model {
                 None
             } else {
                 super::providers::codex_provider_upstream_model(provider)
@@ -2332,13 +2582,10 @@ impl RequestForwarder {
                 }
             }
         }
-        // Fork 扩展：声明式「现成中间件」预设（改模型名 / 覆盖参数 / 注入 system）。
-        // 放在可编程 onRequest JS 之前，让脚本能看到并进一步覆盖预设结果。默认关闭、fail-safe：
-        // 顶层非对象或无规则时为 no-op，绝不破坏请求。
+        // 模型和 system 已在协议转换前应用；最终参数覆盖仍在 onRequest 之前。
         if self.request_rewrite.is_active() {
-            crate::proxy::request_rewrite::apply_request_rewrite(
+            crate::proxy::request_rewrite::apply_final_param_overrides(
                 &mut filtered_body,
-                app_type,
                 &self.request_rewrite,
             );
         }
@@ -2353,8 +2600,10 @@ impl RequestForwarder {
         // Fork 扩展：出站请求脱敏（PII / secret redaction）。放在最后——所有改写/脚本定稿后、
         // 转发前——的唯一收口点，确保连用户脚本注入的内容也一并打码。默认关闭、fail-open。
         if self.pii_redaction.is_active() {
-            let hits =
-                crate::proxy::pii_redaction::apply_pii_redaction(&mut filtered_body, &self.pii_redaction);
+            let hits = crate::proxy::pii_redaction::apply_pii_redaction(
+                &mut filtered_body,
+                &self.pii_redaction,
+            );
             if hits > 0 {
                 log::debug!("[PII] 出站请求已脱敏 {hits} 处");
             }
@@ -2387,10 +2636,6 @@ impl RequestForwarder {
         let mut codex_oauth_account_id: Option<String> = None;
         let mut should_send_codex_oauth_session_headers = false;
 
-        // 订阅内多账号故障转移：记录本次请求实际使用的托管账号 (auth_provider, 本地账号 id)，
-        // 以便收到 401/403/429 时把该账号送入冷却。仅在开关开启时填充。
-        let mut used_managed_account: Option<(&'static str, String)> = None;
-
         // 获取认证头（提前准备，用于内联替换），同时保留仅用于日志脱敏的
         // 精确认证材料。实际日志永远不输出这些值。
         let mut log_secrets: Vec<String> = Vec::new();
@@ -2408,38 +2653,21 @@ impl RequestForwarder {
                         .as_ref()
                         .and_then(|m| m.managed_account_id_for("github_copilot"));
 
-                    // 订阅内多账号故障转移开启时，在健康账号中改选；关闭时沿用原路径
-                    // （绑定账号或默认账号），账号解析行为与改造前完全一致。
-                    let account_id = if self.subscription_account_failover {
-                        let candidates: Vec<String> = copilot_auth
-                            .list_accounts()
-                            .await
-                            .into_iter()
-                            .filter(|a| !a.reauth_required)
-                            .map(|a| a.id)
-                            .collect();
-                        let chosen = self.router.choose_managed_account(
-                            "github_copilot",
-                            bound_account_id.clone(),
-                            &candidates,
-                        );
-                        if let Some(id) = &chosen {
-                            used_managed_account = Some(("github_copilot", id.clone()));
-                        }
-                        chosen
-                    } else {
-                        bound_account_id
-                    };
+                    let account_id = bound_account_id;
 
                     // 根据账号 ID 获取对应 token（向后兼容：无账号 ID 时使用第一个账号）
-                    let token_result = match &account_id {
-                        Some(id) => {
-                            log::debug!("[Copilot] 使用指定账号 {id} 获取 token");
-                            copilot_auth.get_valid_token_for_account(id).await
-                        }
-                        None => {
-                            log::debug!("[Copilot] 使用默认账号获取 token");
-                            copilot_auth.get_valid_token().await
+                    let token_result = if let Some(account) = &prepared_account {
+                        Ok(account.token.clone())
+                    } else {
+                        match &account_id {
+                            Some(id) => {
+                                log::debug!("[Copilot] 使用指定账号 {id} 获取 token");
+                                copilot_auth.get_valid_token_for_account(id).await
+                            }
+                            None => {
+                                log::debug!("[Copilot] 使用默认账号获取 token");
+                                copilot_auth.get_valid_token().await
+                            }
                         }
                     };
 
@@ -2481,45 +2709,24 @@ impl RequestForwarder {
                         .as_ref()
                         .and_then(|m| m.managed_account_id_for("codex_oauth"));
 
-                    // 订阅内多账号故障转移开启时在健康账号中改选；关闭时沿用原路径
-                    // （绑定账号，否则管理器默认账号），行为与改造前一致。
-                    let resolved_account_id = if self.subscription_account_failover {
-                        let candidates: Vec<String> = codex_auth
-                            .list_accounts()
-                            .await
-                            .into_iter()
-                            .filter(|a| !a.reauth_required)
-                            .map(|a| a.id)
-                            .collect();
-                        let preferred = match bound_account_id {
-                            Some(id) => Some(id),
-                            None => codex_auth.default_account_id().await,
-                        };
-                        let chosen = self.router.choose_managed_account(
-                            "codex_oauth",
-                            preferred,
-                            &candidates,
-                        );
-                        if let Some(id) = &chosen {
-                            used_managed_account = Some(("codex_oauth", id.clone()));
-                        }
-                        chosen
-                    } else {
-                        match bound_account_id {
-                            Some(id) => Some(id),
-                            None => codex_auth.default_account_id().await,
-                        }
+                    let resolved_account_id = match bound_account_id {
+                        Some(id) => Some(id),
+                        None => codex_auth.default_account_id().await,
                     };
 
-                    let token_result = match &resolved_account_id {
-                        Some(id) => {
-                            log::debug!("[CodexOAuth] 使用指定账号 {id} 获取 token");
-                            codex_auth.get_valid_token_for_account(id).await
-                        }
-                        None => {
-                            return Err(ProxyError::AuthError(
-                                "Codex OAuth 认证失败: 无可用的 ChatGPT 账号".to_string(),
-                            ));
+                    let token_result = if let Some(account) = &prepared_account {
+                        Ok(account.token.clone())
+                    } else {
+                        match &resolved_account_id {
+                            Some(id) => {
+                                log::debug!("[CodexOAuth] 使用指定账号 {id} 获取 token");
+                                codex_auth.get_valid_token_for_account(id).await
+                            }
+                            None => {
+                                return Err(ProxyError::AuthError(
+                                    "Codex OAuth 认证失败: 无可用的 ChatGPT 账号".to_string(),
+                                ));
+                            }
                         }
                     };
 
@@ -2573,34 +2780,14 @@ impl RequestForwarder {
                         .meta
                         .as_ref()
                         .and_then(|meta| meta.managed_account_id_for("xai_oauth"));
-                    // 订阅内多账号故障转移开启时在健康账号中改选；关闭时沿用原路径。
-                    let account_id = if self.subscription_account_failover {
-                        let candidates: Vec<String> = xai_auth
-                            .list_accounts()
-                            .await
-                            .into_iter()
-                            .filter(|a| !a.requires_reauth)
-                            .map(|a| a.id)
-                            .collect();
-                        let preferred = match bound_account_id {
-                            Some(id) => Some(id),
-                            None => xai_auth.default_account_id().await,
-                        };
-                        let chosen = self.router.choose_managed_account(
-                            "xai_oauth",
-                            preferred,
-                            &candidates,
-                        );
-                        if let Some(id) = &chosen {
-                            used_managed_account = Some(("xai_oauth", id.clone()));
-                        }
-                        chosen
+                    let account_id = bound_account_id;
+                    let token_result = if let Some(account) = &prepared_account {
+                        Ok(account.token.clone())
                     } else {
-                        bound_account_id
-                    };
-                    let token_result = match &account_id {
-                        Some(id) => xai_auth.get_valid_token_for_account(id).await,
-                        None => xai_auth.get_valid_token().await,
+                        match &account_id {
+                            Some(id) => xai_auth.get_valid_token_for_account(id).await,
+                            None => xai_auth.get_valid_token().await,
+                        }
                     };
                     match token_result {
                         Ok(token) => {
@@ -2631,11 +2818,11 @@ impl RequestForwarder {
             // 不会让原本可用的请求变差。
             if auth.strategy == AuthStrategy::GoogleOAuth {
                 if let Some(app_handle) = &self.app_handle {
-                    if let Some(gemini_state) = app_handle
-                        .try_state::<crate::proxy::providers::gemini_token::GeminiTokenState>()
+                    if let Some(gemini_state) =
+                        app_handle
+                            .try_state::<crate::proxy::providers::gemini_token::GeminiTokenState>()
                     {
-                        if let Some(fresh) =
-                            gemini_state.0.valid_access_token(&auth.api_key).await
+                        if let Some(fresh) = gemini_state.0.valid_access_token(&auth.api_key).await
                         {
                             auth.access_token = Some(fresh);
                             log::debug!("[GeminiOAuth] 已刷新 access_token");
@@ -3287,7 +3474,8 @@ impl RequestForwarder {
             // 绝不阻断当前响应（当前请求仍按原样把上游错误回传给客户端）。
             if self.subscription_account_failover && matches!(status_code, 401 | 403 | 429) {
                 if let Some((auth_provider, account_id)) = &used_managed_account {
-                    self.router.record_account_cooldown(auth_provider, account_id);
+                    self.router
+                        .record_account_cooldown(auth_provider, account_id);
                     log::warn!(
                         "[AccountFailover] {auth_provider} 账号 {account_id} 收到 {status_code}，进入 {}s 冷却",
                         crate::proxy::provider_router::ACCOUNT_COOLDOWN_TTL.as_secs()
@@ -3938,6 +4126,37 @@ fn split_endpoint_and_query(endpoint: &str) -> (&str, Option<&str>) {
     endpoint
         .split_once('?')
         .map_or((endpoint, None), |(path, query)| (path, Some(query)))
+}
+
+/// Gemini 把模型编码在路径中；只替换模型段，保留 action 和原始查询参数。
+fn rewrite_gemini_endpoint_model(endpoint: &str, model: &str) -> Result<String, ProxyError> {
+    if super::handler_context::extract_gemini_model_from_path(endpoint).as_deref() == Some(model) {
+        return Ok(endpoint.to_string());
+    }
+    let (path, query) = split_endpoint_and_query(endpoint);
+    let mut segments: Vec<&str> = path.split('/').collect();
+    let Some(index) = segments.iter().position(|s| *s == "models").map(|i| i + 1) else {
+        return Ok(endpoint.to_string());
+    };
+    let Some(original) = segments.get(index) else {
+        return Ok(endpoint.to_string());
+    };
+    let suffix = original.split_once(':').map(|(_, action)| action);
+    let encoded: String = url::form_urlencoded::byte_serialize(model.as_bytes()).collect();
+    let replacement = match suffix {
+        Some(action) => format!("{encoded}:{action}"),
+        None => encoded,
+    };
+    segments[index] = &replacement;
+    let mut rewritten = segments.join("/");
+    if let Some(query) = query {
+        rewritten.push('?');
+        rewritten.push_str(query);
+    }
+    rewritten.parse::<http::uri::PathAndQuery>().map_err(|e| {
+        ProxyError::InvalidRequest(format!("Invalid rewritten Gemini endpoint: {e}"))
+    })?;
+    Ok(rewritten)
 }
 
 fn strip_beta_query(query: Option<&str>) -> Option<String> {
@@ -5007,6 +5226,130 @@ mod tests {
     }
 
     #[test]
+    fn managed_account_binding_is_shared_by_model_endpoint_and_token_lookups() {
+        let mut original = test_provider_with_type(Some("github_copilot"));
+        original.meta.as_mut().unwrap().github_account_id = Some("github.com:old".to_string());
+        let effective =
+            provider_with_managed_account(&original, "github_copilot", "enterprise:new");
+        // All three runtime lookup paths use this accessor; the legacy binding must
+        // not keep pointing endpoint/model discovery at the failed account.
+        assert_eq!(
+            effective
+                .meta
+                .as_ref()
+                .unwrap()
+                .managed_account_id_for("github_copilot")
+                .as_deref(),
+            Some("enterprise:new")
+        );
+        assert_eq!(
+            original
+                .meta
+                .as_ref()
+                .unwrap()
+                .managed_account_id_for("github_copilot")
+                .as_deref(),
+            Some("github.com:old")
+        );
+        assert_eq!(effective.id, original.id);
+        assert_eq!(effective.settings_config, original.settings_config);
+    }
+
+    #[test]
+    fn rejected_managed_refresh_cools_account_and_retries_the_healthy_peer() {
+        let mut forwarder = test_forwarder(Duration::ZERO, Duration::ZERO);
+        forwarder.subscription_account_failover = true;
+        let pool = vec!["a".to_string(), "b".to_string()];
+        let error = forwarder.managed_token_failure(
+            "codex_oauth",
+            "a",
+            true,
+            "refresh token rejected".to_string(),
+        );
+        assert!(is_managed_account_retryable(&error));
+        assert_eq!(
+            super::super::error_mapper::map_proxy_error_to_status(&error),
+            401
+        );
+        assert_eq!(
+            forwarder
+                .router
+                .choose_managed_account("codex_oauth", Some("a".into()), &pool)
+                .as_deref(),
+            Some("b")
+        );
+    }
+
+    #[test]
+    fn managed_refresh_does_not_retry_network_errors_or_when_disabled() {
+        for (enabled, rejected) in [(true, false), (false, true)] {
+            let mut forwarder = test_forwarder(Duration::ZERO, Duration::ZERO);
+            forwarder.subscription_account_failover = enabled;
+            let error = forwarder.managed_token_failure(
+                "github_copilot",
+                "a",
+                rejected,
+                "refresh failed".to_string(),
+            );
+            assert!(matches!(error, ProxyError::AuthError(_)));
+            assert!(!is_managed_account_retryable(&error));
+            assert_eq!(
+                forwarder
+                    .router
+                    .choose_managed_account(
+                        "github_copilot",
+                        Some("a".into()),
+                        &["a".to_string(), "b".to_string()]
+                    )
+                    .as_deref(),
+                Some("a")
+            );
+        }
+        assert!(!is_managed_account_retryable(&ProxyError::UpstreamError {
+            status: 429,
+            body: None
+        }));
+        assert!(is_managed_account_retryable(&ProxyError::UpstreamError {
+            status: 403,
+            body: None
+        }));
+    }
+
+    #[tokio::test]
+    async fn gateway_official_codex_is_rejected_before_native_session_access() {
+        let forwarder = test_forwarder(Duration::ZERO, Duration::ZERO);
+        let mut provider = test_provider_with_type(None);
+        provider.id = crate::database::CODEX_OFFICIAL_PROVIDER_ID.to_string();
+        provider.category = Some("official".to_string());
+        let mut extensions = Extensions::new();
+        extensions.insert(super::super::gateway_auth::AuthedKey {
+            id: "gateway-key".to_string(),
+            name: "test".to_string(),
+            allowed_apps: vec![],
+            allowed_providers: vec![],
+            allowed_models: vec![],
+            limit_window: "none".to_string(),
+            limit_tokens: None,
+            limit_cost_usd: None,
+        });
+        let adapter = get_adapter(&AppType::Codex).unwrap();
+        let result = forwarder
+            .forward(
+                &AppType::Codex,
+                &http::Method::POST,
+                &provider,
+                "/v1/responses",
+                &json!({"model":"gpt-5"}),
+                &HeaderMap::new(),
+                &extensions,
+                adapter.as_ref(),
+                &mut None,
+            )
+            .await;
+        assert!(matches!(result, Err(ProxyError::Forbidden(message)) if message.contains("LAN")));
+    }
+
+    #[test]
     fn conversation_fingerprint_is_stable_per_conversation() {
         let turn1 = json!({
             "system": "You are an assistant.",
@@ -5174,8 +5517,10 @@ mod tests {
             rectifier_config: RectifierConfig::default(),
             optimizer_config: OptimizerConfig::default(),
             copilot_optimizer_config: CopilotOptimizerConfig::default(),
-            request_middleware: crate::proxy::request_middleware::RequestMiddlewareConfig::default(),
+            request_middleware: crate::proxy::request_middleware::RequestMiddlewareConfig::default(
+            ),
             request_rewrite: crate::proxy::request_rewrite::RequestRewriteConfig::default(),
+            intent_model: None,
             response_middleware:
                 crate::proxy::response_middleware::ResponseMiddlewareConfig::default(),
             pii_redaction: crate::proxy::pii_redaction::PiiRedactionConfig::default(),

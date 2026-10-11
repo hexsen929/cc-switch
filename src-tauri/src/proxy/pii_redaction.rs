@@ -6,7 +6,7 @@
 //!
 //! 安全第一：
 //! - 默认关闭；只有 `enabled` 且至少启用一条内置或自定义规则时才生效（`is_active`）。
-//! - 只在「消息文本」位置替换（键为 text/system/instructions/content/input 的字符串值），
+//! - 只在「消息文本」位置替换（text/system/instructions/content/input 及工具结果 output），
 //!   绝不碰 model / role / type / id / url 等结构字段，避免损坏请求。
 //! - fail-open：正则编译失败、配置为空一律原样放行，绝不阻断或破坏用户请求。
 
@@ -81,26 +81,30 @@ impl PiiRedactionConfig {
     }
 }
 
-/// 内置高置信度正则（保守，尽量低误伤）。
+/// 内置高置信度正则（保守，尽量低误伤）。敏感值由 ASCII 字符组成，因此使用 ASCII
+/// 单词边界：允许中文/日文紧邻，同时不匹配更长 ASCII 标识符或数字串中的子串。
 fn builtin_patterns(b: &BuiltinToggles) -> Vec<(&'static str, &'static str)> {
     let mut out = Vec::new();
     if b.credit_card {
         out.push((
             "card",
-            r"\b(?:4\d{12}(?:\d{3})?|5[1-5]\d{14}|3[47]\d{13}|6(?:011|5\d{2})\d{12})\b",
+            r"(?-u:\b)(?:4[0-9]{12}(?:[0-9]{3})?|5[1-5][0-9]{14}|3[47][0-9]{13}|6(?:011|5[0-9]{2})[0-9]{12})(?-u:\b)",
         ));
     }
     if b.us_ssn {
-        out.push(("ssn", r"\b\d{3}-\d{2}-\d{4}\b"));
+        out.push(("ssn", r"(?-u:\b)[0-9]{3}-[0-9]{2}-[0-9]{4}(?-u:\b)"));
     }
     if b.iban {
-        out.push(("iban", r"\b[A-Z]{2}\d{2}[A-Z0-9]{11,30}\b"));
+        out.push(("iban", r"(?-u:\b)[A-Z]{2}[0-9]{2}[A-Z0-9]{11,30}(?-u:\b)"));
     }
     if b.email {
-        out.push(("email", r"\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b"));
+        out.push((
+            "email",
+            r"(?-u:\b)[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}(?-u:\b)",
+        ));
     }
     if b.aws_access_key_id {
-        out.push(("aws_key", r"\b(?:AKIA|ASIA)[0-9A-Z]{16}\b"));
+        out.push(("aws_key", r"(?-u:\b)(?:AKIA|ASIA)[0-9A-Z]{16}(?-u:\b)"));
     }
     if b.private_key_block {
         out.push((
@@ -109,7 +113,10 @@ fn builtin_patterns(b: &BuiltinToggles) -> Vec<(&'static str, &'static str)> {
         ));
     }
     if b.jwt {
-        out.push(("jwt", r"eyJ[A-Za-z0-9_-]+\.eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+"));
+        out.push((
+            "jwt",
+            r"eyJ[A-Za-z0-9_-]+\.eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+",
+        ));
     }
     out
 }
@@ -145,7 +152,10 @@ fn compile_rules(cfg: &PiiRedactionConfig) -> Vec<(String, regex::Regex)> {
 /// 这些键的字符串值是「消息文本」，可安全脱敏；跨 Anthropic / OpenAI(chat/responses) / Gemini
 /// 通用（system / instructions / content(字符串) / input(字符串) / 任意 text 块）。
 fn is_text_key(key: &str) -> bool {
-    matches!(key, "text" | "system" | "instructions" | "content" | "input")
+    matches!(
+        key,
+        "text" | "system" | "instructions" | "content" | "input"
+    )
 }
 
 fn default_placeholder(label: &str) -> String {
@@ -170,7 +180,7 @@ fn redact_str(input: &str, rules: &[(String, regex::Regex)], template: &str) -> 
         if re.is_match(&out) {
             hits += re.find_iter(&out).count();
             let repl = render_placeholder(template, label);
-            out = re.replace_all(&out, repl.as_str()).into_owned();
+            out = re.replace_all(&out, regex::NoExpand(&repl)).into_owned();
         }
     }
     (out, hits)
@@ -184,8 +194,14 @@ fn redact_value(
 ) {
     match value {
         Value::Object(map) => {
+            // Responses 的工具结果使用 output，而不是消息的 content；只识别这些
+            // 已知类型，避免把 schema/config 中恰好名为 output 的字符串当作消息。
+            let is_tool_output = matches!(
+                map.get("type").and_then(Value::as_str),
+                Some("function_call_output" | "custom_tool_call_output" | "tool_search_output")
+            );
             for (key, val) in map.iter_mut() {
-                if is_text_key(key) {
+                if is_text_key(key) || (is_tool_output && key == "output") {
                     if let Value::String(s) = val {
                         let (red, n) = redact_str(s, rules, template);
                         if n > 0 {
@@ -269,7 +285,10 @@ mod tests {
         // 结构字段不动
         assert_eq!(body["model"], json!("claude-sonnet-4-5"));
         assert_eq!(body["messages"][0]["role"], json!("user"));
-        assert_eq!(body["messages"][1]["content"][1]["source"]["url"], json!("https://x/y.png"));
+        assert_eq!(
+            body["messages"][1]["content"][1]["source"]["url"],
+            json!("https://x/y.png")
+        );
         // 文本被打码
         let sys = body["system"].as_str().unwrap();
         assert!(!sys.contains("bob@example.com") && !sys.contains("123-45-6789"));
@@ -293,10 +312,101 @@ mod tests {
             placeholder: "<<{label}>>".into(),
         };
         assert_eq!(apply_pii_redaction(&mut body, &cfg), 1);
+        assert_eq!(body["messages"][0]["content"], json!("token=<<apiKey>>"));
+    }
+
+    #[test]
+    fn redacts_responses_tool_outputs_like_anthropic_and_chat_results() {
+        let mut body = json!({
+            "input": [
+                { "type": "function_call_output", "call_id": "call_1", "output": "alice@example.com" },
+                { "type": "custom_tool_call_output", "call_id": "call_2", "output": "alice@example.com" },
+                { "type": "tool_search_output", "call_id": "call_3", "output": "alice@example.com" },
+                { "type": "function_call_output", "call_id": "call_4", "output": [
+                    { "type": "input_text", "text": "alice@example.com" }
+                ] }
+            ],
+            "messages": [
+                { "role": "user", "content": [
+                    { "type": "tool_result", "tool_use_id": "call_1", "content": "alice@example.com" }
+                ] },
+                { "role": "tool", "tool_call_id": "call_1", "content": "alice@example.com" }
+            ],
+            "output": "schema@example.com",
+            "tools": [{ "type": "function", "output": "schema@example.com" }]
+        });
+
+        assert_eq!(apply_pii_redaction(&mut body, &cfg_builtin()), 6);
+        for item in body["input"].as_array().unwrap().iter().take(3) {
+            assert_eq!(item["output"], "[REDACTED:email]");
+        }
+        assert_eq!(body["input"][3]["output"][0]["text"], "[REDACTED:email]");
         assert_eq!(
-            body["messages"][0]["content"],
-            json!("token=<<apiKey>>")
+            body["messages"][0]["content"][0]["content"],
+            "[REDACTED:email]"
         );
+        assert_eq!(body["messages"][1]["content"], "[REDACTED:email]");
+        assert_eq!(body["input"][0]["call_id"], "call_1");
+        assert_eq!(body["output"], "schema@example.com");
+        assert_eq!(body["tools"][0]["output"], "schema@example.com");
+    }
+
+    #[test]
+    fn builtin_boundaries_allow_adjacent_chinese_and_japanese() {
+        let cfg = PiiRedactionConfig {
+            enabled: true,
+            builtins: BuiltinToggles {
+                credit_card: true,
+                us_ssn: true,
+                iban: true,
+                email: true,
+                aws_access_key_id: true,
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        for (input, expected) in [
+            (
+                "卡号4111111111111111，请处理",
+                "卡号[REDACTED:card]，请处理",
+            ),
+            ("番号123-45-6789です", "番号[REDACTED:ssn]です"),
+            ("账户GB82WEST12345698765432结束", "账户[REDACTED:iban]结束"),
+            ("邮箱alice@example.com请联系", "邮箱[REDACTED:email]请联系"),
+            ("密钥AKIAIOSFODNN7EXAMPLE结束", "密钥[REDACTED:aws_key]结束"),
+        ] {
+            let mut body = json!({ "input": input });
+            assert_eq!(apply_pii_redaction(&mut body, &cfg), 1, "{input}");
+            assert_eq!(body["input"], expected);
+        }
+
+        let mut body = json!({
+            "input": "x4111111111111111 41111111111111111 AKIAIOSFODNN7EXAMPLEZ x123-45-6789 123-45-67890"
+        });
+        let original = body.clone();
+        assert_eq!(apply_pii_redaction(&mut body, &cfg), 0);
+        assert_eq!(body, original);
+    }
+
+    #[test]
+    fn placeholder_and_rule_labels_are_literal_not_capture_expansions() {
+        let mut cfg = cfg_builtin();
+        cfg.placeholder = "[REDACTED:$0:${secret}]".into();
+        let mut body = json!({ "input": "alice@example.com" });
+        assert_eq!(apply_pii_redaction(&mut body, &cfg), 1);
+        assert_eq!(body["input"], "[REDACTED:$0:${secret}]");
+
+        let cfg = PiiRedactionConfig {
+            enabled: true,
+            custom_rules: vec![CustomRule {
+                name: "$0".into(),
+                pattern: "sk-[A-Za-z0-9]+".into(),
+            }],
+            ..Default::default()
+        };
+        let mut body = json!({ "input": "token=sk-SECRET123" });
+        assert_eq!(apply_pii_redaction(&mut body, &cfg), 1);
+        assert_eq!(body["input"], "token=[REDACTED:$0]");
     }
 
     #[test]
@@ -316,8 +426,9 @@ mod tests {
         };
         // 非法规则被跳过，但 email 内置仍生效。
         assert_eq!(apply_pii_redaction(&mut body, &cfg), 1);
-        assert!(body["content"].as_str().unwrap().contains("[REDACTED:email]"));
+        assert!(body["content"]
+            .as_str()
+            .unwrap()
+            .contains("[REDACTED:email]"));
     }
 }
-
-

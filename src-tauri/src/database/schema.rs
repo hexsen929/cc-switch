@@ -370,6 +370,7 @@ impl Database {
         // 局域网网关 per-key 配额窗口按 (gateway_key_id, created_at) 聚合用量，建索引加速。
         conn.execute("CREATE INDEX IF NOT EXISTS idx_request_logs_gateway_key ON proxy_request_logs(gateway_key_id, created_at)", [])
             .map_err(|e| AppError::Database(e.to_string()))?;
+        Self::create_gateway_usage_ledger_on_conn(conn)?;
         conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_request_logs_model ON proxy_request_logs(model)",
             [],
@@ -740,6 +741,7 @@ impl Database {
             // 迁移收尾统一补 fork 私有列：见 ensure_fork_owned_columns 的说明，
             // 已经停在最新版本的库不会再进上面的 while，只能靠这一步兜住。
             Self::ensure_fork_owned_columns(conn)?;
+            Self::backfill_gateway_usage_ledger_on_conn(conn)?;
             // Both old fork and upstream used schema v20 for different changes.
             // A v20 fork database still needs upstream's Pi MCP column.
             if Self::table_exists(conn, "mcp_servers")? {
@@ -1891,6 +1893,51 @@ impl Database {
             )?;
         }
         Ok(())
+    }
+
+    /// Gateway quota accounting is independent of optional diagnostic logs and
+    /// their retention. Keep only opaque dedup IDs and the amounts needed for
+    /// quota windows; no model, session, prompt, or response metadata is stored.
+    fn create_gateway_usage_ledger_on_conn(conn: &Connection) -> Result<(), AppError> {
+        super::ensure_fork_database_attached(conn)?;
+        conn.execute_batch(
+            "CREATE TABLE IF NOT EXISTS forkdb.gateway_usage_ledger (
+                usage_id TEXT PRIMARY KEY,
+                gateway_key_id TEXT NOT NULL,
+                billable_tokens INTEGER NOT NULL,
+                total_cost_usd TEXT NOT NULL,
+                created_at INTEGER NOT NULL
+             );
+             CREATE INDEX IF NOT EXISTS forkdb.idx_gateway_usage_key_window
+             ON gateway_usage_ledger(gateway_key_id, created_at);",
+        )
+        .map_err(|e| AppError::Database(format!("创建网关配额账本失败: {e}")))
+    }
+
+    pub(crate) fn backfill_gateway_usage_ledger_on_conn(conn: &Connection) -> Result<(), AppError> {
+        Self::create_gateway_usage_ledger_on_conn(conn)?;
+        // Old schemas without gateway attribution cannot contain quota usage.
+        // Some isolated migrations also operate on intentionally partial tables.
+        for column in [
+            "gateway_key_id",
+            "request_id",
+            "app_type",
+            "provider_id",
+            "model",
+            "input_token_semantics",
+            "input_tokens",
+            "output_tokens",
+            "cache_read_tokens",
+            "cache_creation_tokens",
+            "status_code",
+            "total_cost_usd",
+            "created_at",
+        ] {
+            if !Self::has_column(conn, "proxy_request_logs", column)? {
+                return Ok(());
+            }
+        }
+        crate::proxy::usage::logger::UsageLogger::backfill_gateway_usage_on_conn(conn)
     }
 
     /// 插入默认模型定价数据
@@ -4016,8 +4063,8 @@ mod tests {
     // 必须先补列、再建 (gateway_key_id, created_at) 索引，否则 CREATE INDEX 会报
     // 「no such column: gateway_key_id」导致数据库初始化失败。
     #[test]
-    fn create_tables_backfills_gateway_key_id_before_indexing_existing_logs(
-    ) -> Result<(), AppError> {
+    fn create_tables_backfills_gateway_key_id_before_indexing_existing_logs() -> Result<(), AppError>
+    {
         let conn = Connection::open_in_memory()?;
         conn.execute("ATTACH DATABASE ':memory:' AS forkdb", [])?;
         // 模拟升级前的 proxy_request_logs：带 data_source、但没有 gateway_key_id。

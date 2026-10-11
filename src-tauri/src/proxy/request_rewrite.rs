@@ -86,14 +86,27 @@ impl RequestRewriteConfig {
     }
 }
 
-/// 就地应用声明式改写。顶层非对象时为 no-op；调用方应已校验 `is_active()`。
+/// 单阶段入口（用于独立调用）；代理将语义改写和最终参数覆盖分两阶段执行。
+#[cfg(test)]
 pub fn apply_request_rewrite(body: &mut Value, app_type: &AppType, cfg: &RequestRewriteConfig) {
+    apply_semantic_rewrite(body, app_type, cfg);
+    apply_final_param_overrides(body, cfg);
+}
+
+/// 模型与 system 必须在协议转换、URL 构造之前应用。
+pub fn apply_semantic_rewrite(body: &mut Value, app_type: &AppType, cfg: &RequestRewriteConfig) {
     let Some(obj) = body.as_object_mut() else {
         return;
     };
     apply_model_map(obj, &cfg.model_map);
-    apply_param_overrides(obj, &cfg.param_overrides);
     apply_system_prompt(obj, app_type, &cfg.system_prompt);
+}
+
+/// 参数覆盖保留出站协议语义，并仍在 onRequest 脚本前执行。
+pub fn apply_final_param_overrides(body: &mut Value, cfg: &RequestRewriteConfig) {
+    if let Some(obj) = body.as_object_mut() {
+        apply_param_overrides(obj, &cfg.param_overrides);
+    }
 }
 
 fn apply_model_map(obj: &mut Map<String, Value>, rules: &[ModelMapRule]) {
@@ -360,7 +373,10 @@ mod tests {
         };
         let mut body = json!({ "model": "m", "messages": [] });
         apply_request_rewrite(&mut body, &AppType::Codex, &cfg);
-        assert!(body.get("system").is_none(), "non-Claude must stay untouched");
+        assert!(
+            body.get("system").is_none(),
+            "non-Claude must stay untouched"
+        );
     }
 
     #[test]

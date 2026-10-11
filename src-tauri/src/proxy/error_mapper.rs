@@ -50,7 +50,7 @@ pub fn map_proxy_error_to_status(error: &ProxyError) -> u16 {
         ProxyError::ConfigError(_) | ProxyError::InvalidRequest(_) => 400,
 
         // 认证错误：401 Unauthorized
-        ProxyError::AuthError(_) => 401,
+        ProxyError::AuthError(_) | ProxyError::ManagedAccountAuthError(_) => 401,
 
         // 网关密钥 caps 拒绝：403 Forbidden
         ProxyError::Forbidden(_) => 403,

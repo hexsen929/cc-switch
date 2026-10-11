@@ -98,7 +98,10 @@ impl Database {
     /// 避免 rotate / usage 策略逐请求换家导致上游 prompt 缓存失效。
     pub fn get_provider_sticky_enabled(&self, app_type: &str) -> Result<bool, AppError> {
         let key = format!("fork_routing_sticky_{app_type}");
-        Ok(Self::parse_setting_bool(self.get_fork_setting(&key)?, false))
+        Ok(Self::parse_setting_bool(
+            self.get_fork_setting(&key)?,
+            false,
+        ))
     }
 
     /// 设置某应用的会话粘性开关
@@ -116,7 +119,10 @@ impl Database {
     /// 获取某应用的 onRequest 中间件开关（默认关闭）
     pub fn get_request_middleware_enabled(&self, app_type: &str) -> Result<bool, AppError> {
         let key = format!("fork_request_middleware_enabled_{app_type}");
-        Ok(Self::parse_setting_bool(self.get_fork_setting(&key)?, false))
+        Ok(Self::parse_setting_bool(
+            self.get_fork_setting(&key)?,
+            false,
+        ))
     }
 
     /// 设置某应用的 onRequest 中间件开关
@@ -304,7 +310,10 @@ impl Database {
         app_type: &str,
     ) -> Result<bool, AppError> {
         let key = format!("fork_subscription_account_failover_{app_type}");
-        Ok(Self::parse_setting_bool(self.get_fork_setting(&key)?, false))
+        Ok(Self::parse_setting_bool(
+            self.get_fork_setting(&key)?,
+            false,
+        ))
     }
 
     /// 设置某应用的「订阅内多账号故障转移」开关
@@ -704,9 +713,7 @@ impl Database {
             )
             .map_err(|e| AppError::Database(e.to_string()))?;
         }
-        Ok(self
-            .find_gateway_key_by_token(&token)?
-            .unwrap_or_default())
+        Ok(self.find_gateway_key_by_token(&token)?.unwrap_or_default())
     }
 
     /// 轮换 token（保留 id/name/enabled）。id 不存在返回 None。
@@ -770,7 +777,8 @@ impl Database {
         allowed_models: &[String],
     ) -> Result<(), AppError> {
         let apps = serde_json::to_string(allowed_apps).unwrap_or_else(|_| "[]".to_string());
-        let providers = serde_json::to_string(allowed_providers).unwrap_or_else(|_| "[]".to_string());
+        let providers =
+            serde_json::to_string(allowed_providers).unwrap_or_else(|_| "[]".to_string());
         let models = serde_json::to_string(allowed_models).unwrap_or_else(|_| "[]".to_string());
         let conn = lock_conn!(self.conn);
         conn.execute(
@@ -808,7 +816,7 @@ impl Database {
         Ok(())
     }
 
-    /// 汇总某网关密钥在 [since_epoch, 现在] 内的用量（Slice D 配额判定）。
+    /// 从独立账本汇总某网关密钥在窗口内的用量，不受诊断日志开关/清理影响。
     /// 返回 (计费 token 总量, 美元花费总额)。计费 token = 输入 + 输出 + 缓存写（不含缓存读）。
     /// 花费直接取 total_cost_usd（已含各维度）。无记录/读取失败由调用方 fail-open。
     pub fn sum_gateway_key_usage(
@@ -819,9 +827,9 @@ impl Database {
         let conn = lock_conn!(self.conn);
         conn.query_row(
             "SELECT
-                 COALESCE(SUM(input_tokens + output_tokens + cache_creation_tokens), 0),
+                 COALESCE(SUM(billable_tokens), 0),
                  COALESCE(SUM(CAST(total_cost_usd AS REAL)), 0.0)
-             FROM proxy_request_logs
+             FROM forkdb.gateway_usage_ledger
              WHERE gateway_key_id = ?1 AND created_at >= ?2",
             rusqlite::params![key_id, since_epoch],
             |row| Ok((row.get::<_, i64>(0)?, row.get::<_, f64>(1)?)),
@@ -891,7 +899,10 @@ mod gateway_key_tests {
         assert_eq!(rotated.id, k.id);
         // 旧 token 不再有效。
         assert!(db.find_gateway_key_by_token(&old_token).unwrap().is_none());
-        assert!(db.find_gateway_key_by_token(&rotated.token).unwrap().is_some());
+        assert!(db
+            .find_gateway_key_by_token(&rotated.token)
+            .unwrap()
+            .is_some());
     }
 
     #[test]
@@ -918,7 +929,10 @@ mod gateway_key_tests {
     #[test]
     fn find_unknown_token_returns_none() {
         let db = db();
-        assert!(db.find_gateway_key_by_token("ccs-missing").unwrap().is_none());
+        assert!(db
+            .find_gateway_key_by_token("ccs-missing")
+            .unwrap()
+            .is_none());
     }
 
     #[test]
@@ -967,7 +981,8 @@ mod gateway_key_tests {
         assert_eq!(got.limit_cost_usd, Some(2.5));
 
         // 非法窗口归一为 none；上限置空。
-        db.set_gateway_key_limits(&k.id, "year", None, None).unwrap();
+        db.set_gateway_key_limits(&k.id, "year", None, None)
+            .unwrap();
         let got = db.find_gateway_key_by_token(&k.token).unwrap().unwrap();
         assert_eq!(got.limit_window, "none");
         assert!(got.limit_tokens.is_none());
@@ -1014,6 +1029,13 @@ mod gateway_key_tests {
         insert_log(&db, "r4", Some("k2"), 1_200, 7, 7, 0, "1.00"); // 别的 key
         insert_log(&db, "r5", None, 1_200, 99, 99, 0, "9.00"); // 无归因
 
+        // Existing attributed logs are migrated before quota checks start.
+        {
+            let conn = db.conn.lock().unwrap();
+            Database::backfill_gateway_usage_ledger_on_conn(&conn).unwrap();
+            Database::backfill_gateway_usage_ledger_on_conn(&conn).unwrap();
+        }
+
         let (tokens, cost) = db.sum_gateway_key_usage("k1", 1_000).unwrap();
         assert_eq!(tokens, 17 + 30);
         assert!((cost - 0.75).abs() < 1e-9);
@@ -1031,5 +1053,14 @@ mod gateway_key_tests {
         let (t4, c4) = db.sum_gateway_key_usage("nobody", 0).unwrap();
         assert_eq!(t4, 0);
         assert!(c4.abs() < 1e-9);
+
+        // Clearing diagnostics must never replenish a key's quota. Re-running
+        // the migration after cleanup also leaves the durable ledger intact.
+        {
+            let conn = db.conn.lock().unwrap();
+            conn.execute("DELETE FROM proxy_request_logs", []).unwrap();
+            Database::backfill_gateway_usage_ledger_on_conn(&conn).unwrap();
+        }
+        assert_eq!(db.sum_gateway_key_usage("k1", 1_000).unwrap(), (47, 0.75));
     }
 }

@@ -871,7 +871,10 @@ pub(crate) enum TrayUsageSource {
 ///
 /// 也供额度感知路由（Smart/Pace）复用：把 Provider 归到用量来源三类，是只读分类，
 /// 不触发任何缓存失效。
-pub(crate) fn tray_usage_source(app_type: &AppType, provider: &Provider) -> Option<TrayUsageSource> {
+pub(crate) fn tray_usage_source(
+    app_type: &AppType,
+    provider: &Provider,
+) -> Option<TrayUsageSource> {
     if *app_type == AppType::Codex {
         if let Some(account_id) = managed_codex_account_id(provider) {
             // Match ProviderCard: managed accounts query by default until the

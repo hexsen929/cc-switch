@@ -169,7 +169,10 @@ mod tests {
         // 够新 → true
         assert!(snapshot_fresh(Some(now - 1_000), now));
         // 超过 TTL → false
-        assert!(!snapshot_fresh(Some(now - (QUOTA_SNAPSHOT_TTL_MS + 1)), now));
+        assert!(!snapshot_fresh(
+            Some(now - (QUOTA_SNAPSHOT_TTL_MS + 1)),
+            now
+        ));
         // 无时间戳 → 视为不新鲜（需刷新）
         assert!(!snapshot_fresh(None, now));
     }

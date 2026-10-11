@@ -79,6 +79,8 @@ pub struct RequestContext {
     pub request_middleware: crate::proxy::request_middleware::RequestMiddlewareConfig,
     /// 声明式请求改写预设（Fork 扩展，无代码「现成中间件」，默认关闭）
     pub request_rewrite: crate::proxy::request_rewrite::RequestRewriteConfig,
+    /// 意图路由指定的上游模型，与供应商别名映射独立。
+    pub intent_model: Option<String>,
     /// 响应侧可编程中间件（Fork 扩展，onResponse / onEvent，默认关闭）
     pub response_middleware: crate::proxy::response_middleware::ResponseMiddlewareConfig,
     /// 出站请求脱敏（Fork 扩展，PII / secret redaction，默认关闭）
@@ -92,33 +94,6 @@ pub struct RequestContext {
     /// Fork：命中的局域网网关密钥 id（非环回且带有效 key 时存在）。用于把本次请求的用量
     /// 归因到该密钥，供 per-key 配额窗口（Slice D）统计。环回免 key 请求为 None。
     pub gateway_key_id: Option<String>,
-}
-
-/// 意图路由命中且带模型改写时：复用「声明式请求改写」的 model-map 把上游模型改写成目标。
-///
-/// - 若用户已开启 request_rewrite：在其 model_map 最前插入一条精确规则（优先于用户已有规则，
-///   `apply_request_rewrite` 命中精确匹配即返回）。
-/// - 若未开启：用一条「仅含该规则且开启」的全新配置替换本地副本——绝不激活用户原本关闭的其它规则，
-///   因此在意图路由关闭/未命中时行为与改造前逐字节一致。
-fn inject_intent_model_rewrite(
-    rewrite: &mut crate::proxy::request_rewrite::RequestRewriteConfig,
-    from_model: &str,
-    to_model: &str,
-) {
-    use crate::proxy::request_rewrite::{ModelMapRule, RequestRewriteConfig};
-    let rule = ModelMapRule {
-        from: from_model.to_string(),
-        to: to_model.to_string(),
-    };
-    if rewrite.enabled {
-        rewrite.model_map.insert(0, rule);
-    } else {
-        *rewrite = RequestRewriteConfig {
-            enabled: true,
-            model_map: vec![rule],
-            ..Default::default()
-        };
-    }
 }
 
 impl RequestContext {
@@ -147,6 +122,56 @@ impl RequestContext {
         app_type_str: &'static str,
         stack: Option<StackTarget>,
         authed: Option<&crate::proxy::gateway_auth::AuthedKey>,
+    ) -> Result<Self, ProxyError> {
+        Self::new_with_model_override(
+            state,
+            body,
+            headers,
+            app_type,
+            tag,
+            app_type_str,
+            stack,
+            authed,
+            None,
+        )
+        .await
+    }
+
+    /// Gemini names its model in the URL. Resolve it before routing and gateway
+    /// caps, without trusting or injecting an unrelated JSON `model` field.
+    pub async fn new_for_gemini(
+        state: &ProxyState,
+        body: &serde_json::Value,
+        headers: &HeaderMap,
+        uri: &axum::http::Uri,
+        authed: Option<&crate::proxy::gateway_auth::AuthedKey>,
+    ) -> Result<Self, ProxyError> {
+        let model = extract_gemini_model_from_path(uri.path());
+        Self::new_with_model_override(
+            state,
+            body,
+            headers,
+            AppType::Gemini,
+            "Gemini",
+            "gemini",
+            None,
+            authed,
+            Some(model.as_deref().unwrap_or("unknown")),
+        )
+        .await
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    async fn new_with_model_override(
+        state: &ProxyState,
+        body: &serde_json::Value,
+        headers: &HeaderMap,
+        app_type: AppType,
+        tag: &'static str,
+        app_type_str: &'static str,
+        stack: Option<StackTarget>,
+        authed: Option<&crate::proxy::gateway_auth::AuthedKey>,
+        model_override: Option<&str>,
     ) -> Result<Self, ProxyError> {
         let start_time = Instant::now();
 
@@ -180,11 +205,11 @@ impl RequestContext {
         };
 
         // Fork 扩展：读取声明式请求改写预设（默认空配置/关闭；坏数据回落默认，fail-safe）
-        // 可被意图路由在命中带模型改写的规则时就地注入一条高优先 model-map。
-        let mut request_rewrite = state
+        let request_rewrite = state
             .db
             .get_request_rewrite_config(app_type_str)
             .unwrap_or_default();
+        let mut intent_model = None;
 
         // Fork 扩展：读取响应侧中间件配置（默认空配置/两钩子关闭；坏数据回落默认，fail-safe）
         let response_middleware = state
@@ -253,10 +278,9 @@ impl RequestContext {
                     .map(|provider| provider.id.clone())
                     .unwrap_or_default();
 
-                // 从请求体提取模型名称
-                let request_model = body
-                    .get("model")
-                    .and_then(|m| m.as_str())
+                // Gemini's URI model is authoritative; other protocols use JSON.
+                let request_model = model_override
+                    .or_else(|| body.get("model").and_then(|m| m.as_str()))
                     .unwrap_or("unknown")
                     .to_string();
 
@@ -290,13 +314,9 @@ impl RequestContext {
                             .get_provider_by_id(&rule.target_provider_id, app_type_str)
                         {
                             Ok(Some(target)) => {
-                                // 可选：改写上游模型（复用声明式请求改写的 model-map 路径）
+                                // 模型是独立路由结果，在构造上游协议与 URL 前应用。
                                 if let Some(m) = rule.model.as_deref().filter(|m| !m.is_empty()) {
-                                    inject_intent_model_rewrite(
-                                        &mut request_rewrite,
-                                        &request_model,
-                                        m,
-                                    );
+                                    intent_model = Some(m.to_string());
                                 }
                                 log::debug!(
                                     "[{}] 意图路由命中规则「{}」→ 置顶 provider {}",
@@ -473,6 +493,7 @@ impl RequestContext {
             copilot_optimizer_config,
             request_middleware,
             request_rewrite,
+            intent_model,
             response_middleware,
             pii_redaction,
             reliability,
@@ -480,21 +501,6 @@ impl RequestContext {
             is_stack,
             gateway_key_id: authed.map(|ak| ak.id.clone()),
         })
-    }
-
-    /// 从 URI 提取模型名称（Gemini 专用）
-    ///
-    /// Gemini API 的模型名称在 URI 中，格式如：
-    /// `/v1beta/models/gemini-pro:generateContent`
-    pub fn with_model_from_uri(mut self, uri: &axum::http::Uri) -> Self {
-        // 用 path() 而不是 path_and_query()：模型名必须从路径段中解析，
-        // 否则 GET /v1beta/models/<id>?key=... 会把 query 拼到 request_model 上。
-        let endpoint = uri.path();
-
-        self.request_model =
-            extract_gemini_model_from_path(endpoint).unwrap_or_else(|| "unknown".to_string());
-
-        self
     }
 
     /// 创建 RequestForwarder
@@ -555,6 +561,7 @@ impl RequestContext {
             max_retries,
         )
         .stack_request(self.is_stack)
+        .intent_model(self.intent_model.clone())
     }
 
     /// 获取 Provider 列表（用于故障转移）
@@ -709,6 +716,102 @@ mod tests {
                 .as_deref(),
             Some("gemini-2.0-flash"),
         );
+    }
+
+    fn gemini_test_state() -> ProxyState {
+        let db = Arc::new(Database::memory().unwrap());
+        let provider = Provider::with_id(
+            "gemini-default".into(),
+            "Gemini default".into(),
+            json!({"env": {"GEMINI_API_KEY": "test-key", "GOOGLE_GEMINI_BASE_URL": "https://example.test"}}),
+            None,
+        );
+        db.save_provider("gemini", &provider).unwrap();
+        db.set_current_provider("gemini", &provider.id).unwrap();
+        ProxyState::for_test(db)
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn gemini_gateway_caps_use_uri_model_before_context_creation() {
+        let state = gemini_test_state();
+        let key = state.db.add_gateway_key("gemini", None).unwrap();
+        let mut authed = crate::proxy::gateway_auth::AuthedKey::from(&key);
+        authed.allowed_models = vec!["gemini-flash".into()];
+        let uri = "/v1beta/models/gemini-flash:generateContent?alt=sse"
+            .parse()
+            .unwrap();
+
+        // Native bodies contain no model, and GET model-info requests have no body.
+        for body in [
+            json!({"contents": [{"parts": [{"text": "hi"}]}]}),
+            serde_json::Value::Null,
+            json!({"model": "forged-body-model", "contents": []}),
+        ] {
+            let ctx = RequestContext::new_for_gemini(
+                &state,
+                &body,
+                &HeaderMap::new(),
+                &uri,
+                Some(&authed),
+            )
+            .await
+            .unwrap();
+            assert_eq!(ctx.request_model, "gemini-flash");
+        }
+
+        let forbidden_uri = "/v1beta/models/gemini-pro:generateContent".parse().unwrap();
+        let denied = RequestContext::new_for_gemini(
+            &state,
+            &json!({"model": "gemini-flash", "contents": []}),
+            &HeaderMap::new(),
+            &forbidden_uri,
+            Some(&authed),
+        )
+        .await;
+        assert!(matches!(
+            denied,
+            Err(crate::proxy::ProxyError::Forbidden(_))
+        ));
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn gemini_intent_routing_matches_uri_model() {
+        let state = gemini_test_state();
+        let target = Provider::with_id(
+            "gemini-intent".into(),
+            "Gemini intent".into(),
+            json!({}),
+            None,
+        );
+        state.db.save_provider("gemini", &target).unwrap();
+        let config = serde_json::from_value(json!({
+            "enabled": true,
+            "rules": [{
+                "enabled": true,
+                "targetProviderId": "gemini-intent",
+                "matcher": {"type": "predicate", "predicate": {"modelGlob": "gemini-flash"}}
+            }]
+        }))
+        .unwrap();
+        state
+            .db
+            .set_intent_routing_config("gemini", &config)
+            .unwrap();
+        let ctx = RequestContext::new_for_gemini(
+            &state,
+            &json!({"model": "ignored-body-model", "contents": []}),
+            &HeaderMap::new(),
+            &"/v1beta/models/gemini-flash:generateContent"
+                .parse()
+                .unwrap(),
+            None,
+        )
+        .await
+        .unwrap();
+        assert_eq!(ctx.request_model, "gemini-flash");
+        assert_eq!(ctx.provider.id, "gemini-intent");
     }
 
     #[tokio::test]

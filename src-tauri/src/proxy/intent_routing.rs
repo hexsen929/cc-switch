@@ -19,6 +19,9 @@
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
+/// 内置长上下文意图的固定阈值；需要不同阈值时使用 min_input_tokens 谓词。
+const LONG_CONTEXT_MIN_INPUT_TOKENS: u64 = 100_000;
+
 /// 内置语义意图。判定语义对齐 copilot_optimizer / thinking_optimizer，这里内联轻量实现。
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "kebab-case")]
@@ -27,7 +30,7 @@ pub enum IntentKind {
     Background,
     /// 开启了扩展思考 / reasoning。
     Thinking,
-    /// 超长上下文（按 body 字节数估算输入 token）。
+    /// 超长上下文（按 body 字节数估算输入 token，至少 100,000）。
     LongContext,
     /// 请求带有 web 搜索工具。
     WebSearch,
@@ -206,7 +209,7 @@ fn matcher_hits(
         Matcher::Intent { intent } => match intent {
             IntentKind::Background => is_background(body, has_anthropic_beta),
             IntentKind::Thinking => is_thinking(body),
-            IntentKind::LongContext => est_input_tokens > 0,
+            IntentKind::LongContext => est_input_tokens >= LONG_CONTEXT_MIN_INPUT_TOKENS,
             IntentKind::WebSearch => has_web_search_tool(body),
             IntentKind::Subagent => is_subagent(body),
         },
@@ -374,30 +377,9 @@ fn has_tool_matching(body: &Value, needle: &str) -> bool {
     })
 }
 
-/// 请求体是否带图片内容（多模态）。跨 API 保守识别：任意对象的 `type` 含 "image"
-/// （Anthropic `image` / OpenAI `image_url` / Responses `input_image`），或出现
-/// `image_url` / `inlineData` / `inline_data`（Gemini）键。
+/// 复用协议感知的消息媒体检测：不扫描工具声明/schema，Gemini 媒体需要 image/* MIME。
 fn body_has_image(body: &Value) -> bool {
-    match body {
-        Value::Object(map) => {
-            if map
-                .get("type")
-                .and_then(Value::as_str)
-                .is_some_and(|t| t.contains("image"))
-            {
-                return true;
-            }
-            if map.contains_key("image_url")
-                || map.contains_key("inlineData")
-                || map.contains_key("inline_data")
-            {
-                return true;
-            }
-            map.values().any(body_has_image)
-        }
-        Value::Array(arr) => arr.iter().any(body_has_image),
-        _ => false,
-    }
+    crate::proxy::media_sanitizer::contains_image_blocks(body)
 }
 
 /// 解析 `"HH:MM"` → 当日分钟数 `0..=1439`；非法返回 None。
@@ -667,8 +649,7 @@ mod tests {
     }
 
     #[test]
-    fn long_context_hits_when_tokens_estimate_positive() {
-        // LongContext 意图：有内容即命中（阈值由谓词版处理）。
+    fn long_context_requires_at_least_one_hundred_thousand_estimated_tokens() {
         let c = cfg(vec![rule(
             Matcher::Intent {
                 intent: IntentKind::LongContext,
@@ -677,7 +658,18 @@ mod tests {
         )]);
         let body =
             json!({ "model": "claude", "messages": [{ "role": "user", "content": "hello" }] });
-        assert!(pick(&c, &body, false, "claude", None).is_some());
+        assert!(pick(&c, &body, false, "claude", None).is_none());
+
+        let body_with_tokens = |tokens: u64| {
+            let mut body = json!({ "model": "claude", "input": "" });
+            let overhead = serde_json::to_vec(&body).unwrap().len();
+            body["input"] = Value::String("x".repeat((tokens * 4) as usize - overhead));
+            body
+        };
+        let below = body_with_tokens(LONG_CONTEXT_MIN_INPUT_TOKENS - 1);
+        assert!(pick(&c, &below, false, "claude", None).is_none());
+        let at_threshold = body_with_tokens(LONG_CONTEXT_MIN_INPUT_TOKENS);
+        assert!(pick(&c, &at_threshold, false, "claude", None).is_some());
     }
 
     #[test]
@@ -825,7 +817,8 @@ mod tests {
             "model": "claude",
             "messages": [ { "role": "user", "content": "CRITICAL: Respond with TEXT ONLY. Do NOT call any tools." } ]
         });
-        let plain = json!({ "model": "claude", "messages": [ { "role": "user", "content": "hi" } ] });
+        let plain =
+            json!({ "model": "claude", "messages": [ { "role": "user", "content": "hi" } ] });
         assert!(pick(&c, &compact, false, "claude", None).is_some());
         assert!(pick(&c, &plain, false, "claude", None).is_none());
     }
@@ -852,6 +845,55 @@ mod tests {
         assert!(pick(&c, &openai, false, "m", None).is_some());
         assert!(pick(&c, &gemini, false, "m", None).is_some());
         assert!(pick(&c, &text_only, false, "m", None).is_none());
+    }
+
+    #[test]
+    fn predicate_has_image_ignores_tool_declarations_and_non_image_media() {
+        let c = cfg(vec![pred_rule(
+            Predicate {
+                has_image: Some(true),
+                ..Default::default()
+            },
+            "p-img",
+        )]);
+        for body in [
+            json!({ "input": "hello", "tools": [{ "type": "image_generation" }] }),
+            json!({ "messages": [{ "role": "user", "content": "hello" }], "tools": [{
+                "type": "function", "function": { "name": "lookup", "parameters": {
+                    "type": "object", "properties": { "image_url": { "type": "string" } }
+                } }
+            }] }),
+            json!({ "contents": [{ "parts": [{ "inlineData": { "mimeType": "audio/wav", "data": "eA==" } }] }] }),
+            json!({ "contents": [{ "parts": [{ "inline_data": { "mime_type": "application/pdf", "data": "eA==" } }] }] }),
+            json!({ "contents": [{ "parts": [{ "fileData": { "mimeType": "application/pdf", "fileUri": "gs://files/document.pdf" } }] }] }),
+        ] {
+            assert!(pick(&c, &body, false, "m", None).is_none(), "{body}");
+        }
+    }
+
+    #[test]
+    fn predicate_has_image_keeps_images_from_tool_results_and_gemini_files() {
+        let c = cfg(vec![pred_rule(
+            Predicate {
+                has_image: Some(true),
+                ..Default::default()
+            },
+            "p-img",
+        )]);
+        for body in [
+            json!({ "input": [{ "type": "message", "role": "user", "content": [
+                { "type": "input_image", "image_url": "data:image/png;base64,eA==" }
+            ] }] }),
+            json!({ "input": [{ "type": "function_call_output", "call_id": "call_1", "output": [
+                { "type": "image", "mimeType": "image/png", "data": "eA==" }
+            ] }] }),
+            json!({ "contents": [{ "parts": [{ "fileData": { "mimeType": "image/png", "fileUri": "gs://files/image.png" } }] }] }),
+            json!({ "contents": [{ "parts": [{ "functionResponse": { "name": "screenshot", "parts": [
+                { "inlineData": { "mimeType": "image/png", "data": "eA==" } }
+            ] } }] }] }),
+        ] {
+            assert!(pick(&c, &body, false, "m", None).is_some(), "{body}");
+        }
     }
 
     #[test]
@@ -897,7 +939,15 @@ mod tests {
             start: "22:00".into(),
             end: "06:00".into(),
         };
-        let at = |m: u16| time_window_hits(&win, Some(TimeContext { weekday_mon0: 0, minute_of_day: m }));
+        let at = |m: u16| {
+            time_window_hits(
+                &win,
+                Some(TimeContext {
+                    weekday_mon0: 0,
+                    minute_of_day: m,
+                }),
+            )
+        };
         assert!(at(23 * 60)); // 23:00 命中
         assert!(at(2 * 60)); // 02:00 命中
         assert!(!at(12 * 60)); // 12:00 不命中

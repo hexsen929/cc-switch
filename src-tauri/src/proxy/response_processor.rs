@@ -157,6 +157,24 @@ pub fn is_sse_response(response: &ProxyResponse, request_is_stream: bool) -> boo
             && response.content_type().is_none())
 }
 
+fn prepare_streaming_headers(
+    headers: &HeaderMap,
+    timeout_config: &mut StreamingTimeoutConfig,
+) -> HeaderMap {
+    let mut headers = headers.clone();
+    strip_hop_by_hop_response_headers(&mut headers);
+    // A compressed passthrough is an opaque byte stream. Injecting plain SSE comments
+    // would corrupt it; preserve its encoding and length until streaming decoding exists.
+    if get_content_encoding(&headers).is_some() {
+        timeout_config.keepalive_secs = 0;
+        timeout_config.loop_guard = false;
+    }
+    if timeout_config.keepalive_secs > 0 {
+        headers.remove(axum::http::header::CONTENT_LENGTH);
+    }
+    headers
+}
+
 /// 处理流式响应
 pub async fn handle_streaming(
     response: ProxyResponse,
@@ -181,8 +199,8 @@ pub async fn handle_streaming(
         );
     }
 
-    let mut response_headers = response.headers().clone();
-    strip_hop_by_hop_response_headers(&mut response_headers);
+    let mut timeout_config = ctx.streaming_timeout_config();
+    let response_headers = prepare_streaming_headers(response.headers(), &mut timeout_config);
 
     let mut builder = axum::response::Response::builder().status(status);
 
@@ -196,9 +214,6 @@ pub async fn handle_streaming(
 
     // 创建使用量收集器；关闭 usage logging 时不要在流式热路径上解析每个 SSE event。
     let usage_collector = create_usage_collector(ctx, state, status.as_u16(), parser_config);
-
-    // 获取流式超时配置
-    let timeout_config = ctx.streaming_timeout_config();
 
     // 创建带日志和超时的透传流
     let logged_stream = create_logged_passthrough_stream(
@@ -245,8 +260,8 @@ pub async fn handle_non_streaming(
         body_bytes.len()
     );
 
-    // 解析并记录使用量。关闭 usage logging 时直接跳过，避免非流式响应整包 JSON parse。
-    if usage_logging_enabled(state) {
+    // Gateway quotas still need usage when optional diagnostic logging is off.
+    if usage_collection_enabled(state, ctx.gateway_key_id.as_deref()) {
         if let Ok(json_value) = serde_json::from_slice::<Value>(&body_bytes) {
             // 解析使用量
             if let Some(usage) = (parser_config.response_parser)(&json_value) {
@@ -499,12 +514,7 @@ pub(crate) fn create_usage_collector(
     status_code: u16,
     parser_config: &UsageParserConfig,
 ) -> Option<SseUsageCollector> {
-    let logging_enabled = state
-        .config
-        .try_read()
-        .map(|c| c.enable_logging)
-        .unwrap_or(true);
-    if !logging_enabled {
+    if !usage_collection_enabled(state, ctx.gateway_key_id.as_deref()) {
         return None;
     }
 
@@ -606,11 +616,8 @@ fn spawn_log_usage(
     status_code: u16,
     is_streaming: bool,
 ) {
-    // Check enable_logging before spawning the log task
-    if let Ok(config) = state.config.try_read() {
-        if !config.enable_logging {
-            return;
-        }
+    if !usage_collection_enabled(state, ctx.gateway_key_id.as_deref()) {
+        return;
     }
 
     let state = state.clone();
@@ -655,6 +662,13 @@ pub(crate) fn usage_logging_enabled(state: &ProxyState) -> bool {
         .unwrap_or(true)
 }
 
+/// Usage parsing is also the input to the durable gateway quota ledger. A
+/// gateway request therefore remains collectible while diagnostic request
+/// logging is disabled.
+pub(crate) fn usage_collection_enabled(state: &ProxyState, gateway_key_id: Option<&str>) -> bool {
+    gateway_key_id.is_some() || usage_logging_enabled(state)
+}
+
 /// 内部使用量记录函数
 ///
 /// `outbound_model` 是「按请求计价」模式的锚点：实际发往上游的模型
@@ -679,6 +693,10 @@ async fn log_usage_internal(
 ) {
     use super::usage::logger::UsageLogger;
 
+    let diagnostic_logging = usage_logging_enabled(state);
+    if !diagnostic_logging && gateway_key_id.is_none() {
+        return;
+    }
     let dedup_scope = super::usage::parser::dedup_scope_for_app(app_type, provider_id);
     let request_id = usage.dedup_request_id(dedup_scope);
 
@@ -701,7 +719,7 @@ async fn log_usage_internal(
     let request_model = request_model.to_string();
     let outbound_model = outbound_model.to_string();
     let write = tokio::task::spawn_blocking(move || {
-        let logger = UsageLogger::new(&db);
+        let logger = UsageLogger::new(&db).with_diagnostic_logging(diagnostic_logging);
         // 计费模式读取的 DAO 是伪 async（无真实挂起点、直接取阻塞锁），
         // 在阻塞线程上 block_on 不会停转运行时
         let pricing_model_source = tokio::runtime::Handle::current()
@@ -737,6 +755,20 @@ async fn log_usage_internal(
     }
 }
 
+/// Keep an incomplete event private so comments can only be emitted between events.
+/// Bytes are preserved exactly, including UTF-8 characters and mixed CRLF boundaries
+/// split across transport chunks. Only scan newly appended bytes.
+fn buffer_complete_sse_frames(pending: &mut bytes::BytesMut, bytes: &[u8]) -> Option<Bytes> {
+    let start = pending.len();
+    pending.extend_from_slice(bytes);
+    let end = (start..pending.len()).rev().find_map(|i| {
+        let prefix = &pending[..=i];
+        (prefix.ends_with(b"\n\n") || prefix.ends_with(b"\n\r\n") || prefix.ends_with(b"\r\n\r\n"))
+            .then_some(i + 1)
+    })?;
+    Some(pending.split_to(end).freeze())
+}
+
 /// 创建带日志记录和超时控制的透传流
 pub fn create_logged_passthrough_stream(
     stream: impl Stream<Item = Result<Bytes, std::io::Error>> + Send + 'static,
@@ -758,6 +790,7 @@ pub fn create_logged_passthrough_stream(
         let mut is_first_chunk = true;
         // Fork：死循环检测的滚动文本窗口（只保留尾部若干 KB 以限成本）。
         let mut loop_text = String::new();
+        let mut pending_output = bytes::BytesMut::new();
 
         // 超时配置
         let first_byte_timeout = if timeout_config.first_byte_timeout > 0 {
@@ -817,6 +850,8 @@ pub fn create_logged_passthrough_stream(
                                 }
                             }
                             if keepalive.is_some() {
+                                // Any incomplete trailing event is still private in
+                                // pending_output, so this comment is emitted before it.
                                 yield Ok(Bytes::from_static(
                                     crate::proxy::reliability::KEEPALIVE_COMMENT,
                                 ));
@@ -870,9 +905,9 @@ pub fn create_logged_passthrough_stream(
                                                     serde_json::from_str::<Value>(data)
                                                 {
                                                     let delta =
-                                                        crate::proxy::reliability::extract_text_delta(&jv);
+                                                        crate::proxy::reliability::extract_text_delta(event_name, &jv);
                                                     if !delta.is_empty() {
-                                                        loop_text.push_str(delta);
+                                                        loop_text.push_str(&delta);
                                                         if loop_text.len() > 8192 {
                                                             let mut cut = loop_text.len() - 8192;
                                                             while cut < loop_text.len()
@@ -909,7 +944,17 @@ pub fn create_logged_passthrough_stream(
                         }
                     }
 
-                    yield Ok(bytes);
+                    if keepalive.is_some() {
+                        if let Some(complete) = buffer_complete_sse_frames(&mut pending_output, &bytes) {
+                            yield Ok(complete);
+                        }
+                        if pending_output.len() > MAX_RESPONSE_BODY_BYTES {
+                            yield Err(std::io::Error::other("SSE event exceeds response size limit"));
+                            break;
+                        }
+                    } else {
+                        yield Ok(bytes);
+                    }
                 }
                 Some(Err(e)) => {
                     log::error!("[{tag}] 流错误: {e}");
@@ -917,7 +962,10 @@ pub fn create_logged_passthrough_stream(
                     break;
                 }
                 None => {
-                    // 流正常结束
+                    // Preserve an upstream tail without a final delimiter at EOF.
+                    if !pending_output.is_empty() {
+                        yield Ok(pending_output.split().freeze());
+                    }
                     break;
                 }
             }
@@ -990,6 +1038,205 @@ mod tests {
     use rust_decimal::Decimal;
     use std::str::FromStr;
     use std::sync::Arc;
+
+    #[tokio::test]
+    async fn gateway_usage_collection_stays_enabled_when_diagnostics_are_disabled() {
+        let state = crate::proxy::server::ProxyState::for_test(Arc::new(
+            crate::database::Database::memory().unwrap(),
+        ));
+        state.config.write().await.enable_logging = false;
+
+        assert!(super::usage_collection_enabled(&state, Some("gateway-key")));
+        assert!(!super::usage_collection_enabled(&state, None));
+    }
+
+    fn reliability_timeouts(keepalive_secs: u64, loop_guard: bool) -> StreamingTimeoutConfig {
+        StreamingTimeoutConfig {
+            first_byte_timeout: 0,
+            idle_timeout: 0,
+            keepalive_secs,
+            loop_guard,
+        }
+    }
+
+    #[test]
+    fn keepalive_framing_preserves_every_transport_split() {
+        for delimiter in ["\n\n", "\r\n\r\n", "\r\n\n", "\n\r\n"] {
+            let source =
+                format!("data: {{\"text\":\"你好\"}}{delimiter}data: {{\"n\":2}}{delimiter}");
+            for split in 0..=source.len() {
+                let mut pending = bytes::BytesMut::new();
+                let mut output = Vec::new();
+                for chunk in [&source.as_bytes()[..split], &source.as_bytes()[split..]] {
+                    if let Some(complete) = buffer_complete_sse_frames(&mut pending, chunk) {
+                        output.extend_from_slice(&complete);
+                    }
+                }
+                assert!(pending.is_empty(), "split={split}, delimiter={delimiter:?}");
+                assert_eq!(output, source.as_bytes());
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn keepalive_before_partial_utf8_event_does_not_corrupt_data() {
+        let original = "data: {\"delta\":{\"text\":\"你好\"}}\r\n\r\n";
+        let split = original.find('你').unwrap() + 1;
+        let upstream = async_stream::stream! {
+            yield Ok::<_, std::io::Error>(Bytes::copy_from_slice(&original.as_bytes()[..split]));
+            tokio::time::sleep(Duration::from_millis(1100)).await;
+            yield Ok(Bytes::copy_from_slice(&original.as_bytes()[split..]));
+        };
+        let mut stream = Box::pin(create_logged_passthrough_stream(
+            upstream,
+            "test",
+            None,
+            reliability_timeouts(1, false),
+            None,
+        ));
+        let heartbeat = tokio::time::timeout(Duration::from_secs(3), stream.next())
+            .await
+            .unwrap()
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            heartbeat.as_ref(),
+            crate::proxy::reliability::KEEPALIVE_COMMENT
+        );
+        let event = stream.next().await.unwrap().unwrap();
+        assert_eq!(event.as_ref(), original.as_bytes());
+        let event = std::str::from_utf8(&event).unwrap();
+        let data = strip_sse_field(event.lines().next().unwrap(), "data").unwrap();
+        assert_eq!(
+            serde_json::from_str::<Value>(data).unwrap()["delta"]["text"],
+            "你好"
+        );
+    }
+
+    #[tokio::test]
+    async fn disabled_keepalive_keeps_transport_chunks_unchanged() {
+        let chunks = vec![
+            Bytes::from_static(b"data: {\"delta\":"),
+            Bytes::from_static(b"\"text\"}\n\n"),
+        ];
+        let upstream = futures::stream::iter(chunks.clone().into_iter().map(Ok));
+        let output: Vec<_> = create_logged_passthrough_stream(
+            upstream,
+            "test",
+            None,
+            reliability_timeouts(0, false),
+            None,
+        )
+        .collect()
+        .await;
+        assert_eq!(
+            output.into_iter().map(Result::unwrap).collect::<Vec<_>>(),
+            chunks
+        );
+    }
+
+    #[tokio::test]
+    async fn keepalive_http_response_delivers_events_past_original_content_length() {
+        use http_body_util::BodyExt;
+        let (client, server) = tokio::io::duplex(4096);
+        let server_task = tokio::spawn(async move {
+            hyper::server::conn::http1::Builder::new()
+                .serve_connection(
+                    hyper_util::rt::TokioIo::new(server),
+                    hyper::service::service_fn(|_| async {
+                        let upstream = async_stream::stream! {
+                            yield Ok(Bytes::from_static(b"data: {}\n\n"));
+                            tokio::time::sleep(Duration::from_millis(1100)).await;
+                            yield Ok(Bytes::from_static(b"data: {}\n\n"));
+                        };
+                        let mut headers = HeaderMap::new();
+                        headers.insert("content-type", "text/event-stream".parse().unwrap());
+                        headers.insert("content-length", "20".parse().unwrap());
+                        let mut config = reliability_timeouts(1, false);
+                        let headers = prepare_streaming_headers(&headers, &mut config);
+                        let stream =
+                            create_logged_passthrough_stream(upstream, "test", None, config, None);
+                        let mut response = Response::new(axum::body::Body::from_stream(stream));
+                        *response.headers_mut() = headers;
+                        Ok::<_, std::convert::Infallible>(response)
+                    }),
+                )
+                .await
+                .unwrap();
+        });
+        let (mut sender, connection) =
+            hyper::client::conn::http1::handshake(hyper_util::rt::TokioIo::new(client))
+                .await
+                .unwrap();
+        let client_task = tokio::spawn(connection);
+        let response = sender
+            .send_request(
+                http::Request::builder()
+                    .uri("http://localhost/")
+                    .body(http_body_util::Empty::<Bytes>::new())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert!(!response.headers().contains_key("content-length"));
+        let bytes = response.into_body().collect().await.unwrap().to_bytes();
+        let text = std::str::from_utf8(&bytes).unwrap();
+        assert_eq!(text.matches("data: {}\n\n").count(), 2, "{text:?}");
+        assert!(text.contains(": keep-alive\n\n"), "{text:?}");
+        drop(sender);
+        client_task.await.unwrap().unwrap();
+        server_task.await.unwrap();
+    }
+
+    #[test]
+    fn compressed_passthrough_disables_byte_rewriting_and_keeps_entity_headers() {
+        let mut headers = HeaderMap::new();
+        headers.insert("content-encoding", "gzip".parse().unwrap());
+        headers.insert("content-length", "20".parse().unwrap());
+        let mut config = reliability_timeouts(1, true);
+        let prepared = prepare_streaming_headers(&headers, &mut config);
+        assert_eq!(prepared["content-encoding"], "gzip");
+        assert_eq!(prepared["content-length"], "20");
+        assert_eq!(config.keepalive_secs, 0);
+        assert!(!config.loop_guard);
+    }
+
+    async fn loop_guard_result(event: Value) -> (usize, bool) {
+        let bytes = Bytes::from(format!("data: {event}\n\n"));
+        let upstream = futures::stream::iter((0..40).map(move |_| Ok(bytes.clone())));
+        let results: Vec<_> = create_logged_passthrough_stream(
+            upstream,
+            "test",
+            None,
+            reliability_timeouts(0, true),
+            None,
+        )
+        .collect()
+        .await;
+        (
+            results.iter().filter(|item| item.is_ok()).count(),
+            results.iter().any(|item| item.is_err()),
+        )
+    }
+
+    #[tokio::test]
+    async fn loop_guard_preserves_tool_arguments_but_stops_text_loops_across_protocols() {
+        let (events, failed) = loop_guard_result(
+            serde_json::json!({"type":"response.function_call_arguments.delta", "delta":"0,"}),
+        )
+        .await;
+        assert_eq!(events, 40);
+        assert!(!failed, "valid repeated tool arguments must not be cut off");
+        for event in [
+            serde_json::json!({"type":"response.output_text.delta", "delta":"ha "}),
+            serde_json::json!({"delta":{"type":"text_delta","text":"ha "}}),
+            serde_json::json!({"choices":[{"delta":{"content":"ha "}}]}),
+            serde_json::json!({"candidates":[{"content":{"parts":[{"functionCall":{"name":"tool"}},{"text":"ha "}]}}]}),
+        ] {
+            let (events, failed) = loop_guard_result(event.clone()).await;
+            assert!(failed && events < 40, "text loop was not stopped: {event}");
+        }
+    }
 
     #[test]
     fn sse_data_starts_output_skips_metadata_events() {

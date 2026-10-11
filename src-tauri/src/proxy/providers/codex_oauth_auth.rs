@@ -701,11 +701,15 @@ impl CodexOAuthManager {
         Ok(Some((account, codex_live_auth, commit_guard)))
     }
 
-    /// 探测本机原生 ChatGPT 登录是否已被 cc-switch 托管（按跨刷新稳定身份或 workspace 去重）。
+    /// 探测本机原生 ChatGPT 登录是否已被 cc-switch 托管（用户身份与 workspace 必须同时匹配）。
     pub async fn find_managed_account_for_native(
         &self,
         native: &crate::codex_config::NativeCodexChatgptLogin,
     ) -> Option<GitHubAccount> {
+        let native_workspace = native
+            .chatgpt_account_id
+            .as_deref()
+            .filter(|workspace| !workspace.trim().is_empty())?;
         let accounts = self.accounts.read().await;
         accounts
             .values()
@@ -716,14 +720,14 @@ impl CodexOAuthManager {
                     .and_then(crate::codex_config::extract_codex_id_token_user_identity)
                     .as_deref()
                     == Some(native.user_identity.as_str());
-                let workspace_match = matches!(
-                    (
-                        data.chatgpt_account_id.as_deref(),
-                        native.chatgpt_account_id.as_deref(),
-                    ),
-                    (Some(a), Some(b)) if a == b
-                );
-                identity_match || workspace_match
+                // 与 add_account_internal 的联合身份去重保持一致：旧版存储把
+                // workspace 放在 account_id，新版才有独立 chatgpt_account_id。
+                let workspace_match = data
+                    .chatgpt_account_id
+                    .as_deref()
+                    .unwrap_or(data.account_id.as_str())
+                    == native_workspace;
+                identity_match && workspace_match
             })
             .map(GitHubAccount::from)
     }
@@ -2590,6 +2594,147 @@ mod tests {
         let accounts = manager.accounts.read().await;
         assert_eq!(accounts.get(&first.id).unwrap().refresh_token, "rt-first");
         assert_eq!(accounts.get(&second.id).unwrap().refresh_token, "rt-second");
+    }
+
+    #[tokio::test]
+    async fn native_login_matches_both_user_and_workspace() {
+        let temp = tempfile::tempdir().unwrap();
+        let manager = CodexOAuthManager::new(temp.path().to_path_buf());
+        let native = |user: &str, workspace: Option<&str>| {
+            let id_token = crate::codex_config::test_codex_id_token(user);
+            crate::codex_config::NativeCodexChatgptLogin {
+                chatgpt_account_id: workspace.map(str::to_string),
+                email: None,
+                plan: None,
+                access_token: "native-access".to_string(),
+                refresh_token: "native-refresh".to_string(),
+                user_identity: crate::codex_config::extract_codex_id_token_user_identity(&id_token)
+                    .unwrap(),
+                id_token,
+            }
+        };
+        let first = manager
+            .add_account_internal(
+                "personal-workspace".to_string(),
+                "rt-first".to_string(),
+                None,
+                Some(crate::codex_config::test_codex_id_token("user-a")),
+                None,
+                AccountLoginContext::default(),
+            )
+            .await
+            .unwrap();
+
+        for (user, workspace, expected_id) in [
+            (
+                "user-a",
+                Some("personal-workspace"),
+                Some(first.id.as_str()),
+            ),
+            ("user-a", Some("team-workspace"), None),
+            ("user-b", Some("personal-workspace"), None),
+            ("user-a", None, None),
+            ("user-a", Some(""), None),
+        ] {
+            let found = manager
+                .find_managed_account_for_native(&native(user, workspace))
+                .await;
+            assert_eq!(
+                found.as_ref().map(|account| account.id.as_str()),
+                expected_id,
+                "user={user}, workspace={workspace:?}"
+            );
+        }
+
+        // Multiple managed accounts can share either side of the identity;
+        // lookups must select the exact pair regardless of HashMap iteration order.
+        for (user, workspace) in [
+            ("user-a", "team-workspace"),
+            ("user-b", "personal-workspace"),
+        ] {
+            let account = manager
+                .add_account_internal(
+                    workspace.to_string(),
+                    "rt-other".to_string(),
+                    None,
+                    Some(crate::codex_config::test_codex_id_token(user)),
+                    None,
+                    AccountLoginContext::default(),
+                )
+                .await
+                .unwrap();
+            assert_eq!(
+                manager
+                    .find_managed_account_for_native(&native(user, Some(workspace)))
+                    .await
+                    .unwrap()
+                    .id,
+                account.id
+            );
+        }
+        assert_eq!(
+            manager
+                .find_managed_account_for_native(&native("user-a", Some("personal-workspace")))
+                .await
+                .unwrap()
+                .id,
+            first.id
+        );
+    }
+
+    #[tokio::test]
+    async fn native_login_matches_legacy_workspace_only_with_same_user() {
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().to_path_buf();
+        let manager = CodexOAuthManager::new(path.clone());
+        let id_token = crate::codex_config::test_codex_id_token("legacy-user");
+        let legacy = serde_json::json!({
+            "version": 1,
+            "accounts": {
+                "legacy-workspace": {
+                    "account_id": "legacy-workspace",
+                    "email": "legacy@example.com",
+                    "refresh_token": "rt-legacy",
+                    "id_token": id_token,
+                    "authenticated_at": 1
+                }
+            },
+            "default_account_id": "legacy-workspace"
+        });
+        manager
+            .write_store_atomic(&serde_json::to_string(&legacy).unwrap())
+            .unwrap();
+        drop(manager);
+        let manager = CodexOAuthManager::new(path);
+        let native = crate::codex_config::NativeCodexChatgptLogin {
+            chatgpt_account_id: Some("legacy-workspace".to_string()),
+            email: None,
+            plan: None,
+            access_token: "native-access".to_string(),
+            refresh_token: "native-refresh".to_string(),
+            user_identity: crate::codex_config::extract_codex_id_token_user_identity(&id_token)
+                .unwrap(),
+            id_token,
+        };
+        assert_eq!(
+            manager
+                .find_managed_account_for_native(&native)
+                .await
+                .unwrap()
+                .id,
+            "legacy-workspace"
+        );
+        manager
+            .accounts
+            .write()
+            .await
+            .get_mut("legacy-workspace")
+            .unwrap()
+            .id_token = None;
+        assert!(manager
+            .find_managed_account_for_native(&native)
+            .await
+            .is_none());
     }
 
     #[tokio::test]

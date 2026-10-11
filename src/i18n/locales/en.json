@@ -3922,7 +3922,7 @@
       "intent": {
         "background": "Background / lightweight (warmup·compact)",
         "thinking": "Extended thinking / reasoning",
-        "long-context": "Long context",
+        "long-context": "Long context (estimated ≥100,000 tokens)",
         "web-search": "Web search tool",
         "subagent": "Subagent"
       },

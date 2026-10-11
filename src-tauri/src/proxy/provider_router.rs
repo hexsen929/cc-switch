@@ -207,7 +207,7 @@ pub struct ProviderRouter {
     rotate_cursors: Mutex<HashMap<String, usize>>,
     /// Usage 策略计数 - key: "app_type:provider_id"，value: 被选为主路由的次数（进程内）
     usage_counts: Mutex<HashMap<String, u64>>,
-    /// 会话粘性绑定 - key: "app_type:session_id"，value: 上一轮主路由（进程内）
+    /// 会话粘性绑定 - key: "app_type:session_id"，value: 上一轮成功应答的供应商（进程内）
     sticky_sessions: Mutex<HashMap<String, StickyBinding>>,
     /// 订阅内账号冷却表 - key: "auth_provider:account_id"，value: 进入冷却的时刻（进程内）。
     /// 仅在「订阅内多账号故障转移」开启的应用上被写入/读取；重启即清空。
@@ -358,7 +358,7 @@ impl ProviderRouter {
     ///
     /// 顺带回收空闲超过 [`STICKY_SESSION_TTL`] 的绑定，控制进程内内存占用。
     /// 绑定的 Provider 已熔断/下线（不在候选里）时返回 `false`，交回路由策略另选，
-    /// 随后由 [`Self::remember_sticky_session`] 重新绑定到新主路由。
+    /// 随后由 [`Self::remember_successful_provider`] 绑定到真正成功应答的供应商。
     fn pin_sticky_session(
         &self,
         app_type: &str,
@@ -387,15 +387,32 @@ impl ProviderRouter {
         true
     }
 
-    /// 记录（或刷新）该会话当前主路由，供下一轮粘性参考。
-    fn remember_sticky_session(&self, app_type: &str, session_id: &str, provider_id: &str) {
+    /// 仅在请求成功后记录实际应答的供应商。调用方须传客户端提供的稳定会话 ID，
+    /// Stack 等显式指定供应商且绕过路由的请求不应调用此入口。
+    pub(crate) fn remember_successful_provider(
+        &self,
+        app_type: &str,
+        session_id: &str,
+        provider_id: &str,
+    ) {
+        if session_id.trim().is_empty()
+            || provider_id.trim().is_empty()
+            || !self
+                .db
+                .get_provider_sticky_enabled(app_type)
+                .unwrap_or(false)
+        {
+            return;
+        }
+        let now = Instant::now();
         let key = format!("{app_type}:{session_id}");
         let mut bindings = self.sticky_sessions.lock().unwrap();
+        bindings.retain(|_, binding| now.duration_since(binding.last_seen) < STICKY_SESSION_TTL);
         bindings.insert(
             key,
             StickyBinding {
                 provider_id: provider_id.to_string(),
-                last_seen: Instant::now(),
+                last_seen: now,
             },
         );
     }
@@ -438,8 +455,7 @@ impl ProviderRouter {
         let mut cooldowns = self.account_cooldowns.lock().unwrap();
         cooldowns.retain(|_, since| now.duration_since(*since) < ACCOUNT_COOLDOWN_TTL);
 
-        let in_cooldown =
-            |id: &str| cooldowns.contains_key(&format!("{auth_provider}:{id}"));
+        let in_cooldown = |id: &str| cooldowns.contains_key(&format!("{auth_provider}:{id}"));
 
         if !in_cooldown(&preferred) {
             return Some(preferred);
@@ -579,13 +595,6 @@ impl ProviderRouter {
                     );
                 }
                 self.apply_routing_strategy(app_type, strategy, &mut result);
-            }
-
-            // 绑定（或刷新）本轮主路由，供下一轮粘性参考
-            if sticky_enabled {
-                if let (Some(sid), Some(primary)) = (session_id, result.first()) {
-                    self.remember_sticky_session(app_type, sid, &primary.id);
-                }
             }
         }
 
@@ -822,7 +831,8 @@ mod tests {
             .collect();
         let mut ids: Vec<String> = items.iter().map(|(id, _)| id.to_string()).collect();
         ids.sort_by(|a, b| {
-            quota_sort_key(strategy, views.get(a)).total_cmp(&quota_sort_key(strategy, views.get(b)))
+            quota_sort_key(strategy, views.get(a))
+                .total_cmp(&quota_sort_key(strategy, views.get(b)))
         });
         ids
     }
@@ -916,8 +926,10 @@ mod tests {
 
     #[test]
     fn quota_view_from_subscription_rejects_failures_and_empty() {
-        assert!(quota_view_from_subscription(&quota_with_tiers(false, vec![tier(10.0, None)]), 0)
-            .is_none());
+        assert!(
+            quota_view_from_subscription(&quota_with_tiers(false, vec![tier(10.0, None)]), 0)
+                .is_none()
+        );
         assert!(quota_view_from_subscription(&quota_with_tiers(true, vec![]), 0).is_none());
     }
 
@@ -1336,13 +1348,14 @@ mod tests {
         let (db, router) = setup_two_provider_failover("rotate").await;
         db.set_provider_sticky_enabled("claude", true).unwrap();
 
-        // 第一轮：无绑定，rotate 从队首 a 起，记住 a
+        // 第一轮：无绑定，rotate 从队首 a 起；仅成功后记住 a。
         let first = router
             .select_providers_with_current("claude", None, Some("sess-1"))
             .await
             .unwrap();
         assert_eq!(first[0].id, "a");
         assert_eq!(first.len(), 2);
+        router.remember_successful_provider("claude", "sess-1", &first[0].id);
 
         // 第二轮同一会话：粘性命中，仍是 a（若无粘性 rotate 本会给 b）
         let second = router
@@ -1362,6 +1375,62 @@ mod tests {
 
     #[tokio::test]
     #[serial]
+    async fn sticky_does_not_bind_uncompleted_or_failed_candidates() {
+        let _home = TempHome::new();
+        let (db, router) = setup_two_provider_failover("rotate").await;
+        db.set_provider_sticky_enabled("claude", true).unwrap();
+
+        let first = router
+            .select_providers_with_current("claude", None, Some("sess"))
+            .await
+            .unwrap();
+        assert_eq!(first[0].id, "a");
+        router
+            .record_result("a", "claude", false, false, Some("upstream 500".into()))
+            .await
+            .unwrap();
+
+        // Selecting a (or recording its failure) does not pin the next attempt.
+        let second = router
+            .select_providers_with_current("claude", None, Some("sess"))
+            .await
+            .unwrap();
+        assert_eq!(second[0].id, "b");
+        let third = router
+            .select_providers_with_current("claude", None, Some("sess"))
+            .await
+            .unwrap();
+        assert_eq!(third[0].id, "a");
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn sticky_remembers_successful_fallback_while_first_candidate_is_healthy() {
+        let _home = TempHome::new();
+        let (db, router) = setup_two_provider_failover("order").await;
+        db.set_provider_sticky_enabled("claude", true).unwrap();
+        let first = router
+            .select_providers_with_current("claude", None, Some("sess"))
+            .await
+            .unwrap();
+        assert_eq!(first[0].id, "a");
+        router
+            .record_result("a", "claude", false, false, Some("upstream 500".into()))
+            .await
+            .unwrap();
+        router.remember_successful_provider("claude", "sess", "b");
+
+        let next = router
+            .select_providers_with_current("claude", None, Some("sess"))
+            .await
+            .unwrap();
+        assert_eq!(next.len(), 2, "a must still be below its breaker threshold");
+        assert_eq!(next[0].id, "b");
+        assert_eq!(next[1].id, "a");
+    }
+
+    #[tokio::test]
+    #[serial]
     async fn sticky_disabled_leaves_strategy_untouched() {
         let _home = TempHome::new();
         let (_db, router) = setup_two_provider_failover("rotate").await;
@@ -1370,6 +1439,7 @@ mod tests {
             .select_providers_with_current("claude", None, Some("sess-1"))
             .await
             .unwrap();
+        router.remember_successful_provider("claude", "sess-1", &first[0].id);
         let second = router
             .select_providers_with_current("claude", None, Some("sess-1"))
             .await
@@ -1417,14 +1487,15 @@ mod tests {
 
         let router = ProviderRouter::new(db.clone());
 
-        // 绑定 sess 到队首 a
+        // a 成功后绑定 sess。
         let first = router
             .select_providers_with_current("claude", None, Some("sess"))
             .await
             .unwrap();
         assert_eq!(first[0].id, "a");
+        router.remember_successful_provider("claude", "sess", "a");
 
-        // 熔断 a：下一轮候选只剩 b、c（仍 ≥ 2），粘性落空 → 改绑新主路由 b
+        // 熔断 a：下一轮候选只剩 b、c（仍 ≥ 2），但候选 b 尚未成功。
         router
             .record_result("a", "claude", false, false, Some("fail".to_string()))
             .await
@@ -1437,12 +1508,20 @@ mod tests {
         assert_eq!(second.len(), 2);
         assert_eq!(second[0].id, "b");
 
-        // 第三轮：b 仍健康，粘性应把会话固定在 b 上
+        // 若本轮全失败，不能提前改绑 b；a 恢复后仍是最近成功的供应商。
+        router.reset_provider_breaker("a", "claude").await;
         let third = router
             .select_providers_with_current("claude", None, Some("sess"))
             .await
             .unwrap();
-        assert_eq!(third[0].id, "b");
+        assert_eq!(third[0].id, "a");
+
+        router.remember_successful_provider("claude", "sess", "b");
+        let fourth = router
+            .select_providers_with_current("claude", None, Some("sess"))
+            .await
+            .unwrap();
+        assert_eq!(fourth[0].id, "b");
     }
 
     #[tokio::test]
@@ -1536,8 +1615,7 @@ mod tests {
 
         // 全池耗尽后：退回首选项（调用方的重试上限 = 池size-1 会在此之前停止，
         // 不会真的走到这一步，但 choose 本身保证绝不中断转发）。
-        let exhausted =
-            router.choose_managed_account("codex_oauth", preferred, &candidates);
+        let exhausted = router.choose_managed_account("codex_oauth", preferred, &candidates);
         assert_eq!(exhausted, Some("a".to_string()));
     }
 }

@@ -254,9 +254,12 @@ mod tests {
     fn returning_array_falls_back_to_mutated_request() {
         // 返回数组同样视为放行，但就地修改仍然保留
         let body = json!({ "model": "m" });
-        let out =
-            run_request_middleware("(req) => { req.model = 'z'; return [1,2]; }", &body, &meta())
-                .unwrap();
+        let out = run_request_middleware(
+            "(req) => { req.model = 'z'; return [1,2]; }",
+            &body,
+            &meta(),
+        )
+        .unwrap();
         assert_eq!(out["model"], json!("z"));
     }
 

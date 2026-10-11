@@ -246,9 +246,7 @@ impl EventTransformer {
         // 每个事件开始前把 deadline 刷新为 now + 预算；中断器只读该原子值。
         let deadline = Arc::new(AtomicI64::new(i64::MAX));
         let d = deadline.clone();
-        runtime.set_interrupt_handler(Some(Box::new(move || {
-            now_ms() > d.load(Ordering::Relaxed)
-        })));
+        runtime.set_interrupt_handler(Some(Box::new(move || now_ms() > d.load(Ordering::Relaxed))));
         let context = Context::full(&runtime).map_err(|e| {
             AppError::localized(
                 "response_middleware.context_create_failed",
@@ -360,11 +358,24 @@ pub fn wrap_sse_stream(
     let (raw_tx, mut raw_rx) = tokio::sync::mpsc::channel::<Result<Bytes, std::io::Error>>(16);
     let (out_tx, mut out_rx) = tokio::sync::mpsc::channel::<Result<Bytes, std::io::Error>>(16);
 
+    let cancel = out_tx.clone();
     tokio::spawn(async move {
         futures::pin_mut!(upstream);
-        while let Some(item) = upstream.next().await {
-            if raw_tx.send(item).await.is_err() {
-                break; // 下游已走，停止拉取上游（drop 后会断开上游连接）
+        loop {
+            // Cancellation must wake a quiet upstream too, not just the next send.
+            // Dropping raw_tx also releases the worker's blocking_recv below.
+            let item = tokio::select! {
+                biased;
+                _ = cancel.closed() => break,
+                item = upstream.next() => match item {
+                    Some(item) => item,
+                    None => break,
+                },
+            };
+            tokio::select! {
+                biased;
+                _ = cancel.closed() => break,
+                sent = raw_tx.send(item) => if sent.is_err() { break; },
             }
         }
     });
@@ -377,6 +388,9 @@ pub fn wrap_sse_stream(
         let mut buf = String::new();
         let mut remainder: Vec<u8> = Vec::new();
         while let Some(item) = raw_rx.blocking_recv() {
+            if out_tx.is_closed() {
+                return;
+            }
             let chunk = match item {
                 Ok(c) => c,
                 Err(e) => {
@@ -393,6 +407,9 @@ pub fn wrap_sse_stream(
                 Some(t) => {
                     append_utf8_safe(&mut buf, &mut remainder, &chunk);
                     while let Some(block) = take_sse_block(&mut buf) {
+                        if out_tx.is_closed() {
+                            return;
+                        }
                         let transformed = transform_sse_block(&block, t);
                         let emit = transformed.unwrap_or(block);
                         let mut bytes = String::with_capacity(emit.len() + 2);
@@ -577,6 +594,60 @@ mod tests {
         assert!(body.contains("\"i\":1"));
         assert!(body.contains("\"i\":2"));
         assert!(body.contains("[DONE]"), "non-JSON event must pass through");
-        assert!(body.contains("event: a"), "non-data lines must be preserved");
+        assert!(
+            body.contains("event: a"),
+            "non-data lines must be preserved"
+        );
+    }
+
+    #[test]
+    fn cancelling_quiet_sse_releases_upstream_and_blocking_worker() {
+        struct DropSignal(Option<tokio::sync::oneshot::Sender<()>>);
+        impl Drop for DropSignal {
+            fn drop(&mut self) {
+                if let Some(tx) = self.0.take() {
+                    let _ = tx.send(());
+                }
+            }
+        }
+
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .max_blocking_threads(1)
+            .build()
+            .unwrap();
+        let (upstream_dropped, worker_released) = runtime.block_on(async {
+            let (dropped_tx, mut dropped_rx) = tokio::sync::oneshot::channel();
+            // A cleanup escape hatch keeps a regressing test from hanging runtime shutdown.
+            let (release_tx, release_rx) = tokio::sync::oneshot::channel::<()>();
+            let drop_signal = DropSignal(Some(dropped_tx));
+            let upstream = async_stream::stream! {
+                let _drop_signal = drop_signal;
+                yield Ok(Bytes::from_static(b"data: {\"n\":1}\n\n"));
+                let _ = release_rx.await;
+            };
+            let response =
+                ProxyResponse::streamed(http::StatusCode::OK, http::HeaderMap::new(), upstream);
+            let wrapped = wrap_sse_stream(response, "(e)=>e".into(), meta());
+            let mut stream = wrapped.bytes_stream();
+            stream.next().await.unwrap().unwrap(); // worker is running; upstream now goes quiet
+            drop(stream);
+            let upstream_dropped =
+                tokio::time::timeout(std::time::Duration::from_secs(1), &mut dropped_rx)
+                    .await
+                    .is_ok();
+            let sentinel = tokio::task::spawn_blocking(|| ());
+            let worker_released = tokio::time::timeout(std::time::Duration::from_secs(1), sentinel)
+                .await
+                .is_ok();
+            let _ = release_tx.send(());
+            (upstream_dropped, worker_released)
+        });
+        runtime.shutdown_timeout(std::time::Duration::from_secs(1));
+        assert!(upstream_dropped, "cancellation must drop a silent upstream");
+        assert!(
+            worker_released,
+            "cancellation must free the only blocking worker"
+        );
     }
 }

@@ -206,7 +206,8 @@ pub fn extract_gateway_token(headers: &HeaderMap, uri: &Uri) -> Option<String> {
     }
     if let Some(q) = uri.query() {
         for pair in q.split('&') {
-            if let Some(val) = pair.strip_prefix("key=") {
+            let (name, val) = pair.split_once('=').unwrap_or((pair, ""));
+            if percent_decode(name) == "key" {
                 let decoded = percent_decode(val);
                 if !decoded.is_empty() {
                     return Some(decoded);
@@ -215,6 +216,40 @@ pub fn extract_gateway_token(headers: &HeaderMap, uri: &Uri) -> Option<String> {
         }
     }
     None
+}
+
+/// Gateway credentials terminate at this proxy. Preserve the raw encoding and
+/// order of unrelated query parameters instead of decoding/re-encoding the URI.
+fn consume_gateway_credentials(req: &mut axum::extract::Request) -> Result<(), ()> {
+    if let Some(query) = req.uri().query() {
+        let mut removed = false;
+        let retained: Vec<&str> = query
+            .split('&')
+            .filter(|pair| {
+                let name = pair.split_once('=').map_or(*pair, |(name, _)| name);
+                let credential = percent_decode(name) == "key";
+                removed |= credential;
+                !credential
+            })
+            .collect();
+        if removed {
+            let query = retained.join("&");
+            let path_and_query = if query.is_empty() {
+                req.uri().path().to_string()
+            } else {
+                format!("{}?{query}", req.uri().path())
+            };
+            let mut parts = req.uri().clone().into_parts();
+            parts.path_and_query = Some(path_and_query.parse().map_err(|_| ())?);
+            *req.uri_mut() = Uri::from_parts(parts).map_err(|_| ())?;
+        }
+    }
+    // Clear every inbound credential field, including secondary ones. In
+    // particular official Codex passthrough must never see a LAN bearer token.
+    for name in ["authorization", "x-api-key", "x-goog-api-key"] {
+        req.headers_mut().remove(name);
+    }
+    Ok(())
 }
 
 /// 极简 percent-decode（只处理 `%XX` 与 `+`→空格；非法序列原样保留）。查询串里的 token 通常无需转义，
@@ -248,8 +283,6 @@ fn percent_decode(s: &str) -> String {
     }
     String::from_utf8_lossy(&out).into_owned()
 }
-
-// MIDDLEWARE_PLACEHOLDER
 
 fn forbidden_response() -> Response {
     (
@@ -310,6 +343,10 @@ pub async fn lan_gateway_guard(
 
     match matched {
         Some(key) if key.enabled => {
+            if consume_gateway_credentials(&mut req).is_err() {
+                // Never forward the original URI if credential removal fails.
+                return (StatusCode::BAD_REQUEST, "Invalid gateway request URI").into_response();
+            }
             let authed = AuthedKey::from(&key);
             req.extensions_mut().insert(authed);
             next.run(req).await
@@ -404,6 +441,91 @@ mod tests {
         let h = HeaderMap::new();
         let uri: Uri = "/v1beta/models?alt=sse&key=ccs%2Dq1".parse().unwrap();
         assert_eq!(extract_gateway_token(&h, &uri).as_deref(), Some("ccs-q1"));
+    }
+
+    async fn run_gateway_guard(
+        req: axum::extract::Request,
+        share_enabled: bool,
+    ) -> serde_json::Value {
+        use axum::{middleware, routing::any, Router};
+        use std::sync::Arc;
+        use tower::Service;
+
+        let db = Arc::new(crate::database::Database::memory().unwrap());
+        db.set_lan_share_enabled(share_enabled).unwrap();
+        db.add_gateway_key("review", Some("ccs-review")).unwrap();
+        let state = ProxyState::for_test(db);
+        let mut router = Router::new()
+            .route(
+                "/v1beta/models",
+                any(|req: axum::extract::Request| async move {
+                    Json(json!({
+                        "uri": req.uri().to_string(),
+                        "authorization": req.headers().get("authorization").and_then(|v| v.to_str().ok()),
+                        "apiKey": req.headers().get("x-api-key").and_then(|v| v.to_str().ok()),
+                        "googKey": req.headers().get("x-goog-api-key").and_then(|v| v.to_str().ok()),
+                        "requestId": req.headers().get("x-request-id").and_then(|v| v.to_str().ok()),
+                        "authenticated": req.extensions().get::<AuthedKey>().is_some(),
+                    }))
+                }),
+            )
+            .layer(middleware::from_fn_with_state(state, lan_gateway_guard));
+        let response = router.call(req).await.unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let bytes = axum::body::to_bytes(response.into_body(), 4096)
+            .await
+            .unwrap();
+        serde_json::from_slice(&bytes).unwrap()
+    }
+
+    #[tokio::test]
+    async fn gateway_guard_consumes_all_credentials_and_preserves_other_query_bytes() {
+        let req = axum::extract::Request::builder()
+            .uri("/v1beta/models?alt=sse&key=ccs-review&x=a%2Fb+z&k%65y=duplicate&api_key=keep")
+            .header("authorization", "Bearer ccs-review")
+            .header("x-api-key", "secondary-key")
+            .header("x-goog-api-key", "secondary-google-key")
+            .header("x-request-id", "keep-id")
+            .extension(PeerAddr("192.168.1.2:1234".parse().unwrap()))
+            .body(axum::body::Body::empty())
+            .unwrap();
+        let seen = run_gateway_guard(req, true).await;
+        assert_eq!(seen["uri"], "/v1beta/models?alt=sse&x=a%2Fb+z&api_key=keep");
+        assert!(seen["authorization"].is_null());
+        assert!(seen["apiKey"].is_null());
+        assert!(seen["googKey"].is_null());
+        assert_eq!(seen["requestId"], "keep-id");
+        assert_eq!(seen["authenticated"], true);
+    }
+
+    #[tokio::test]
+    async fn gateway_guard_authenticates_and_removes_percent_encoded_query_key() {
+        let req = axum::extract::Request::builder()
+            .uri("/v1beta/models?%6B%65%79=ccs%2Dreview")
+            .extension(PeerAddr("192.168.1.2:1234".parse().unwrap()))
+            .body(axum::body::Body::empty())
+            .unwrap();
+        let seen = run_gateway_guard(req, true).await;
+        assert_eq!(seen["uri"], "/v1beta/models");
+        assert_eq!(seen["authenticated"], true);
+    }
+
+    #[tokio::test]
+    async fn gateway_guard_preserves_loopback_credentials_and_query() {
+        let req = axum::extract::Request::builder()
+            .uri("/v1beta/models?key=local-key&alt=sse")
+            .header("authorization", "Bearer local-auth")
+            .header("x-api-key", "local-api")
+            .header("x-goog-api-key", "local-google")
+            .extension(PeerAddr("127.0.0.1:1234".parse().unwrap()))
+            .body(axum::body::Body::empty())
+            .unwrap();
+        let seen = run_gateway_guard(req, false).await;
+        assert_eq!(seen["uri"], "/v1beta/models?key=local-key&alt=sse");
+        assert_eq!(seen["authorization"], "Bearer local-auth");
+        assert_eq!(seen["apiKey"], "local-api");
+        assert_eq!(seen["googKey"], "local-google");
+        assert_eq!(seen["authenticated"], false);
     }
 
     #[test]

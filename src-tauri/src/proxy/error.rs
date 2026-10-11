@@ -74,13 +74,21 @@ pub enum ProxyError {
     #[error("认证失败: {0}")]
     AuthError(String),
 
+    /// A selected managed account's credentials were rejected and it was cooled down.
+    /// Only this typed error permits retrying another account before an upstream request.
+    #[error("认证失败: {0}")]
+    ManagedAccountAuthError(String),
+
     /// 局域网网关 per-key 允许表（caps）拒绝：key 无权在该 app / 用该 provider / 跑该 model。
     #[error("网关密钥无权访问: {0}")]
     Forbidden(String),
 
     /// 局域网网关 per-key 配额窗口超限：429 Too Many Requests（带 Retry-After）。
     #[error("网关密钥配额超限: {message}")]
-    RateLimited { retry_after_secs: u64, message: String },
+    RateLimited {
+        retry_after_secs: u64,
+        message: String,
+    },
 
     #[allow(dead_code)]
     #[error("内部错误: {0}")]
@@ -101,8 +109,7 @@ impl IntoResponse for ProxyError {
                     "type": "rate_limit_error",
                 }
             });
-            let mut response =
-                (StatusCode::TOO_MANY_REQUESTS, Json(error_body)).into_response();
+            let mut response = (StatusCode::TOO_MANY_REQUESTS, Json(error_body)).into_response();
             if let Ok(value) = axum::http::HeaderValue::from_str(&retry_after_secs.to_string()) {
                 response
                     .headers_mut()
@@ -185,7 +192,9 @@ impl IntoResponse for ProxyError {
                     ProxyError::StreamIdleTimeout(_) => {
                         (StatusCode::GATEWAY_TIMEOUT, self.to_string())
                     }
-                    ProxyError::AuthError(_) => (StatusCode::UNAUTHORIZED, self.to_string()),
+                    ProxyError::AuthError(_) | ProxyError::ManagedAccountAuthError(_) => {
+                        (StatusCode::UNAUTHORIZED, self.to_string())
+                    }
                     ProxyError::Forbidden(_) => (StatusCode::FORBIDDEN, self.to_string()),
                     ProxyError::Internal(_) => {
                         (StatusCode::INTERNAL_SERVER_ERROR, self.to_string())

@@ -3923,7 +3923,7 @@
       "intent": {
         "background": "後台/輕量（warmup·compact）",
         "thinking": "擴展思考 / reasoning",
-        "long-context": "超長上下文",
+        "long-context": "超長上下文（估算 ≥100,000 tokens）",
         "web-search": "聯網搜尋工具",
         "subagent": "子代理（subagent）"
       },

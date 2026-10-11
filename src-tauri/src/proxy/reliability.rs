@@ -8,6 +8,8 @@
 //! 3. non_api_failover：上游返回 2xx 却是 HTML/Cloudflare 错误页（非 API 响应）时转成可重试
 //!    错误，交给失败转移，而不是把错误页当 SSE 原样下发。
 
+use std::borrow::Cow;
+
 use serde::{Deserialize, Serialize};
 
 /// per-app 可靠性配置（存 `fork_reliability_<app_type>` 单条 JSON blob）。
@@ -102,21 +104,48 @@ pub fn tail_is_repeating(text: &str, max_period: usize, min_repeats: usize) -> b
 
 /// 从一条 SSE `data` JSON 里尽力抽取「文本增量」，供 loop_guard 累计。
 /// 跨 API 覆盖：Anthropic `delta.text`、OpenAI chat `choices[0].delta.content`、
-/// Responses `delta`(字符串)。抽不到返回空串。
-pub fn extract_text_delta(data_json: &serde_json::Value) -> &str {
+/// Responses 文本事件、Gemini 首个 candidate 的所有文本 parts。工具参数不属于文本。
+pub fn extract_text_delta<'a>(
+    event_name: Option<&str>,
+    data_json: &'a serde_json::Value,
+) -> Cow<'a, str> {
     if let Some(t) = data_json.pointer("/delta/text").and_then(|v| v.as_str()) {
-        return t;
+        return Cow::Borrowed(t);
     }
     if let Some(t) = data_json
         .pointer("/choices/0/delta/content")
         .and_then(|v| v.as_str())
     {
-        return t;
+        return Cow::Borrowed(t);
     }
-    if let Some(t) = data_json.get("delta").and_then(|v| v.as_str()) {
-        return t;
+    let event_type = data_json
+        .get("type")
+        .and_then(|v| v.as_str())
+        .or(event_name);
+    if matches!(
+        event_type,
+        Some(
+            "response.output_text.delta"
+                | "response.reasoning_text.delta"
+                | "response.reasoning_summary_text.delta"
+        )
+    ) {
+        if let Some(t) = data_json.get("delta").and_then(|v| v.as_str()) {
+            return Cow::Borrowed(t);
+        }
     }
-    ""
+    if let Some(parts) = data_json
+        .pointer("/candidates/0/content/parts")
+        .and_then(|v| v.as_array())
+    {
+        return Cow::Owned(
+            parts
+                .iter()
+                .filter_map(|part| part.get("text").and_then(|text| text.as_str()))
+                .collect(),
+        );
+    }
+    Cow::Borrowed("")
 }
 
 // RELIABILITY_TESTS
@@ -146,7 +175,9 @@ mod tests {
 
     #[test]
     fn non_api_detection_only_html() {
-        assert!(looks_like_non_api_response(Some("text/html; charset=utf-8")));
+        assert!(looks_like_non_api_response(Some(
+            "text/html; charset=utf-8"
+        )));
         assert!(looks_like_non_api_response(Some("application/xhtml+xml")));
         assert!(!looks_like_non_api_response(Some("text/event-stream")));
         assert!(!looks_like_non_api_response(Some("application/json")));
@@ -178,15 +209,48 @@ mod tests {
     #[test]
     fn extract_text_delta_across_shapes() {
         assert_eq!(
-            extract_text_delta(&json!({ "delta": { "text": "hi" } })),
+            extract_text_delta(None, &json!({ "delta": { "text": "hi" } })),
             "hi"
         );
         assert_eq!(
-            extract_text_delta(&json!({ "choices": [ { "delta": { "content": "yo" } } ] })),
+            extract_text_delta(
+                None,
+                &json!({ "choices": [ { "delta": { "content": "yo" } } ] })
+            ),
             "yo"
         );
-        assert_eq!(extract_text_delta(&json!({ "delta": "stream" })), "stream");
-        assert_eq!(extract_text_delta(&json!({ "type": "ping" })), "");
+        assert_eq!(
+            extract_text_delta(
+                Some("response.output_text.delta"),
+                &json!({ "delta": "stream" })
+            ),
+            "stream"
+        );
+        assert_eq!(extract_text_delta(None, &json!({ "type": "ping" })), "");
+        assert_eq!(
+            extract_text_delta(
+                None,
+                &json!({ "candidates": [{ "content": { "parts": [{ "text": "hello " }, { "functionCall": { "name": "tool" } }, { "text": "world" }] } }] })
+            ),
+            "hello world"
+        );
+    }
+
+    #[test]
+    fn extract_text_delta_excludes_tool_arguments_and_unknown_string_deltas() {
+        for event_type in [
+            "response.function_call_arguments.delta",
+            "response.custom_tool_call_input.delta",
+        ] {
+            assert!(extract_text_delta(
+                None,
+                &json!({"type": event_type, "delta": "0,".repeat(40)})
+            )
+            .is_empty());
+            assert!(
+                extract_text_delta(Some(event_type), &json!({"delta": "0,".repeat(40)})).is_empty()
+            );
+        }
+        assert!(extract_text_delta(None, &json!({"delta": "0,".repeat(40)})).is_empty());
     }
 }
-

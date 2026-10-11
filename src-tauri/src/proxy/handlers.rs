@@ -41,7 +41,8 @@ use super::{
     response_processor::{
         create_logged_passthrough_stream, create_usage_collector, process_response,
         read_decoded_body, strip_entity_headers_for_rebuilt_body,
-        strip_hop_by_hop_response_headers, usage_logging_enabled, SseUsageCollector,
+        strip_hop_by_hop_response_headers, usage_collection_enabled, usage_logging_enabled,
+        SseUsageCollector,
     },
     server::ProxyState,
     sse::{strip_sse_field, take_sse_block},
@@ -552,7 +553,8 @@ fn spawn_claude_usage_log(
     status_code: u16,
     is_streaming: bool,
 ) {
-    if !usage_logging_enabled(state) {
+    let diagnostic_logging = usage_logging_enabled(state);
+    if !diagnostic_logging && ctx.gateway_key_id.is_none() {
         return;
     }
     let Some(log) = prepare_claude_usage_log(ctx, response, status_code, is_streaming) else {
@@ -645,7 +647,7 @@ async fn handle_claude_transform(
         };
 
         // 创建使用量收集器；关闭 usage logging 时不要再解析转换后的 SSE。
-        let usage_collector = if usage_logging_enabled(state) {
+        let usage_collector = if usage_collection_enabled(state, ctx.gateway_key_id.as_deref()) {
             let state = state.clone();
             let provider_id = ctx.provider.id.clone();
             let request_model = ctx.request_model.clone();
@@ -861,7 +863,7 @@ async fn handle_claude_transform(
         Ok(response) => response,
         Err(error) => {
             log::error!("[Claude] 转换响应失败: {error}");
-            if usage_logging_enabled(state) {
+            if usage_collection_enabled(state, ctx.gateway_key_id.as_deref()) {
                 if let Some(log) = raw_usage_response.as_ref().and_then(|response| {
                     prepare_claude_usage_log(ctx, response, status.as_u16(), false)
                 }) {
@@ -2014,7 +2016,7 @@ async fn handle_codex_chat_to_responses_transform(
         let sse_stream = create_responses_sse_stream_from_chat_with_context(stream, tool_context);
         let sse_stream = record_responses_sse_stream(sse_stream, state.codex_chat_history.clone());
 
-        let usage_collector = if usage_logging_enabled(state) {
+        let usage_collector = if usage_collection_enabled(state, ctx.gateway_key_id.as_deref()) {
             let state = state.clone();
             let provider_id = ctx.provider.id.clone();
             let request_model = ctx.request_model.clone();
@@ -2510,7 +2512,7 @@ fn build_codex_anthropic_sse_response(
     status: StatusCode,
     connection_guard: Option<ActiveConnectionGuard>,
 ) -> Result<axum::response::Response, ProxyError> {
-    let usage_collector = if usage_logging_enabled(state) {
+    let usage_collector = if usage_collection_enabled(state, ctx.gateway_key_id.as_deref()) {
         let state = state.clone();
         let provider_id = ctx.provider.id.clone();
         let request_model = ctx.request_model.clone();
@@ -2891,7 +2893,7 @@ fn codex_proxy_error_code(error: &ProxyError) -> &'static str {
         ProxyError::ConfigError(_) => "cc_switch_config_error",
         ProxyError::TransformError(_) => "cc_switch_transform_error",
         ProxyError::InvalidRequest(_) => "cc_switch_invalid_request",
-        ProxyError::AuthError(_) => "cc_switch_auth_error",
+        ProxyError::AuthError(_) | ProxyError::ManagedAccountAuthError(_) => "cc_switch_auth_error",
         ProxyError::Forbidden(_) => "cc_switch_forbidden",
         ProxyError::RateLimited { .. } => "cc_switch_rate_limited",
         ProxyError::UpstreamError { .. } => "cc_switch_upstream_error",
@@ -2949,19 +2951,15 @@ pub async fn handle_gemini(
             .map_err(|e| ProxyError::Internal(format!("Failed to parse request body: {e}")))?
     };
 
-    // Gemini 的模型名称在 URI 中
-    let mut ctx = RequestContext::new(
+    // Resolve the URI model before intent routing and gateway caps.
+    let mut ctx = RequestContext::new_for_gemini(
         &state,
         &body,
         &headers,
-        AppType::Gemini,
-        "Gemini",
-        "gemini",
-        None,
+        &uri,
         extensions.get::<crate::proxy::gateway_auth::AuthedKey>(),
     )
-    .await?
-    .with_model_from_uri(&uri);
+    .await?;
 
     // 提取完整的路径和查询参数
     let endpoint = uri
@@ -3693,7 +3691,8 @@ async fn log_usage(
 ) {
     use super::usage::logger::UsageLogger;
 
-    if !usage_logging_enabled(state) {
+    let diagnostic_logging = usage_logging_enabled(state);
+    if !diagnostic_logging && gateway_key_id.is_none() {
         return;
     }
 
@@ -3710,7 +3709,7 @@ async fn log_usage(
     let request_model = request_model.to_string();
     let outbound_model = outbound_model.to_string();
     let write = tokio::task::spawn_blocking(move || {
-        let logger = UsageLogger::new(&db);
+        let logger = UsageLogger::new(&db).with_diagnostic_logging(diagnostic_logging);
         // 计费模式读取的 DAO 是伪 async（无真实挂起点、直接取阻塞锁），
         // 在阻塞线程上 block_on 不会停转运行时
         let pricing_model_source = tokio::runtime::Handle::current()
