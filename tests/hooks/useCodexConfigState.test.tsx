@@ -1,8 +1,55 @@
 import { act, renderHook } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
+import { parse as parseToml } from "smol-toml";
 import { useCodexConfigState } from "@/components/providers/forms/hooks/useCodexConfigState";
 
 describe("useCodexConfigState", () => {
+  it("edits subagent defaults and instruction files without losing either setting", () => {
+    const initialData = {
+      settingsConfig: {
+        auth: {},
+        config:
+          'model = "gpt-a"\nmodel_instructions_file = "./a.md"\n\n[agents]\nmax_threads = 4\ndefault_subagent_model = "gpt-a-mini"\n',
+        modelInstructionsFiles: ["./a.md", "./b.md"],
+      },
+    };
+    const { result } = renderHook(() => useCodexConfigState({ initialData }));
+
+    act(() => {
+      result.current.handleCodexSubagentModelChange("gpt-b-mini");
+      result.current.handleCodexSubagentReasoningEffortChange("low");
+      result.current.handleCodexModelInstructionsActiveFileChange("./b.md");
+    });
+    expect(parseToml(result.current.codexConfig)).toMatchObject({
+      model_instructions_file: "./b.md",
+      agents: {
+        max_threads: 4,
+        default_subagent_model: "gpt-b-mini",
+        default_subagent_reasoning_effort: "low",
+      },
+    });
+    expect(result.current.codexSubagentModel).toBe("gpt-b-mini");
+    expect(result.current.codexModelInstructionsFile).toBe("./b.md");
+
+    act(() => {
+      result.current.handleCodexModelInstructionsActiveFileChange(null);
+      result.current.handleCodexSubagentModelChange("");
+    });
+    expect(parseToml(result.current.codexConfig)).toEqual({
+      model: "gpt-a",
+      agents: { max_threads: 4, default_subagent_reasoning_effort: "low" },
+    });
+    expect(result.current.codexModelInstructionsFiles).toEqual([
+      "./a.md",
+      "./b.md",
+    ]);
+
+    act(() => result.current.resetCodexConfig({}, 'model = "gpt-c"\n'));
+    expect(result.current.codexSubagentModel).toBe("");
+    expect(result.current.codexSubagentReasoningEffort).toBe("");
+    expect(result.current.codexModelInstructionsEnabled).toBe(false);
+  });
+
   it("uses experimental_bearer_token when auth API key is a proxy placeholder", () => {
     const { result } = renderHook(() =>
       useCodexConfigState({

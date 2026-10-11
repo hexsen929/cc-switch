@@ -39,7 +39,8 @@ vi.mock("@/components/ui/button", () => ({
   ),
 }));
 
-vi.mock("@/components/ui/input", () => ({
+vi.mock("@/components/ui/input", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/components/ui/input")>()),
   Input: (props: any) => <input {...props} />,
 }));
 
