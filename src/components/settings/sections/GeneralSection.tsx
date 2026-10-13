@@ -1,3 +1,4 @@
+import { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { ChevronRight, Monitor, Moon, Sun } from "lucide-react";
 import type { SettingsFormState } from "@/hooks/useSettings";
@@ -11,6 +12,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
 import { isLinux } from "@/lib/platform";
 import { TerminalSelect } from "@/components/settings/TerminalSettings";
 import {
@@ -42,6 +44,13 @@ export function GeneralSection({
 }: GeneralSectionProps) {
   const { t } = useTranslation();
   const { theme, setTheme } = useTheme();
+  const [sharedPath, setSharedPath] = useState(
+    settings.sharedInstructionFile ?? "",
+  );
+
+  useEffect(() => {
+    setSharedPath(settings.sharedInstructionFile ?? "");
+  }, [settings.sharedInstructionFile]);
 
   return (
     <>
@@ -244,6 +253,41 @@ export function GeneralSection({
               />
             }
           />
+        </SettingsCard>
+      </SettingsBlock>
+
+      <SettingsBlock
+        title={t("settings.general.sharedInstructions", {
+          defaultValue: "Shared agent instructions",
+        })}
+        help={{
+          title: t("settings.general.sharedInstructions", {
+            defaultValue: "Shared agent instructions",
+          }),
+          body: t("settings.general.sharedInstructionsHelp", {
+            defaultValue:
+              "Keep instructions in your own file and synchronize a CC Switch-managed block into each agent. Existing user content is preserved.",
+          }),
+        }}
+      >
+        <SettingsCard>
+          <SettingsRow
+            label={t("settings.general.sharedInstructionsFile", {
+              defaultValue: "Source file",
+            })}
+            description={t("settings.general.sharedInstructionsPathHint", {
+              defaultValue: "Use an absolute path or ~/path/to/AGENTS.md. Leave empty to remove managed blocks.",
+            })}
+          >
+            <Input
+              value={sharedPath}
+              placeholder="~/.agents/AGENTS.md"
+              onChange={(event) => setSharedPath(event.target.value)}
+              onBlur={() =>
+                void onAutoSave({ sharedInstructionFile: sharedPath })
+              }
+            />
+          </SettingsRow>
         </SettingsCard>
       </SettingsBlock>
     </>

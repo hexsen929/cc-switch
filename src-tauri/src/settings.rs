@@ -419,6 +419,9 @@ pub struct AppSettings {
     /// many users do not want to chase every release).
     #[serde(default)]
     pub check_tool_updates_on_startup: bool,
+    /// Optional user-owned instruction file synchronized into each agent's managed block.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub shared_instruction_file: Option<String>,
     /// Keep Codex ChatGPT login material in auth.json when switching to third-party providers.
     /// Opt-in: defaults to false so third-party switches cleanly overwrite auth.json.
     #[serde(default)]
@@ -588,6 +591,7 @@ impl Default for AppSettings {
             show_profile_switcher: false,
             show_provider_search: true,
             check_tool_updates_on_startup: false,
+            shared_instruction_file: None,
             preserve_codex_official_auth_on_switch: false,
             unify_codex_session_history: false,
             unify_codex_migrate_existing: None,
@@ -715,6 +719,12 @@ impl AppSettings {
             .map(|s| s.trim())
             .filter(|s| matches!(*s, "left" | "used"))
             .map(|s| s.to_string());
+
+        self.shared_instruction_file = self
+            .shared_instruction_file
+            .as_ref()
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty());
 
         if let Some(sync) = &mut self.webdav_sync {
             sync.normalize();

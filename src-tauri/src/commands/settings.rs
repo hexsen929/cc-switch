@@ -73,7 +73,17 @@ pub async fn save_settings(
     let unify_codex_enabled = merged.unify_codex_session_history;
     let classic_subagents_changed =
         merged.codex_stack_classic_subagents != existing.codex_stack_classic_subagents;
+    let shared_instruction_file_changed =
+        merged.shared_instruction_file != existing.shared_instruction_file;
     crate::settings::update_settings(merged).map_err(|e| e.to_string())?;
+
+    if shared_instruction_file_changed {
+        if let Err(error) = crate::shared_instructions::sync_from_settings() {
+            log::warn!("同步共享指令文件失败，回滚设置: {error}");
+            crate::settings::update_settings(existing).map_err(|rollback| rollback.to_string())?;
+            return Err(error.to_string());
+        }
+    }
 
     // 经典子 agent 开关只影响 Stack 模式下的合并目录：立即重写，失败时回滚设置，
     // 免得界面显示已打开、客户端还是旧目录。

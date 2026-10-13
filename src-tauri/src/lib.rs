@@ -40,6 +40,7 @@ mod proxy;
 mod services;
 mod session_manager;
 mod settings;
+mod shared_instructions;
 mod store;
 
 mod tray;
@@ -683,6 +684,10 @@ pub fn run() {
             }
 
             let app_state = AppState::new(db);
+
+            if let Err(error) = crate::shared_instructions::sync_from_settings() {
+                log::warn!("启动时同步共享指令文件失败，保留现有 Agent 文件: {error}");
+            }
 
             // 设置 AppHandle 用于代理故障转移时的 UI 更新
             app_state.proxy_service.set_app_handle(app.handle().clone());
