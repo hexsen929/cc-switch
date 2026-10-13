@@ -19,7 +19,7 @@ use serde::Serialize;
 use serde_json::Value;
 
 use super::model::{ContentRef, ImageRef, ImageSource};
-use super::providers::{hermes, opencode};
+use super::providers::{hermes, kimi, opencode};
 use super::{canonicalize_existing_path, provider_roots};
 
 /// 单次读取的全文上限
@@ -641,6 +641,7 @@ fn project_dir_for(source: &ValidatedSource) -> Option<PathBuf> {
         "gemini" => gemini::scan_sessions(),
         "grokbuild" => grokbuild::scan_sessions(),
         "hermes" => hermes::scan_sessions(),
+        "kimi" => kimi::scan_sessions(),
         "pi" => pi::scan_sessions(),
         "mcode" => mcode::scan_sessions(),
         _ => return None,

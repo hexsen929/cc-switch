@@ -207,7 +207,8 @@ export function SessionManagerPage({
   const scopedSessions = useMemo(
     () =>
       sessions.filter((session) =>
-        (availableApps as string[]).includes(session.providerId),
+        (availableApps as string[]).includes(session.providerId) ||
+        (appFilter === "all" && session.providerId === "kimi"),
       ),
     [sessions, availableApps],
   );

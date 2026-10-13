@@ -1,6 +1,5 @@
 import type { ReactNode } from "react";
 import { createElement } from "react";
-import type { AppId } from "@/lib/api";
 import type { SessionMeta } from "@/types";
 
 export const UNKNOWN_PROJECT_DIR_KEY = "__unknown_project_dir__";
@@ -16,7 +15,7 @@ export const SESSION_APP_IDS = [
   "grokbuild",
   "openclaw",
   "mcode",
-] as const satisfies readonly AppId[];
+] as const;
 
 export type SessionAppId = (typeof SESSION_APP_IDS)[number];
 
