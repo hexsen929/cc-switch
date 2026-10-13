@@ -1,5 +1,6 @@
 import type { ReactNode } from "react";
 import { createElement } from "react";
+import type { AppId } from "@/lib/api";
 import type { SessionMeta } from "@/types";
 
 export const UNKNOWN_PROJECT_DIR_KEY = "__unknown_project_dir__";
@@ -15,15 +16,12 @@ export const SESSION_APP_IDS = [
   "grokbuild",
   "openclaw",
   "mcode",
-] as const;
+] as const satisfies readonly AppId[];
 
 export type SessionAppId = (typeof SESSION_APP_IDS)[number];
 
 export const isSessionAppId = (value: string): value is SessionAppId =>
   (SESSION_APP_IDS as readonly string[]).includes(value);
-
-export const formatSessionProviderName = (value: string) =>
-  value === "kimi" ? "Kimi Code" : value;
 
 /** 「会话记录在哪里」对话框：各来源的默认位置（改过配置目录的按改过的读）。 */
 export const SESSION_SOURCE_PATHS: Record<SessionAppId, string[]> = {

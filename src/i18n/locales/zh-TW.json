@@ -399,7 +399,11 @@
       "checkToolUpdatesHelp": "開啟後，每次啟動 CC Switch 會查一次已安裝的命令列應用有沒有新版本，查到了就在側欄「應用」上顯示一個圓點。不會自動升級。",
       "windowAndTerminal": "視窗與終端機",
       "minimizeToTrayHelp": "開啟時，點關閉按鈕只隱藏視窗，CC Switch 留在系統匣裡繼續執行（輕量模式在系統匣選單裡）；關閉時點關閉按鈕直接結束。",
-      "terminalHelp": "點供應商卡片上的「開啟終端機」時用哪個終端機。選的終端機無法使用時，改用系統預設終端機。"
+      "terminalHelp": "點供應商卡片上的「開啟終端機」時用哪個終端機。選的終端機無法使用時，改用系統預設終端機。",
+      "sharedInstructions": "共用 Agent 指令",
+      "sharedInstructionsHelp": "將統一指令保存在你自己的檔案中，CC Switch 會把管理區塊同步到各個 Agent，同時保留目標檔案原有的內容。",
+      "sharedInstructionsFile": "指令來源檔案",
+      "sharedInstructionsPathHint": "填寫絕對路徑或 ~/path/to/AGENTS.md。留空會移除 CC Switch 寫入的管理區塊。"
     },
     "tabGeneral": "通用",
     "tabAuth": "驗證",

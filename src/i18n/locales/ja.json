@@ -399,7 +399,11 @@
       "checkToolUpdatesHelp": "オンにすると、CC Switch の起動時にインストール済みのコマンドラインアプリの新しいバージョンを確認し、見つかればサイドバーの「アプリ」に点を表示します。自動でアップグレードはしません。",
       "windowAndTerminal": "ウィンドウとターミナル",
       "minimizeToTrayHelp": "オンのときは閉じるボタンでウィンドウを隠すだけで、CC Switch はシステムトレイで動き続けます（軽量モードはトレイメニューにあります）。オフのときは閉じるボタンで終了します。",
-      "terminalHelp": "プロバイダーカードの「ターミナルを開く」で使うターミナルです。使えない場合はシステムの既定のターミナルを使います。"
+      "terminalHelp": "プロバイダーカードの「ターミナルを開く」で使うターミナルです。使えない場合はシステムの既定のターミナルを使います。",
+      "sharedInstructions": "共有 Agent 指示",
+      "sharedInstructionsHelp": "指示を自分のファイルに保存すると、CC Switch が管理ブロックを各 Agent に同期します。対象ファイルの既存内容は保持されます。",
+      "sharedInstructionsFile": "指示のソースファイル",
+      "sharedInstructionsPathHint": "絶対パスまたは ~/path/to/AGENTS.md を指定してください。空欄にすると CC Switch の管理ブロックを削除します。"
     },
     "tabGeneral": "一般",
     "tabAuth": "認証",

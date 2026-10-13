@@ -399,7 +399,11 @@
       "checkToolUpdatesHelp": "打开后，每次启动 CC Switch 会查一次已安装的命令行应用有没有新版本，查到了就在侧栏「应用」上显示一个圆点。不会自动升级。",
       "windowAndTerminal": "窗口与终端",
       "minimizeToTrayHelp": "打开时，点关闭按钮只隐藏窗口，CC Switch 留在系统托盘里继续运行（轻量模式在托盘菜单里）；关闭时点关闭按钮直接退出。",
-      "terminalHelp": "点供应商卡片上的「打开终端」时用哪个终端。选的终端不可用时，改用系统默认终端。"
+      "terminalHelp": "点供应商卡片上的「打开终端」时用哪个终端。选的终端不可用时，改用系统默认终端。",
+      "sharedInstructions": "共享 Agent 指令",
+      "sharedInstructionsHelp": "把统一指令保存在你自己的文件中，CC Switch 会将托管区块同步到各个 Agent，同时保留目标文件中的原有内容。",
+      "sharedInstructionsFile": "指令源文件",
+      "sharedInstructionsPathHint": "填写绝对路径或 ~/path/to/AGENTS.md。留空会移除 CC Switch 写入的托管区块。"
     },
     "tabGeneral": "通用",
     "tabAuth": "认证",
