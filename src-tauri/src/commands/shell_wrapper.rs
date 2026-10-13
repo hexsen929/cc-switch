@@ -35,16 +35,23 @@ enum WrapperKind {
 
 /// 决定把 wrapper 写到哪个/哪些 shell 启动文件。
 ///
-/// zsh 的注入点必须是 `~/.zshenv`：只有它被**所有** zsh 读取——包括登录非交互 shell
-/// （`zsh -l -c`，即从 Dock / 访达 / IDE 启动 `claude` 时的形态）。旧实现只写 `~/.zshrc`，
-/// 而 `.zshrc` 仅交互式 shell 读取，导致「从图形界面启动的 claude 根本拿不到运行时指令」。
+/// zsh 使用 `~/.zshenv`，使正常加载启动文件的交互及非交互 shell 都能定义 wrapper。
+/// 直接执行 Claude 二进制的启动方式不会调用 shell 函数。
 ///
 /// - `primary`：真正写入 wrapper 的文件。
+/// - `additional`：同样需要安装的文件（如 Bash 的另一种启动入口）。
 /// - `legacy`：历史上写过、现在不再是注入点的文件；安装时顺带清理其残留块。
 #[derive(Debug, Clone)]
 struct ShellTargets {
     primary: PathBuf,
+    additional: Vec<PathBuf>,
     legacy: Vec<PathBuf>,
+}
+
+impl ShellTargets {
+    fn install_paths(&self) -> impl Iterator<Item = &PathBuf> {
+        std::iter::once(&self.primary).chain(&self.additional)
+    }
 }
 
 fn get_shell_targets() -> Result<(ShellTargets, String), String> {
@@ -69,6 +76,7 @@ fn get_shell_targets() -> Result<(ShellTargets, String), String> {
         return Ok((
             ShellTargets {
                 primary,
+                additional: Vec::new(),
                 legacy: Vec::new(),
             },
             "PowerShell".to_string(),
@@ -83,59 +91,60 @@ fn get_shell_targets() -> Result<(ShellTargets, String), String> {
             .and_then(|name| name.to_str())
             .unwrap_or_default();
 
-        match shell_name {
-            // 用 `.zshenv`（所有 zsh 都读）而不是 `.zshrc`（仅交互式）；`.zshrc` 作为
-            // 需要顺带清理的旧注入点。
-            "zsh" => Ok((
-                ShellTargets {
-                    primary: home.join(".zshenv"),
-                    legacy: vec![home.join(".zshrc")],
-                },
-                "Zsh".to_string(),
-            )),
-            "bash" => {
-                // 登录 shell 读 `.bash_profile`、交互非登录读 `.bashrc`；两处都写，
-                // 确保 GUI / IDE（登录非交互形态视发行版而定）与终端都能拿到。
-                #[cfg(target_os = "macos")]
-                let primary = home.join(".bash_profile");
-                #[cfg(not(target_os = "macos"))]
-                let primary = home.join(".bashrc");
-                let secondary = if primary.ends_with(".bashrc") {
-                    home.join(".bash_profile")
-                } else {
-                    home.join(".bashrc")
-                };
-                Ok((
-                    ShellTargets {
-                        primary,
-                        legacy: vec![secondary],
-                    },
-                    "Bash".to_string(),
-                ))
-            }
-            "fish" => Ok((
-                ShellTargets {
-                    primary: home.join(".config").join("fish").join("config.fish"),
-                    legacy: Vec::new(),
-                },
-                "Fish".to_string(),
-            )),
-            _ => Err(format!(
-                "暂不支持当前 shell: {}",
-                if shell_name.is_empty() {
-                    "unknown"
-                } else {
-                    shell_name
-                }
-            )),
-        }
+        shell_targets_for(&home, shell_name)
     }
 }
 
-/// 兼容旧调用点：只取主配置文件。
-fn get_shell_config_path() -> Result<(PathBuf, String), String> {
-    let (targets, shell_type) = get_shell_targets()?;
-    Ok((targets.primary, shell_type))
+#[cfg(not(target_os = "windows"))]
+fn shell_targets_for(home: &Path, shell_name: &str) -> Result<(ShellTargets, String), String> {
+    match shell_name {
+        "zsh" => Ok((
+            ShellTargets {
+                primary: home.join(".zshenv"),
+                additional: Vec::new(),
+                legacy: vec![home.join(".zshrc")],
+            },
+            "Zsh".to_string(),
+        )),
+        "bash" => {
+            // Bash 只读第一个存在的登录配置；沿用它，避免新建 .bash_profile
+            // 遮蔽用户原有的 .bash_login 或 .profile。
+            let login = [".bash_profile", ".bash_login", ".profile"]
+                .into_iter()
+                .map(|name| home.join(name))
+                .find(|path| path.exists())
+                .unwrap_or_else(|| home.join(".bash_profile"));
+            let interactive = home.join(".bashrc");
+            #[cfg(target_os = "macos")]
+            let (primary, secondary) = (login, interactive);
+            #[cfg(not(target_os = "macos"))]
+            let (primary, secondary) = (interactive, login);
+            Ok((
+                ShellTargets {
+                    primary,
+                    additional: vec![secondary],
+                    legacy: Vec::new(),
+                },
+                "Bash".to_string(),
+            ))
+        }
+        "fish" => Ok((
+            ShellTargets {
+                primary: home.join(".config").join("fish").join("config.fish"),
+                additional: Vec::new(),
+                legacy: Vec::new(),
+            },
+            "Fish".to_string(),
+        )),
+        _ => Err(format!(
+            "暂不支持当前 shell: {}",
+            if shell_name.is_empty() {
+                "unknown"
+            } else {
+                shell_name
+            }
+        )),
+    }
 }
 
 /// `.zshenv` 若含「早退」逻辑（`return` / `exit`），其后的 wrapper 定义不会执行——
@@ -491,19 +500,15 @@ fn read_config(path: &Path) -> Result<(String, TextEncoding), String> {
     decode_config(&bytes)
 }
 
-fn write_config(path: &Path, content: &str, encoding: TextEncoding) -> Result<(), String> {
-    let target = if path.exists()
-        && fs::symlink_metadata(path)
-            .map(|metadata| metadata.file_type().is_symlink())
-            .unwrap_or(false)
+fn resolve_config_path(path: &Path) -> Result<PathBuf, String> {
+    if fs::symlink_metadata(path)
+        .map(|metadata| metadata.file_type().is_symlink())
+        .unwrap_or(false)
     {
-        fs::canonicalize(path).map_err(|e| format!("解析配置文件软链接失败: {e}"))?
+        fs::canonicalize(path).map_err(|e| format!("解析配置文件软链接失败: {e}"))
     } else {
-        path.to_path_buf()
-    };
-
-    atomic_write(&target, &encode_config(content, encoding))
-        .map_err(|e| format!("写入配置文件失败: {e}"))
+        Ok(path.to_path_buf())
+    }
 }
 
 fn backup_config(path: &Path) -> Result<(), String> {
@@ -671,35 +676,46 @@ fn detect_newline(content: &str) -> &'static str {
 #[tauri::command]
 pub fn check_shell_wrapper_status() -> Result<WrapperStatus, String> {
     let (targets, shell_type) = get_shell_targets()?;
-    let (config_path, legacy_paths) = (targets.primary, targets.legacy);
-
-    let (content, _) = read_config(&config_path)?;
-    let inspection = inspect_wrapper(&content)?;
-    let installed = !inspection.blocks.is_empty();
     let append_prompt_path = get_append_prompt_path()?;
     let system_prompt_path = get_system_prompt_path()?;
-    let expected_wrapper =
-        generate_wrapper_code(&shell_type, &append_prompt_path, &system_prompt_path)?
-            .replace('\n', detect_newline(&content));
-    let current_wrapper_matches = inspection.blocks.len() == 1
-        && inspection.blocks[0].kind == WrapperKind::Current
-        && &content[inspection.blocks[0].start..inspection.blocks[0].end]
-            == expected_wrapper.as_str();
+    let wrapper = generate_wrapper_code(&shell_type, &append_prompt_path, &system_prompt_path)?;
+    check_wrapper_status_at(&targets, &shell_type, &wrapper)
+}
 
-    // 旧注入点（如 zsh 的 ~/.zshrc）里若仍有残留块，需要提示清理。
+fn current_wrapper_matches(content: &str, inspection: &WrapperInspection, wrapper: &str) -> bool {
+    inspection.blocks.len() == 1
+        && inspection.blocks[0].kind == WrapperKind::Current
+        && content[inspection.blocks[0].start..inspection.blocks[0].end]
+            == wrapper.replace('\n', detect_newline(content))
+}
+
+fn check_wrapper_status_at(
+    targets: &ShellTargets,
+    shell_type: &str,
+    wrapper: &str,
+) -> Result<WrapperStatus, String> {
+    let mut installed = false;
+    let mut all_current = true;
+    let mut conflicting_wrapper = false;
+    for path in targets.install_paths() {
+        let (content, _) = read_config(path)?;
+        let inspection = inspect_wrapper(&content)?;
+        installed |= !inspection.blocks.is_empty();
+        all_current &= current_wrapper_matches(&content, &inspection, wrapper);
+        conflicting_wrapper |= inspection.conflicting_wrapper;
+    }
+
     let mut stale_config_file = None;
-    for legacy in &legacy_paths {
-        if !legacy.exists() {
-            continue;
-        }
+    for legacy in &targets.legacy {
         let (legacy_content, _) = read_config(legacy)?;
-        if !inspect_wrapper(&legacy_content)?.blocks.is_empty() {
+        let inspection = inspect_wrapper(&legacy_content)?;
+        conflicting_wrapper |= inspection.conflicting_wrapper;
+        if stale_config_file.is_none() && !inspection.blocks.is_empty() {
             stale_config_file = Some(legacy.to_string_lossy().to_string());
-            break;
         }
     }
 
-    let warning = if shell_type == "Zsh" && detect_early_exit(&config_path) {
+    let warning = if shell_type == "Zsh" && detect_early_exit(&targets.primary) {
         Some(
             "~/.zshenv 含 return/exit 早退语句；其后的 wrapper 可能不会执行，运行时指令或不生效。"
                 .to_string(),
@@ -710,69 +726,142 @@ pub fn check_shell_wrapper_status() -> Result<WrapperStatus, String> {
 
     Ok(WrapperStatus {
         installed: installed || stale_config_file.is_some(),
-        needs_upgrade: (installed && !current_wrapper_matches) || stale_config_file.is_some(),
-        conflicting_wrapper: inspection.conflicting_wrapper,
-        shell_type: Some(shell_type),
-        config_file: Some(config_path.to_string_lossy().to_string()),
+        needs_upgrade: (installed && !all_current) || stale_config_file.is_some(),
+        conflicting_wrapper,
+        shell_type: Some(shell_type.to_string()),
+        config_file: Some(targets.primary.to_string_lossy().to_string()),
         stale_config_file,
         warning,
     })
 }
 
-/// 把 wrapper 写入某个文件（幂等）。已存在且内容一致时返回 false（未改动）。
-/// `shell_type` 仅用于错误信息（block 内容与文件无关）。
-fn write_wrapper_into(path: &Path, shell_type: &str, wrapper: &str) -> Result<bool, String> {
-    if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent).map_err(|e| format!("创建目录失败: {e}"))?;
-    }
-    let (existing_content, encoding) = read_config(path)?;
-    let inspection = inspect_wrapper(&existing_content)?;
-    if inspection.conflicting_wrapper {
+struct ConfigChange {
+    path: PathBuf,
+    target: PathBuf,
+    original: Option<Vec<u8>>,
+    updated: Vec<u8>,
+}
+
+/// 只读检查并准备变更；所有文件都检查成功之后才能开始写入。
+fn plan_wrapper_change(
+    path: &Path,
+    replacement: Option<&str>,
+    protect_external: bool,
+) -> Result<Option<ConfigChange>, String> {
+    let target = resolve_config_path(path)?;
+    let original = match fs::read(path) {
+        Ok(bytes) => Some(bytes),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
+        Err(error) => return Err(format!("读取配置文件 {} 失败: {error}", path.display())),
+    };
+    let (content, encoding) = decode_config(original.as_deref().unwrap_or_default())?;
+    let inspection = inspect_wrapper(&content)?;
+    if protect_external && inspection.conflicting_wrapper {
         return Err(format!(
-            "检测到由 claude-keysmith 管理的 wrapper（{shell_type}）；为避免覆盖其 system prompt 配置，CC Switch 未执行安装"
+            "检测到由 claude-keysmith 管理的 wrapper（{}）；为避免覆盖其 system prompt 配置，CC Switch 未执行安装",
+            path.display()
         ));
     }
-    let current_matches = inspection.blocks.len() == 1
-        && inspection.blocks[0].kind == WrapperKind::Current
-        && &existing_content[inspection.blocks[0].start..inspection.blocks[0].end] == wrapper;
-    if current_matches {
-        return Ok(false);
-    }
 
-    backup_config(path)?;
-    let newline = detect_newline(&existing_content);
-    let wrapper = wrapper.replace('\n', newline);
-    let new_content = if inspection.blocks.is_empty() {
-        let mut content = existing_content;
-        if !content.is_empty() {
-            if !content.ends_with(newline) {
-                content.push_str(newline);
-            }
-            content.push_str(newline);
+    let updated = if let Some(wrapper) = replacement {
+        if current_wrapper_matches(&content, &inspection, wrapper) {
+            return Ok(None);
         }
-        content.push_str(&wrapper);
-        content.push_str(newline);
-        content
+        let newline = detect_newline(&content);
+        let wrapper = wrapper.replace('\n', newline);
+        if inspection.blocks.is_empty() {
+            let mut updated = content;
+            if !updated.is_empty() {
+                if !updated.ends_with(newline) {
+                    updated.push_str(newline);
+                }
+                updated.push_str(newline);
+            }
+            updated.push_str(&wrapper);
+            updated.push_str(newline);
+            updated
+        } else {
+            replace_wrapper_blocks(&content, &inspection.blocks, Some(&wrapper))
+        }
     } else {
-        replace_wrapper_blocks(&existing_content, &inspection.blocks, Some(&wrapper))
+        if inspection.blocks.is_empty() {
+            return Ok(None);
+        }
+        replace_wrapper_blocks(&content, &inspection.blocks, None)
     };
-    write_config(path, &new_content, encoding)?;
+
+    Ok(Some(ConfigChange {
+        path: path.to_path_buf(),
+        target,
+        original,
+        updated: encode_config(&updated, encoding),
+    }))
+}
+
+fn apply_config_changes(changes: &[ConfigChange]) -> Result<(), String> {
+    apply_config_changes_with(changes, |path, bytes| {
+        atomic_write(path, bytes).map_err(|error| error.to_string())
+    })
+}
+
+/// 单文件写入是原子的；后续文件失败时，恢复此前成功写入的文件。
+fn apply_config_changes_with(
+    changes: &[ConfigChange],
+    mut write: impl FnMut(&Path, &[u8]) -> Result<(), String>,
+) -> Result<(), String> {
+    for change in changes {
+        backup_config(&change.path)?;
+    }
+    for (index, change) in changes.iter().enumerate() {
+        if let Err(error) = write(&change.target, &change.updated) {
+            let mut rollback_errors = Vec::new();
+            for previous in changes[..index].iter().rev() {
+                let restored = if let Some(original) = &previous.original {
+                    write(&previous.target, original)
+                } else {
+                    fs::remove_file(&previous.target).map_err(|error| error.to_string())
+                };
+                if let Err(rollback_error) = restored {
+                    rollback_errors.push(format!("{}: {rollback_error}", previous.path.display()));
+                }
+            }
+            let detail = if rollback_errors.is_empty() {
+                "已恢复此前的配置".to_string()
+            } else {
+                format!(
+                    "部分配置恢复失败，请使用备份恢复: {}",
+                    rollback_errors.join("、")
+                )
+            };
+            return Err(format!(
+                "写入配置文件 {} 失败: {error}；{detail}",
+                change.path.display()
+            ));
+        }
+    }
+    Ok(())
+}
+
+// Kept small and private for the focused regression tests. Production installs use the
+// multi-file transaction above so every target is checked before any file is changed.
+#[cfg(test)]
+fn write_wrapper_into(path: &Path, shell_type: &str, wrapper: &str) -> Result<bool, String> {
+    let change = plan_wrapper_change(path, Some(wrapper), true)?;
+    let Some(change) = change else {
+        return Ok(false);
+    };
+    let _ = shell_type;
+    apply_config_changes(std::slice::from_ref(&change))?;
     Ok(true)
 }
 
-/// 移除某个文件里的 wrapper 块（幂等）。没有块时返回 false。
+#[cfg(test)]
 fn remove_wrapper_from(path: &Path) -> Result<bool, String> {
-    if !path.exists() {
+    let change = plan_wrapper_change(path, None, false)?;
+    let Some(change) = change else {
         return Ok(false);
-    }
-    let (content, encoding) = read_config(path)?;
-    let inspection = inspect_wrapper(&content)?;
-    if inspection.blocks.is_empty() {
-        return Ok(false);
-    }
-    backup_config(path)?;
-    let new_content = replace_wrapper_blocks(&content, &inspection.blocks, None);
-    write_config(path, &new_content, encoding)?;
+    };
+    apply_config_changes(std::slice::from_ref(&change))?;
     Ok(true)
 }
 
@@ -781,24 +870,36 @@ pub fn install_shell_wrapper() -> Result<String, String> {
     let (targets, shell_type) = get_shell_targets()?;
     let append_prompt_path = get_append_prompt_path()?;
     let system_prompt_path = get_system_prompt_path()?;
-    let wrapper =
-        generate_wrapper_code(&shell_type, &append_prompt_path, &system_prompt_path)?;
+    let wrapper = generate_wrapper_code(&shell_type, &append_prompt_path, &system_prompt_path)?;
 
-    let written = write_wrapper_into(&targets.primary, &shell_type, &wrapper)?;
+    install_wrapper_at(&targets, &wrapper)
+}
 
-    // 清理旧注入点残留（zsh: ~/.zshrc；bash: 另一个 rc），避免函数被定义两次。
+fn install_wrapper_at(targets: &ShellTargets, wrapper: &str) -> Result<String, String> {
+    let mut changes = Vec::new();
+    for path in targets.install_paths() {
+        if let Some(change) = plan_wrapper_change(path, Some(wrapper), true)? {
+            changes.push(change);
+        }
+    }
     let mut cleaned: Vec<String> = Vec::new();
     for legacy in &targets.legacy {
-        if remove_wrapper_from(legacy)? {
+        if let Some(change) = plan_wrapper_change(legacy, None, true)? {
+            changes.push(change);
             cleaned.push(legacy.to_string_lossy().to_string());
         }
     }
 
-    if !written && cleaned.is_empty() {
+    if changes.is_empty() {
         return Err("Shell wrapper 已安装".to_string());
     }
+    apply_config_changes(&changes)?;
 
-    let mut result = targets.primary.to_string_lossy().to_string();
+    let mut result = targets
+        .install_paths()
+        .map(|path| path.to_string_lossy().to_string())
+        .collect::<Vec<_>>()
+        .join("、");
     if !cleaned.is_empty() {
         result.push_str(&format!("（已清理旧配置 {}）", cleaned.join("、")));
     }
@@ -808,45 +909,54 @@ pub fn install_shell_wrapper() -> Result<String, String> {
 #[tauri::command]
 pub fn uninstall_shell_wrapper() -> Result<String, String> {
     let (targets, _) = get_shell_targets()?;
-    let mut removed: Vec<String> = Vec::new();
-    if remove_wrapper_from(&targets.primary)? {
-        removed.push(targets.primary.to_string_lossy().to_string());
-    }
-    for legacy in &targets.legacy {
-        if remove_wrapper_from(legacy)? {
-            removed.push(legacy.to_string_lossy().to_string());
+    uninstall_wrapper_at(&targets)
+}
+
+fn uninstall_wrapper_at(targets: &ShellTargets) -> Result<String, String> {
+    let mut changes = Vec::new();
+    for path in targets.install_paths().chain(&targets.legacy) {
+        if let Some(change) = plan_wrapper_change(path, None, false)? {
+            changes.push(change);
         }
     }
-    if removed.is_empty() {
+    if changes.is_empty() {
         return Err("Shell wrapper 未安装".to_string());
     }
-    Ok(removed.join("、"))
+    apply_config_changes(&changes)?;
+    Ok(changes
+        .iter()
+        .map(|change| change.path.to_string_lossy().to_string())
+        .collect::<Vec<_>>()
+        .join("、"))
 }
 
 #[tauri::command]
 pub fn get_shell_wrapper_instructions() -> Result<String, String> {
-    let (config_path, shell_type) = get_shell_config_path()?;
+    let (targets, shell_type) = get_shell_targets()?;
     let append_prompt_path = get_append_prompt_path()?;
     let system_prompt_path = get_system_prompt_path()?;
     let wrapper_code =
         generate_wrapper_code(&shell_type, &append_prompt_path, &system_prompt_path)?;
-    let config_path_text = config_path.to_string_lossy();
+    let config_path_text = targets.primary.to_string_lossy();
     let reload_command = if shell_type == "PowerShell" {
         format!(". {}", quote_powershell(&config_path_text))
     } else {
         format!("source {}", quote_posix(&config_path_text))
     };
-    // zsh 的注入点是 ~/.zshenv（所有 zsh 都读，含 GUI 启动的登录非交互 shell）；
-    // 单独提示，避免用户按老习惯改到 ~/.zshrc 而看不到效果。
-    let placement_note = if shell_type == "Zsh" {
-        "\n# 说明\n必须写入 ~/.zshenv（每次启动 zsh 都会读取，包括从图形界面启动的 claude）；\n写进 ~/.zshrc 只在交互式终端生效，从 Dock/IDE 启动时不会应用。"
-    } else {
-        ""
+    let placement_note = match shell_type.as_str() {
+        "Zsh" => "\n# 说明\n写入 ~/.zshenv 可覆盖正常加载启动文件的交互和非交互 zsh；\n写入 ~/.zshrc 只覆盖交互式 zsh。直接执行 Claude 二进制会跳过 shell wrapper。",
+        "Bash" => "\n# 说明\n将上述代码写入列出的每个配置文件，分别覆盖登录和交互非登录 Bash。",
+        _ => "",
     };
+    let config_paths = targets
+        .install_paths()
+        .map(|path| path.display().to_string())
+        .collect::<Vec<_>>()
+        .join("\n");
 
     Ok(format!(
         "# Shell Wrapper ({shell_type})\n\n# 配置文件\n{}\n\n# 添加以下代码\n{}\n\n# 重新加载\n{}\n\n# 或者重启终端{}",
-        config_path.display(),
+        config_paths,
         wrapper_code,
         reload_command,
         placement_note
@@ -1093,5 +1203,82 @@ mod tests {
             !detect_early_exit(&primary),
             "`return` inside a comment must not be flagged"
         );
+    }
+
+    #[test]
+    #[cfg(not(target_os = "windows"))]
+    fn bash_installs_into_both_login_and_interactive_files() {
+        let home = tempfile::tempdir().expect("temp home");
+        let (targets, shell_type) = shell_targets_for(home.path(), "bash").expect("bash targets");
+        assert_eq!(shell_type, "Bash");
+        assert_eq!(targets.install_paths().count(), 2);
+        let wrapper = generate_posix_wrapper(
+            Path::new("/tmp/append-prompt.md"),
+            Path::new("/tmp/system-prompt.md"),
+        );
+        let result = install_wrapper_at(&targets, &wrapper).expect("install bash wrappers");
+        assert!(result.contains(".bash_profile"));
+        assert!(result.contains(".bashrc"));
+        for path in targets.install_paths() {
+            let content = fs::read_to_string(path).expect("read bash wrapper");
+            assert_eq!(content.matches(WRAPPER_START).count(), 1);
+        }
+        let status = check_wrapper_status_at(&targets, "Bash", &wrapper).expect("status");
+        assert!(status.installed);
+        assert!(!status.needs_upgrade);
+    }
+
+    #[test]
+    #[cfg(not(target_os = "windows"))]
+    fn external_wrapper_in_legacy_file_is_reported_before_install() {
+        let home = tempfile::tempdir().expect("temp home");
+        let (targets, shell_type) = shell_targets_for(home.path(), "zsh").expect("zsh targets");
+        let legacy = &targets.legacy[0];
+        let external = format!(
+            "{LEGACY_KEYSMITH_START}\n# Managed by claude-keysmith. Do not edit by hand.\nclaude() {{ command claude --system-prompt-file external \"$@\"; }}\n{LEGACY_KEYSMITH_END}\n"
+        );
+        fs::write(legacy, external).expect("write external wrapper");
+        let wrapper = generate_wrapper_code(
+            "Zsh",
+            Path::new("/tmp/append-prompt.md"),
+            Path::new("/tmp/system-prompt.md"),
+        )
+        .expect("generate wrapper");
+        let status = check_wrapper_status_at(&targets, &shell_type, &wrapper).expect("status");
+        assert!(status.conflicting_wrapper);
+        assert!(install_wrapper_at(&targets, &wrapper).is_err());
+        assert!(
+            !targets.primary.exists(),
+            "primary must stay untouched on conflict"
+        );
+    }
+
+    #[test]
+    fn multi_file_install_rolls_back_when_a_later_write_fails() {
+        let temp = tempfile::tempdir().expect("temp");
+        let first = temp.path().join("first");
+        let second = temp.path().join("second");
+        let wrapper = generate_posix_wrapper(
+            Path::new("/tmp/append-prompt.md"),
+            Path::new("/tmp/system-prompt.md"),
+        );
+        let first_change = plan_wrapper_change(&first, Some(&wrapper), true)
+            .expect("plan first")
+            .expect("first change");
+        let second_change = plan_wrapper_change(&second, Some(&wrapper), true)
+            .expect("plan second")
+            .expect("second change");
+        let changes = vec![first_change, second_change];
+        let mut writes = 0;
+        let result = apply_config_changes_with(&changes, |path, bytes| {
+            writes += 1;
+            if writes == 2 {
+                return Err("injected write failure".to_string());
+            }
+            fs::write(path, bytes).map_err(|error| error.to_string())
+        });
+        assert!(result.is_err());
+        assert!(!first.exists(), "first file must be rolled back");
+        assert!(!second.exists(), "failed file must remain absent");
     }
 }
