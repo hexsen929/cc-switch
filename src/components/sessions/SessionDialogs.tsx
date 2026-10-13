@@ -10,6 +10,7 @@ import { AppGlyph, APP_DISPLAY_NAME } from "@/components/shell/AppGlyph";
 import type { SessionMeta } from "@/types";
 import {
   formatSessionTitle,
+  formatSessionProviderName,
   isSessionAppId,
   SESSION_APP_IDS,
   SESSION_SOURCE_PATHS,
@@ -106,7 +107,7 @@ export function SessionDeleteDialog({
             {apps.map((app) => {
               const name = isSessionAppId(app)
                 ? APP_DISPLAY_NAME[app as SessionAppId]
-                : app;
+                : formatSessionProviderName(app);
               return (
                 <li key={app} className="flex items-start gap-2.5 text-caption">
                   <span className="flex h-[18px] w-4 shrink-0 items-center">

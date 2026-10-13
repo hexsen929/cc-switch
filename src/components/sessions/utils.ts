@@ -22,6 +22,9 @@ export type SessionAppId = (typeof SESSION_APP_IDS)[number];
 export const isSessionAppId = (value: string): value is SessionAppId =>
   (SESSION_APP_IDS as readonly string[]).includes(value);
 
+export const formatSessionProviderName = (value: string) =>
+  value === "kimi" ? "Kimi Code" : value;
+
 /** 「会话记录在哪里」对话框：各来源的默认位置（改过配置目录的按改过的读）。 */
 export const SESSION_SOURCE_PATHS: Record<SessionAppId, string[]> = {
   claude: ["~/.claude/projects"],

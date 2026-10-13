@@ -50,6 +50,7 @@ import { SessionDeleteDialog, SessionSourcesDialog } from "./SessionDialogs";
 import {
   canDeleteSession,
   formatRelativeTime,
+  formatSessionProviderName,
   getSessionKey,
   groupSessionsByProject,
   groupSessionsByTime,
@@ -620,7 +621,7 @@ export function SessionManagerPage({
   };
 
   const appName = (app: string) =>
-    isSessionAppId(app) ? APP_DISPLAY_NAME[app] : app;
+    isSessionAppId(app) ? APP_DISPLAY_NAME[app] : formatSessionProviderName(app);
   const showAppIcon = appFilter === "all";
   const totalCount = scopedSessions.length;
   const currentCount =
