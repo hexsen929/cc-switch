@@ -6,6 +6,10 @@ export interface WrapperStatus {
   conflictingWrapper: boolean;
   shellType?: string;
   configFile?: string;
+  /** 旧注入点（如 zsh 的 ~/.zshrc）仍残留 wrapper，需重新「安装」以清理。 */
+  staleConfigFile?: string | null;
+  /** 检测到可疑情况（如 ~/.zshenv 含 return 早退，wrapper 可能不生效）。 */
+  warning?: string | null;
 }
 
 /**

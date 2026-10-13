@@ -1,7 +1,14 @@
 import { useCallback, useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { toast } from "sonner";
-import { AlertCircle, Check, CheckCircle2, Copy, Terminal } from "lucide-react";
+import {
+  AlertCircle,
+  AlertTriangle,
+  Check,
+  CheckCircle2,
+  Copy,
+  Terminal,
+} from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
   checkShellWrapperStatus,
@@ -325,6 +332,26 @@ export function ClaudeShellWrapperCard() {
           <pre className="max-h-64 overflow-auto rounded bg-gray-950 p-3 text-xs text-gray-100">
             {instructions}
           </pre>
+        </div>
+      )}
+
+      {status?.warning && (
+        <div className="flex items-start gap-2 rounded border border-amber-500/40 bg-amber-500/5 p-2 text-xs text-amber-700 dark:text-amber-400">
+          <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+          <span className="break-all">{status.warning}</span>
+        </div>
+      )}
+
+      {status?.staleConfigFile && (
+        <div className="flex items-start gap-2 rounded border border-amber-500/40 bg-amber-500/5 p-2 text-xs text-amber-700 dark:text-amber-400">
+          <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+          <span className="break-all">
+            {t("claudeAppendInstructions.shellWrapperStaleConfig", {
+              defaultValue:
+                "旧配置文件 {{path}} 里仍有残留的 wrapper（会导致函数被定义两次）。点「安装 / 更新」即可自动清理。",
+              path: status.staleConfigFile,
+            })}
+          </span>
         </div>
       )}
 
