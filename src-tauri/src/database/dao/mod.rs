@@ -2,6 +2,7 @@
 //!
 //! Database access operations for each domain
 
+pub mod custom_icons;
 pub mod failover;
 pub mod fork_failover;
 pub mod fork_proxy;

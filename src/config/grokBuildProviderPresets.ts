@@ -180,7 +180,7 @@ export const grokBuildProviderPresets: GrokBuildProviderPreset[] = [
   {
     name: "OpenModel",
     websiteUrl: "https://www.openmodel.ai",
-    apiKeyUrl: "https://www.openmodel.ai/campaigns/client-benefits",
+    apiKeyUrl: "https://www.openmodel.ai?ref=cc-switch",
     auth: grokAuth(),
     config: grokPresetConfig("OpenModel", "https://api.openmodel.ai/v1"),
     category: "aggregator",
@@ -205,11 +205,14 @@ export const grokBuildProviderPresets: GrokBuildProviderPreset[] = [
   },
   {
     name: "AIGoCode",
-    websiteUrl: "https://aigocode.app",
-    apiKeyUrl: "https://aigocode.app/invite/CC-SWITCH",
+    websiteUrl: "https://aigocode.net",
+    apiKeyUrl: "https://aigocode.net/invite/CC-SWITCH",
     auth: grokAuth(),
-    config: grokPresetConfig("AIGoCode", "https://api.aigocode.app"),
-    endpointCandidates: ["https://api.aigocode.app"],
+    config: grokPresetConfig("AIGoCode", "https://api.aigocode.dev"),
+    endpointCandidates: [
+      "https://api.aigocode.dev",
+      "https://api.aigocode.app",
+    ],
     category: "third_party",
     isPartner: true,
     partnerPromotionKey: "aigocode",
@@ -700,6 +703,7 @@ export const grokBuildProviderPresets: GrokBuildProviderPreset[] = [
   },
   {
     name: "YYLX",
+    nameKey: "providerForm.presets.yylx",
     websiteUrl: "https://yylx.io",
     apiKeyUrl: "https://app.yylx.io/keys",
     auth: grokAuth(),
@@ -720,5 +724,14 @@ export const grokBuildProviderPresets: GrokBuildProviderPreset[] = [
     config: grokPresetConfig("TokenFlux", "https://tokenflux.dev/v1"),
     category: "aggregator",
     icon: "tokenflux",
+  },
+  {
+    name: "AIComing",
+    websiteUrl: "https://aicoming.top",
+    apiKeyUrl: "https://aicoming.top/console#keys",
+    auth: grokAuth(),
+    config: grokPresetConfig("AIComing", "https://api.aicoming.top/v1"),
+    category: "aggregator",
+    icon: "aicoming",
   },
 ];

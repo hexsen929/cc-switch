@@ -20,8 +20,9 @@ use crate::error::AppError;
 use crate::proxy::usage::calculator::{CostCalculator, ModelPricing};
 use crate::proxy::usage::parser::TokenUsage;
 use crate::services::session_usage::{
-    estimated_latency_ms, metadata_modified_nanos, parse_timestamp_millis, update_sync_state,
-    update_sync_state_on_conn, SessionSyncResult,
+    estimated_first_token_ms, estimated_latency_ms, metadata_modified_nanos,
+    parse_timestamp_millis, update_sync_state, update_sync_state_on_conn, EstimatedTiming,
+    SessionSyncResult,
 };
 use crate::services::sql_helpers::INPUT_TOKEN_SEMANTICS_TOTAL;
 use crate::services::usage_stats::{
@@ -202,8 +203,8 @@ struct ParsedTokenEvent {
     event_index: Option<u32>,
     model: String,
     timestamp: Option<String>,
-    /// 按事件时间戳估出来的请求耗时（含首字等待）；估不出来为 None。
-    latency_ms: Option<i64>,
+    /// 按事件时间戳估出来的请求耗时（含首字等待）和首字时间；估不出来为 None。
+    timing: Option<EstimatedTiming>,
 }
 
 /// 只看每行开头这么多字节来判断行的种类：时间戳、类型、角色都在行头，
@@ -237,6 +238,9 @@ enum TimingLine {
     /// 一轮开始（`task_started`）或被中断（`turn_aborted`）：没等到 `token_count`
     /// 的那次请求到此作废
     TurnReset,
+    /// 新版 Codex 的 `item_completed`，而且是模型输出的思考或回复：带这一项开始
+    /// 生成的时刻（`started_at_ms`，即上游开始输出这一项），一次响应里最早的那项就是首字
+    OutputItemStarted(i64),
 }
 
 fn classify_timing_line(line: &str) -> Option<(i64, TimingLine)> {
@@ -261,12 +265,27 @@ fn classify_timing_line(line: &str) -> Option<(i64, TimingLine)> {
         },
         "event_msg" => match head_str(payload, "type")? {
             "task_started" | "turn_aborted" => TimingLine::TurnReset,
+            "item_completed" => output_item_started_ms(line, payload)?,
             _ => return None,
         },
         _ => return None,
     };
     let timestamp_ms = head_str(envelope, "timestamp").and_then(parse_timestamp_millis)?;
     Some((timestamp_ms, kind))
+}
+
+/// `item_completed` 行里模型输出项（思考、回复）的开始时刻。工具执行、用户消息
+/// 这类项不是模型输出，不看。`started_at_ms` 写在 `item` 之后、可能超出行头，
+/// 要解析整行；这类行很短（实测中位数约 400 字节）。
+fn output_item_started_ms(line: &str, payload_head: &[u8]) -> Option<TimingLine> {
+    let item_at = find_bytes(payload_head, b"\"item\":{")?;
+    match head_str(&payload_head[item_at..], "type")? {
+        "Reasoning" | "AgentMessage" => {}
+        _ => return None,
+    }
+    let value = serde_json::from_str::<serde_json::Value>(line).ok()?;
+    let started_at_ms = value.get("payload")?.get("started_at_ms")?.as_i64()?;
+    Some(TimingLine::OutputItemStarted(started_at_ms))
 }
 
 /// 按事件顺序估每次请求的耗时。Codex 日志没有请求级计时，而且各版本的
@@ -285,6 +304,10 @@ fn classify_timing_line(line: &str) -> Option<(i64, TimingLine)> {
 /// 下一次请求的起点会被钉在上一次响应结束的时刻，用户隔很久才发下一条消息时
 /// 算出来的耗时就长得离谱。
 ///
+/// 首字时间：新版 Codex 给每个模型输出项记了开始生成的时刻（`item_completed` 的
+/// `started_at_ms`），取这次请求里最早的一项减去起点。响应一开头就是工具调用、
+/// 没有思考和回复项时推不出来。
+///
 /// 请求被中断或出错时等不到 `token_count`，它留下的起点要在下一轮开始时清掉，
 /// 否则会被下一次请求沿用。只在 `task_started` / `turn_aborted` 上清，不在用户
 /// 消息上清：Codex 会在响应中途插入 developer 消息，在那里清会把起点挪晚。
@@ -297,6 +320,8 @@ struct RequestTimer {
     /// 最后一个输出项之后出现的工具结果里最晚的一个；之后再有输出项就清空。
     tool_output_after_model_output_ms: Option<i64>,
     usage_record: Option<(i64, CumulativeTokens)>,
+    /// 这次请求里最早开始生成的输出项的时刻，即首字。
+    first_output_ms: Option<i64>,
 }
 
 /// 两行的时间戳相差不超过这个毫秒数，就算是同一批写出的（实测相差 0–1 毫秒，
@@ -344,6 +369,12 @@ impl RequestTimer {
                     });
                 self.usage_record = usage.map(|usage| (timestamp_ms, usage));
             }
+            TimingLine::OutputItemStarted(started_at_ms) => {
+                self.first_output_ms = Some(
+                    self.first_output_ms
+                        .map_or(started_at_ms, |at| at.min(started_at_ms)),
+                );
+            }
             TimingLine::TurnReset => {
                 *self = RequestTimer {
                     last_boundary_ms: self.last_boundary_ms.max(Some(timestamp_ms)),
@@ -354,15 +385,16 @@ impl RequestTimer {
         }
     }
 
-    /// 遇到一次有用量的 `token_count`：结算这次请求的耗时，并把它记成下一次
+    /// 遇到一次有用量的 `token_count`：结算这次请求的耗时和首字，并把它记成下一次
     /// 请求的起点。`last` 是这次请求自己的用量，用来确认 `token_usage_record`
     /// 说的是同一次请求。
     fn finish_request(
         &mut self,
         token_count_ms: Option<i64>,
         last: Option<&CumulativeTokens>,
-    ) -> Option<i64> {
+    ) -> Option<EstimatedTiming> {
         let start_ms = self.request_start_ms.or(self.last_boundary_ms);
+        let first_output_ms = self.first_output_ms;
         let record_end_ms = self
             .usage_record
             .take()
@@ -393,7 +425,14 @@ impl RequestTimer {
             last_token_count_ms: token_count_ms,
             ..RequestTimer::default()
         };
-        estimated_latency_ms(start_ms?, end_ms?)
+        let start_ms = start_ms?;
+        let latency_ms = estimated_latency_ms(start_ms, end_ms?)?;
+        Some(EstimatedTiming {
+            latency_ms,
+            first_token_ms: first_output_ms.and_then(|first_output_ms| {
+                estimated_first_token_ms(start_ms, first_output_ms, latency_ms)
+            }),
+        })
     }
 }
 
@@ -427,7 +466,15 @@ struct ParsedCodexFile {
 enum PendingReason {
     MissingParent(String),
     Stable(String),
-    Retryable(String),
+    Retryable {
+        reason: String,
+        parent_id: String,
+        child_file: Option<ParentFileStamp>,
+        // Sample before resolving the parent: a write during resolution must
+        // invalidate this entry on the next pass, not be mistaken for the
+        // already-observed state. None keeps metadata/open errors retryable.
+        parent_files: Option<Vec<(PathBuf, ParentFileStamp)>>,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1014,6 +1061,8 @@ fn parse_codex_file(
     file_path: &Path,
     root_thread_id: Option<String>,
 ) -> Result<ParsedCodexFile, AppError> {
+    #[cfg(test)]
+    tests::record_codex_parse(file_path);
     let file =
         fs::File::open(file_path).map_err(|e| AppError::Config(format!("无法打开文件: {e}")))?;
     // 压缩文件（`.jsonl.zst`）的 observed_bytes 记磁盘上的压缩大小：
@@ -1269,7 +1318,7 @@ fn parse_codex_file(
                     .and_then(serde_json::Value::as_str)
                     .map(str::to_owned);
                 // 重复快照（限额刷新时重发的）不是一次请求，不参与计时
-                let latency_ms = nonzero_index.and_then(|_| {
+                let timing = nonzero_index.and_then(|_| {
                     timer.finish_request(
                         timestamp.as_deref().and_then(parse_timestamp_millis),
                         request_usage.as_ref(),
@@ -1283,7 +1332,7 @@ fn parse_codex_file(
                     event_index: nonzero_index,
                     model: current_model.clone(),
                     timestamp,
-                    latency_ms,
+                    timing,
                 });
             }
             _ => {}
@@ -1305,12 +1354,38 @@ fn parse_codex_file(
     })
 }
 
+#[derive(Debug, PartialEq, Eq)]
+struct ParentSignatureError {
+    reason: String,
+    cacheable: bool,
+}
+
+impl ParentSignatureError {
+    fn content(reason: String) -> Self {
+        Self {
+            reason,
+            cacheable: true,
+        }
+    }
+
+    fn transient(reason: String) -> Self {
+        Self {
+            reason,
+            cacheable: false,
+        }
+    }
+}
+
 fn parent_signatures_before(
     parent_path: &Path,
     cutoff: DateTime<Utc>,
-) -> Result<Vec<TokenUsageSignature>, String> {
-    let file = fs::File::open(parent_path)
-        .map_err(|error| format!("无法打开父 rollout {}: {error}", parent_path.display()))?;
+) -> Result<Vec<TokenUsageSignature>, ParentSignatureError> {
+    let file = fs::File::open(parent_path).map_err(|error| {
+        ParentSignatureError::transient(format!(
+            "无法打开父 rollout {}: {error}",
+            parent_path.display()
+        ))
+    })?;
     let stamp = ParentFileStamp::from_file(&file);
     let cached_timeline = stamp.and_then(|stamp| {
         replay_caches().lock().ok().and_then(|caches| {
@@ -1322,7 +1397,9 @@ fn parent_signatures_before(
         })
     });
     if let Some(timeline) = cached_timeline {
-        return timeline.signatures_before(parent_path, cutoff);
+        return timeline
+            .signatures_before(parent_path, cutoff)
+            .map_err(ParentSignatureError::content);
     }
 
     let mut events = Vec::new();
@@ -1331,12 +1408,21 @@ fn parent_signatures_before(
 
     // 必须扫描完整父文件，不能在首个未来时间戳处 break：rollout 写入顺序
     // 不承诺时间戳严格单调。缓存完整时间线后，不同 child cutoff 只需内存过滤。
-    let reader = codex_rollout_file::reader_from_file(parent_path, file)
-        .map_err(|error| format!("无法打开父 rollout {}: {error}", parent_path.display()))?;
+    let reader = codex_rollout_file::reader_from_file(parent_path, file).map_err(|error| {
+        ParentSignatureError::transient(format!(
+            "无法打开父 rollout {}: {error}",
+            parent_path.display()
+        ))
+    })?;
     for line in reader.lines() {
-        let Ok(line) = line else {
-            continue;
-        };
+        // I/O/decompression failures are not evidence of stable content. Do
+        // not cache a partial timeline or suppress its next resolution attempt.
+        let line = line.map_err(|error| {
+            ParentSignatureError::transient(format!(
+                "无法读取父 rollout {}: {error}",
+                parent_path.display()
+            ))
+        })?;
         let Ok(value) = serde_json::from_str::<serde_json::Value>(&line) else {
             continue;
         };
@@ -1378,7 +1464,9 @@ fn parent_signatures_before(
         max_timestamp,
         has_token_without_timestamp,
     });
-    let result = timeline.signatures_before(parent_path, cutoff);
+    let result = timeline
+        .signatures_before(parent_path, cutoff)
+        .map_err(ParentSignatureError::content);
     if let (Some(stamp), Ok(mut caches)) = (stamp, replay_caches().lock()) {
         caches.parent_timelines.insert(
             parent_path.to_path_buf(),
@@ -1395,9 +1483,11 @@ fn resolve_parent_signatures(
     parent_id: &str,
     cutoff: DateTime<Utc>,
     rollout_index: &RolloutIndex,
-) -> Result<Vec<TokenUsageSignature>, String> {
+) -> Result<Vec<TokenUsageSignature>, ParentSignatureError> {
     let Some(candidates) = rollout_index.get(parent_id) else {
-        return Err(format!("找不到父 rollout: {parent_id}"));
+        return Err(ParentSignatureError::transient(format!(
+            "找不到父 rollout: {parent_id}"
+        )));
     };
 
     let mut snapshots = Vec::with_capacity(candidates.len());
@@ -1405,14 +1495,34 @@ fn resolve_parent_signatures(
         snapshots.push(parent_signatures_before(candidate, cutoff)?);
     }
     let Some(first) = snapshots.first() else {
-        return Err(format!("找不到父 rollout: {parent_id}"));
+        return Err(ParentSignatureError::transient(format!(
+            "找不到父 rollout: {parent_id}"
+        )));
     };
     if snapshots.iter().skip(1).any(|snapshot| snapshot != first) {
-        return Err(format!(
+        return Err(ParentSignatureError::content(format!(
             "父 rollout UUID {parent_id} 对应多个内容不一致的文件"
-        ));
+        )));
     }
     Ok(first.clone())
+}
+
+/// Metadata-only dependency snapshot; opening a file checks accessibility and
+/// gives the same identity stamp used by the parent timeline cache. Include all
+/// candidates so archive moves, replacements and duplicate candidates retry.
+/// This must be called without holding the replay-cache mutex.
+fn parent_dependency_stamp(
+    parent_id: &str,
+    rollout_index: &RolloutIndex,
+) -> Option<Vec<(PathBuf, ParentFileStamp)>> {
+    let candidates = rollout_index.get(parent_id)?;
+    let mut files = Vec::with_capacity(candidates.len());
+    for path in candidates {
+        let file = fs::File::open(path).ok()?;
+        files.push((path.clone(), ParentFileStamp::from_file(&file)?));
+    }
+    files.sort_by(|left, right| left.0.cmp(&right.0));
+    Some(files)
 }
 
 fn matching_replay_prefix(child: &[ParsedTokenEvent], parent: &[TokenUsageSignature]) -> usize {
@@ -1455,7 +1565,9 @@ fn mark_deferred(
     if should_warn {
         let reason = match &entry.reason {
             PendingReason::MissingParent(parent) => format!("找不到父 rollout {parent}"),
-            PendingReason::Stable(reason) | PendingReason::Retryable(reason) => reason.clone(),
+            PendingReason::Stable(reason) | PendingReason::Retryable { reason, .. } => {
+                reason.clone()
+            }
         };
         log::warn!("[CODEX-SYNC] deferred {}: {reason}", file_path.display());
     }
@@ -1522,29 +1634,38 @@ fn sync_single_codex_file(
         return Ok(CodexFileSyncResult::default());
     }
 
-    if let Ok(mut caches) = replay_caches().lock() {
-        if let Some(pending) = caches.pending.get(file_path).cloned() {
-            if pending.modified == file_modified && pending.size == file_size {
-                match &pending.reason {
-                    PendingReason::MissingParent(parent) if !rollout_index.contains_key(parent) => {
-                        return Ok(CodexFileSyncResult {
-                            deferred: true,
-                            ..CodexFileSyncResult::default()
-                        });
-                    }
-                    PendingReason::Stable(_) => {
-                        return Ok(CodexFileSyncResult {
-                            deferred: true,
-                            ..CodexFileSyncResult::default()
-                        });
-                    }
-                    PendingReason::Retryable(_) => {
-                        caches.pending.remove(file_path);
-                    }
-                    _ => {
-                        caches.pending.remove(file_path);
-                    }
+    // Capture child identity before parsing as well as before checking a
+    // pending entry: replacing a deferred child can preserve mtime and size.
+    // Unknown/inaccessible identity must not suppress the parser's retry/error.
+    let child_file = fs::File::open(file_path)
+        .ok()
+        .and_then(|file| ParentFileStamp::from_file(&file));
+    let pending = replay_caches()
+        .lock()
+        .ok()
+        .and_then(|caches| caches.pending.get(file_path).cloned());
+    if let Some(pending) = pending {
+        if pending.modified == file_modified && pending.size == file_size {
+            let unchanged = match &pending.reason {
+                PendingReason::MissingParent(parent) => !rollout_index.contains_key(parent),
+                PendingReason::Stable(_) => true,
+                PendingReason::Retryable {
+                    parent_id,
+                    child_file: Some(previous_child),
+                    parent_files: Some(parent_files),
+                    ..
+                } => {
+                    child_file.as_ref() == Some(previous_child)
+                        && parent_dependency_stamp(parent_id, rollout_index).as_ref()
+                            == Some(parent_files)
                 }
+                PendingReason::Retryable { .. } => false,
+            };
+            if unchanged {
+                return Ok(CodexFileSyncResult {
+                    deferred: true,
+                    ..CodexFileSyncResult::default()
+                });
             }
         }
     }
@@ -1605,12 +1726,22 @@ fn sync_single_codex_file(
             match cached_prefix {
                 Some(Some(prefix)) => prefix,
                 Some(None) => {
+                    let parent_files = parent_dependency_stamp(parent_id, rollout_index);
                     let parent_signatures =
                         match resolve_parent_signatures(parent_id, cutoff, rollout_index) {
                             Ok(signatures) => signatures,
-                            Err(reason) => {
+                            Err(error) => {
                                 let pending_reason = if rollout_index.contains_key(parent_id) {
-                                    PendingReason::Retryable(reason)
+                                    PendingReason::Retryable {
+                                        reason: error.reason,
+                                        parent_id: parent_id.clone(),
+                                        child_file,
+                                        parent_files: if error.cacheable {
+                                            parent_files
+                                        } else {
+                                            None
+                                        },
+                                    }
                                 } else {
                                     PendingReason::MissingParent(parent_id.clone())
                                 };
@@ -1638,7 +1769,7 @@ fn sync_single_codex_file(
                 None => {
                     let parent_signatures =
                         resolve_parent_signatures(parent_id, cutoff, rollout_index)
-                            .map_err(AppError::Config)?;
+                            .map_err(|error| AppError::Config(error.reason))?;
                     matching_replay_prefix(&parsed.token_events, &parent_signatures)
                 }
             }
@@ -1698,7 +1829,7 @@ fn sync_single_codex_file(
                 &event.model,
                 Some(session_thread_id),
                 event.timestamp.as_deref(),
-                event.latency_ms,
+                event.timing,
                 &mut batch_suspected,
                 &mut pass.pricing,
             ) {
@@ -1759,8 +1890,8 @@ fn insert_codex_session_entry(
 ///
 /// 调用方负责持锁/事务；`pricing_cache` 按原始 model 字符串键控（
 /// `find_codex_pricing` 是纯函数式查找，同串必同结果），全量重导时把
-/// 每事件一次的定价 SELECT 降为每模型一次。`latency_ms` 是按事件时间戳估出来的
-/// 请求耗时（见 [`RequestTimer`]），估不出来传 None。
+/// 每事件一次的定价 SELECT 降为每模型一次。`timing` 是按事件时间戳估出来的
+/// 请求耗时和首字时间（见 [`RequestTimer`]），估不出来传 None。
 #[allow(clippy::too_many_arguments)]
 fn insert_codex_session_entry_on_conn(
     conn: &rusqlite::Connection,
@@ -1769,7 +1900,7 @@ fn insert_codex_session_entry_on_conn(
     model: &str,
     session_id: Option<&str>,
     timestamp: Option<&str>,
-    latency_ms: Option<i64>,
+    timing: Option<EstimatedTiming>,
     suspected_duplicates: &mut u32,
     pricing_cache: &mut HashMap<String, Option<ModelPricing>>,
 ) -> Result<bool, AppError> {
@@ -1870,8 +2001,8 @@ fn insert_codex_session_entry_on_conn(
                 cache_read_cost,
                 cache_creation_cost,
                 total_cost,
-                latency_ms.unwrap_or(0), // latency_ms: 按时间戳估算，0 = 没有计时
-                Option::<i64>::None, // first_token_ms: 会话日志无此数据
+                timing.map_or(0, |t| t.latency_ms), // latency_ms: 按时间戳估算，0 = 没有计时
+                timing.and_then(|t| t.first_token_ms), // first_token_ms: 按时间戳估算，推不出来为 NULL
                 200i64,              // status_code
                 Option::<String>::None, // error_message
                 session_id.map(|s| s.to_string()),
@@ -1902,6 +2033,50 @@ mod tests {
     const PARENT_ID: &str = "00000000-0000-4000-8000-000000000001";
     const CHILD_A_ID: &str = "00000000-0000-4000-8000-000000000002";
     const CHILD_B_ID: &str = "00000000-0000-4000-8000-000000000003";
+
+    thread_local! {
+        static CODEX_PARSE_COUNTS: std::cell::RefCell<HashMap<PathBuf, usize>> =
+            std::cell::RefCell::new(HashMap::new());
+    }
+
+    pub(super) fn record_codex_parse(path: &Path) {
+        CODEX_PARSE_COUNTS.with(|counts| {
+            *counts.borrow_mut().entry(path.to_path_buf()).or_default() += 1;
+        });
+    }
+
+    fn codex_parse_count(path: &Path) -> usize {
+        CODEX_PARSE_COUNTS.with(|counts| counts.borrow().get(path).copied().unwrap_or(0))
+    }
+
+    fn retryable_parent_and_child(dir: &Path) -> (PathBuf, PathBuf) {
+        let parent = rollout_path(dir, PARENT_ID);
+        let child = rollout_path(dir, CHILD_A_ID);
+        write_jsonl(
+            &parent,
+            &[
+                session_meta(PARENT_ID),
+                token_count_at(1_000, 900, 100, "2026-07-10T03:00:01Z"),
+                turn_context_at("2026-07-10T03:00:02Z"),
+            ],
+        );
+        write_jsonl(
+            &child,
+            &[
+                session_meta_at(CHILD_A_ID, None, Some(PARENT_ID), "2026-07-10T03:00:05Z"),
+                turn_context(),
+                token_count_at(1_000, 900, 100, "2026-07-10T03:00:06Z"),
+                token_count_at(1_300, 1_050, 150, "2026-07-10T03:00:07Z"),
+            ],
+        );
+        (parent, child)
+    }
+
+    fn append_jsonl(path: &Path, value: serde_json::Value) {
+        use std::io::Write;
+        let mut writer = fs::OpenOptions::new().append(true).open(path).unwrap();
+        writeln!(writer, "{value}").unwrap();
+    }
 
     fn write_jsonl(path: &Path, values: &[serde_json::Value]) {
         let contents = values
@@ -3317,7 +3492,10 @@ mod tests {
         );
 
         let first_error = parent_signatures_before(&parent, cutoff).unwrap_err();
-        assert!(first_error.contains("token_count 缺少有效 timestamp"));
+        assert!(first_error
+            .reason
+            .contains("token_count 缺少有效 timestamp"));
+        assert!(first_error.cacheable);
         let cached_timeline =
             || Arc::clone(&replay_caches().lock().unwrap().parent_timelines[&parent].timeline);
         let first_timeline = parent_cache_supported(&parent).then(cached_timeline);
@@ -3330,7 +3508,8 @@ mod tests {
 
         fs::remove_file(&parent).unwrap();
         let open_error = parent_signatures_before(&parent, cutoff).unwrap_err();
-        assert!(open_error.contains("无法打开父 rollout"));
+        assert!(open_error.reason.contains("无法打开父 rollout"));
+        assert!(!open_error.cacheable);
     }
 
     #[test]
@@ -3530,6 +3709,231 @@ mod tests {
         );
         let recovered = sync_test_file(&db, &child, &[&parent, &child])?;
         assert_eq!((recovered.imported, recovered.deferred), (1, false));
+        Ok(())
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn test_retryable_pending_skips_child_body_until_parent_append() -> Result<(), AppError> {
+        clear_codex_replay_caches();
+        let db = Database::memory()?;
+        let temp = tempdir().unwrap();
+        let (parent, child) = retryable_parent_and_child(temp.path());
+
+        for _ in 0..4 {
+            assert!(sync_test_file(&db, &child, &[&parent, &child])?.deferred);
+        }
+        assert_eq!(codex_parse_count(&child), 1);
+        assert_eq!(get_sync_state(&db, &child.to_string_lossy())?, (0, 0));
+
+        append_jsonl(&parent, turn_context_at("2026-07-10T03:00:10Z"));
+        let recovered = sync_test_file(&db, &child, &[&parent, &child])?;
+        assert_eq!(
+            (recovered.imported, recovered.skipped, recovered.deferred),
+            (1, 1, false)
+        );
+        assert_eq!(codex_parse_count(&child), 2);
+        assert_eq!(sync_test_file(&db, &child, &[&parent, &child])?.imported, 0);
+        assert_eq!(codex_parse_count(&child), 2);
+        let conn = lock_conn!(db.conn);
+        let usage: (i64, i64, i64) = conn.query_row(
+            "SELECT input_tokens, cache_read_tokens, output_tokens FROM proxy_request_logs",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        )?;
+        assert_eq!(usage, (300, 150, 50));
+        Ok(())
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn test_retryable_pending_invalidates_when_child_changes() -> Result<(), AppError> {
+        clear_codex_replay_caches();
+        let db = Database::memory()?;
+        let temp = tempdir().unwrap();
+        let (parent, child) = retryable_parent_and_child(temp.path());
+        assert!(sync_test_file(&db, &child, &[&parent, &child])?.deferred);
+        append_jsonl(
+            &child,
+            token_count_at(1_600, 1_200, 200, "2026-07-10T03:00:08Z"),
+        );
+        for _ in 0..3 {
+            assert!(sync_test_file(&db, &child, &[&parent, &child])?.deferred);
+        }
+        assert_eq!(codex_parse_count(&child), 2);
+        append_jsonl(&parent, turn_context_at("2026-07-10T03:00:10Z"));
+        let recovered = sync_test_file(&db, &child, &[&parent, &child])?;
+        assert_eq!(
+            (recovered.imported, recovered.skipped, recovered.deferred),
+            (2, 1, false)
+        );
+        assert_eq!(codex_parse_count(&child), 3);
+        Ok(())
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn test_retryable_pending_tracks_added_and_removed_parent_candidates() -> Result<(), AppError> {
+        clear_codex_replay_caches();
+        let db = Database::memory()?;
+        let temp = tempdir().unwrap();
+        let (parent, child) = retryable_parent_and_child(temp.path());
+        assert!(sync_test_file(&db, &child, &[&parent, &child])?.deferred);
+        let archived_dir = temp.path().join("archived_sessions");
+        fs::create_dir(&archived_dir).unwrap();
+        let archived_parent = rollout_path(&archived_dir, PARENT_ID);
+        fs::copy(&parent, &archived_parent).unwrap();
+        append_jsonl(&archived_parent, turn_context_at("2026-07-10T03:00:10Z"));
+        assert!(sync_test_file(&db, &child, &[&parent, &archived_parent, &child])?.deferred);
+        assert_eq!(codex_parse_count(&child), 2, "new candidate must retry");
+        assert!(sync_test_file(&db, &child, &[&parent, &archived_parent, &child])?.deferred);
+        assert_eq!(codex_parse_count(&child), 2);
+        fs::remove_file(&parent).unwrap();
+        let recovered = sync_test_file(&db, &child, &[&archived_parent, &child])?;
+        assert_eq!(
+            (recovered.imported, recovered.skipped, recovered.deferred),
+            (1, 1, false)
+        );
+        assert_eq!(codex_parse_count(&child), 3, "removed candidate must retry");
+        Ok(())
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn test_retryable_pending_does_not_cache_unknown_parent_metadata() -> Result<(), AppError> {
+        clear_codex_replay_caches();
+        let db = Database::memory()?;
+        let temp = tempdir().unwrap();
+        let (parent, child) = retryable_parent_and_child(temp.path());
+        let parent_contents = fs::read(&parent).unwrap();
+        fs::remove_file(&parent).unwrap();
+        // The index can outlive a file removed during a pass. An inaccessible
+        // candidate must retry, rather than cache an unknown stamp forever.
+        for _ in 0..2 {
+            assert!(sync_test_file(&db, &child, &[&parent, &child])?.deferred);
+        }
+        assert_eq!(codex_parse_count(&child), 2);
+        fs::write(&parent, parent_contents).unwrap();
+        append_jsonl(&parent, turn_context_at("2026-07-10T03:00:10Z"));
+        assert!(!sync_test_file(&db, &child, &[&parent, &child])?.deferred);
+        assert_eq!(codex_parse_count(&child), 3);
+        Ok(())
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn test_retryable_pending_detects_same_size_same_mtime_parent_replacement(
+    ) -> Result<(), AppError> {
+        clear_codex_replay_caches();
+        let db = Database::memory()?;
+        let temp = tempdir().unwrap();
+        let (parent, child) = retryable_parent_and_child(temp.path());
+        if !parent_cache_supported(&parent) {
+            return Ok(());
+        }
+        assert!(sync_test_file(&db, &child, &[&parent, &child])?.deferred);
+        let metadata = fs::metadata(&parent).unwrap();
+        let replacement = temp.path().join("replacement.jsonl");
+        let contents = fs::read_to_string(&parent)
+            .unwrap()
+            .replace("03:00:02Z", "03:00:10Z");
+        fs::write(&replacement, contents).unwrap();
+        fs::OpenOptions::new()
+            .write(true)
+            .open(&replacement)
+            .unwrap()
+            .set_times(fs::FileTimes::new().set_modified(metadata.modified().unwrap()))
+            .unwrap();
+        fs::rename(&replacement, &parent).unwrap();
+        let replacement_metadata = fs::metadata(&parent).unwrap();
+        assert_eq!(metadata.len(), replacement_metadata.len());
+        assert_eq!(
+            metadata.modified().unwrap(),
+            replacement_metadata.modified().unwrap()
+        );
+        let recovered = sync_test_file(&db, &child, &[&parent, &child])?;
+        assert_eq!(
+            (recovered.imported, recovered.skipped, recovered.deferred),
+            (1, 1, false)
+        );
+        assert_eq!(codex_parse_count(&child), 2);
+        Ok(())
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn test_retryable_pending_retries_parent_decompression_errors() -> Result<(), AppError> {
+        clear_codex_replay_caches();
+        let db = Database::memory()?;
+        let temp = tempdir().unwrap();
+        let (parent, child) = retryable_parent_and_child(temp.path());
+        let compressed_parent = PathBuf::from(format!("{}.zst", parent.display()));
+        fs::remove_file(&parent).unwrap();
+        fs::write(&compressed_parent, b"invalid zstd bytes").unwrap();
+        // Opening/statting this file succeeds; decoding its body fails. That
+        // transient failure must not be suppressed by an unchanged fingerprint.
+        for _ in 0..2 {
+            assert!(sync_test_file(&db, &child, &[&compressed_parent, &child])?.deferred);
+        }
+        assert_eq!(codex_parse_count(&child), 2);
+        assert!(!replay_caches()
+            .lock()
+            .unwrap()
+            .parent_timelines
+            .contains_key(&compressed_parent));
+        Ok(())
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn test_retryable_pending_detects_same_size_same_mtime_child_replacement(
+    ) -> Result<(), AppError> {
+        clear_codex_replay_caches();
+        let db = Database::memory()?;
+        let temp = tempdir().unwrap();
+        let (parent, child) = retryable_parent_and_child(temp.path());
+        if !parent_cache_supported(&child) {
+            return Ok(());
+        }
+        assert!(sync_test_file(&db, &child, &[&parent, &child])?.deferred);
+        let alternate_parent = rollout_path(temp.path(), CHILD_B_ID);
+        fs::write(
+            &alternate_parent,
+            fs::read_to_string(&parent)
+                .unwrap()
+                .replace(PARENT_ID, CHILD_B_ID),
+        )
+        .unwrap();
+        append_jsonl(&alternate_parent, turn_context_at("2026-07-10T03:00:10Z"));
+
+        let metadata = fs::metadata(&child).unwrap();
+        let replacement = temp.path().join("replacement.jsonl");
+        fs::write(
+            &replacement,
+            fs::read_to_string(&child)
+                .unwrap()
+                .replace(PARENT_ID, CHILD_B_ID),
+        )
+        .unwrap();
+        fs::OpenOptions::new()
+            .write(true)
+            .open(&replacement)
+            .unwrap()
+            .set_times(fs::FileTimes::new().set_modified(metadata.modified().unwrap()))
+            .unwrap();
+        fs::rename(&replacement, &child).unwrap();
+        let replacement_metadata = fs::metadata(&child).unwrap();
+        assert_eq!(metadata.len(), replacement_metadata.len());
+        assert_eq!(
+            metadata.modified().unwrap(),
+            replacement_metadata.modified().unwrap()
+        );
+        let recovered = sync_test_file(&db, &child, &[&parent, &alternate_parent, &child])?;
+        assert_eq!(
+            (recovered.imported, recovered.skipped, recovered.deferred),
+            (1, 1, false)
+        );
+        assert_eq!(codex_parse_count(&child), 2);
         Ok(())
     }
 
@@ -4244,7 +4648,7 @@ mod tests {
         )
     }
 
-    fn parsed_latencies(lines: &[String]) -> Vec<Option<i64>> {
+    fn parsed_timings(lines: &[String]) -> Vec<Option<EstimatedTiming>> {
         let dir = tempdir().unwrap();
         let file = rollout_path(dir.path(), PARENT_ID);
         fs::write(&file, lines.join("\n") + "\n").unwrap();
@@ -4253,8 +4657,33 @@ mod tests {
             .token_events
             .iter()
             .filter(|event| event.event_index.is_some())
-            .map(|event| event.latency_ms)
+            .map(|event| event.timing)
             .collect()
+    }
+
+    fn parsed_latencies(lines: &[String]) -> Vec<Option<i64>> {
+        parsed_timings(lines)
+            .into_iter()
+            .map(|timing| timing.map(|t| t.latency_ms))
+            .collect()
+    }
+
+    fn parsed_first_tokens(lines: &[String]) -> Vec<Option<i64>> {
+        parsed_timings(lines)
+            .into_iter()
+            .map(|timing| timing.and_then(|t| t.first_token_ms))
+            .collect()
+    }
+
+    /// 新版 Codex 的 `item_completed`，键顺序照实际日志
+    fn raw_item_completed(timestamp: &str, item_type: &str, started_at_ms: i64) -> String {
+        raw_line(
+            timestamp,
+            "event_msg",
+            &format!(
+                r#"{{"type":"item_completed","thread_id":"t","turn_id":"u","item":{{"type":"{item_type}","id":"i1","content":[]}},"started_at_ms":{started_at_ms},"completed_at_ms":{started_at_ms}}}"#
+            ),
+        )
     }
 
     const USER_MESSAGE: &str = r#"{"type":"message","role":"user","content":[]}"#;
@@ -4314,6 +4743,76 @@ mod tests {
             .map(|row| row.unwrap())
             .collect();
         assert_eq!(stored, vec![8_500, 10_299]);
+        Ok(())
+    }
+
+    #[test]
+    fn test_first_token_is_the_earliest_model_output_item_start() -> Result<(), AppError> {
+        // 2026-10-02T03:00:00Z 的毫秒时间戳
+        let base = 1_790_910_000_000;
+        let lines = vec![
+            raw_line(
+                "2026-10-02T03:00:00.000Z",
+                "turn_context",
+                r#"{"model":"gpt-5"}"#,
+            ),
+            raw_item("2026-10-02T03:00:01.000Z", USER_MESSAGE),
+            // 第一次请求：思考从 3.2 秒开始，回复晚一些；工具执行项不算模型输出
+            raw_item_completed("2026-10-02T03:00:05.000Z", "Reasoning", base + 3_200),
+            raw_item("2026-10-02T03:00:05.001Z", REASONING),
+            raw_item_completed("2026-10-02T03:00:06.000Z", "AgentMessage", base + 5_500),
+            raw_item("2026-10-02T03:00:06.001Z", ASSISTANT_MESSAGE),
+            raw_line(
+                "2026-10-02T03:00:06.100Z",
+                "token_usage_record",
+                &format!(r#"{{"turn_id":"t1","usage":{}}}"#, raw_usage(100, 600)),
+            ),
+            raw_token_count("2026-10-02T03:00:06.101Z", (100, 600), (100, 600)),
+            // 第二次请求一开头就是工具调用，没有思考和回复项，推不出首字
+            raw_item_completed("2026-10-02T03:00:07.000Z", "CommandExecution", base + 6_500),
+            raw_item("2026-10-02T03:00:09.000Z", TOOL_CALL),
+            raw_line(
+                "2026-10-02T03:00:09.100Z",
+                "token_usage_record",
+                &format!(r#"{{"turn_id":"t1","usage":{}}}"#, raw_usage(200, 700)),
+            ),
+            raw_token_count("2026-10-02T03:00:09.101Z", (300, 1300), (200, 700)),
+            // 第三次请求：开始时刻比起点还早，说明对不上，不要
+            raw_item_completed("2026-10-02T03:00:11.000Z", "AgentMessage", base + 9_000),
+            raw_item("2026-10-02T03:00:11.001Z", ASSISTANT_MESSAGE),
+            raw_line(
+                "2026-10-02T03:00:11.100Z",
+                "token_usage_record",
+                &format!(r#"{{"turn_id":"t1","usage":{}}}"#, raw_usage(300, 800)),
+            ),
+            raw_token_count("2026-10-02T03:00:11.101Z", (600, 2100), (300, 800)),
+        ];
+
+        assert_eq!(
+            parsed_latencies(&lines),
+            vec![Some(5_100), Some(2_999), Some(1_999)]
+        );
+        assert_eq!(parsed_first_tokens(&lines), vec![Some(2_200), None, None]);
+
+        // 推出来的首字要落进库里
+        let dir = tempdir().unwrap();
+        let file = rollout_path(dir.path(), PARENT_ID);
+        let mut contents = session_meta(PARENT_ID).to_string();
+        contents.push('\n');
+        contents.push_str(&(lines.join("\n") + "\n"));
+        fs::write(&file, contents).unwrap();
+        let db = Database::memory()?;
+        sync_test_file(&db, &file, &[&file])?;
+        let conn = lock_conn!(db.conn);
+        let mut stmt = conn
+            .prepare("SELECT first_token_ms FROM proxy_request_logs ORDER BY request_id")
+            .unwrap();
+        let stored: Vec<Option<i64>> = stmt
+            .query_map([], |row| row.get(0))
+            .unwrap()
+            .map(|row| row.unwrap())
+            .collect();
+        assert_eq!(stored, vec![Some(2_200), None, None]);
         Ok(())
     }
 

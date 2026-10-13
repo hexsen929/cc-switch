@@ -1,13 +1,19 @@
 import { useMemo } from "react";
-import { useTranslation } from "react-i18next";
 import { AlertTriangle } from "lucide-react";
+import { useTranslation } from "react-i18next";
 import { DeepLinkImportRequest } from "../../lib/api/deeplink";
 import { decodeBase64Utf8 } from "../../lib/utils/base64";
+import { Switch } from "../ui/switch";
 
 export function PromptConfirmation({
   request,
+  enableAfterImport,
+  onEnableAfterImportChange,
 }: {
   request: DeepLinkImportRequest;
+  /** 导入后是否立即启用：用户在确认框里决定，链接里的 enabled 只是初始值 */
+  enableAfterImport: boolean;
+  onEnableAfterImportChange: (enabled: boolean) => void;
 }) {
   const { t } = useTranslation();
 
@@ -60,17 +66,31 @@ export function PromptConfirmation({
 
       {decodedAppendContent !== null && (
         <div>
-          <label className="block text-sm font-medium text-muted-foreground">
+          <label className="block text-sm font-medium text-fg-2">
             {t("deeplink.prompt.appendContentPreview")}
           </label>
-          <pre className="mt-1 max-h-48 overflow-auto rounded border bg-muted/50 p-2 text-xs whitespace-pre-wrap">
+          <pre className="mt-1 max-h-48 overflow-auto bg-subtle p-2 rounded text-xs whitespace-pre-wrap border">
             {decodedAppendContent.substring(0, 500)}
             {decodedAppendContent.length > 500 && "..."}
           </pre>
         </div>
       )}
 
-      {request.enabled && (
+      <div className="flex items-center justify-between gap-4">
+        <label
+          htmlFor="deeplink-prompt-enable-after-import"
+          className="text-sm font-medium"
+        >
+          {t("deeplink.prompt.enableAfterImport")}
+        </label>
+        <Switch
+          id="deeplink-prompt-enable-after-import"
+          checked={enableAfterImport}
+          onCheckedChange={onEnableAfterImportChange}
+        />
+      </div>
+
+      {enableAfterImport && (
         <div className="text-warning-text text-sm flex items-center gap-2">
           <AlertTriangle className="h-4 w-4 shrink-0" />
           <span>{t("deeplink.prompt.enabledWarning")}</span>
