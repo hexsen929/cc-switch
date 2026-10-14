@@ -29,6 +29,7 @@ const LANGUAGES: { value: Language; labelKey: string }[] = [
   { value: "zh-TW", labelKey: "settings.languageOptionTraditionalChinese" },
   { value: "en", labelKey: "settings.languageOptionEnglish" },
   { value: "ja", labelKey: "settings.languageOptionJapanese" },
+  { value: "tr", labelKey: "settings.languageOptionTurkish" },
 ];
 
 interface GeneralSectionProps {
@@ -276,7 +277,8 @@ export function GeneralSection({
               defaultValue: "Source file",
             })}
             description={t("settings.general.sharedInstructionsPathHint", {
-              defaultValue: "Use an absolute path or ~/path/to/AGENTS.md. Leave empty to remove managed blocks.",
+              defaultValue:
+                "Use an absolute path or ~/path/to/AGENTS.md. Leave empty to remove managed blocks.",
             })}
           >
             <Input
