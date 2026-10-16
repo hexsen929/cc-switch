@@ -50,6 +50,28 @@ describe("fork updater release routing", () => {
     expect(body).not.toContain("farion1231/cc-switch");
   });
 
+  it("keeps portable ZIP downloads and their fallback on the fork", () => {
+    const source = readRepoFile("src-tauri/src/commands/misc.rs");
+    const zipUrl = source.match(/fn portable_zip_url\b[\s\S]*?\n\}/)?.[0];
+    const command = source.match(
+      /pub async fn open_portable_update_download\b[\s\S]*?\n\}/,
+    )?.[0];
+    expect(zipUrl).toContain(`${forkReleases}/download/v{version}/`);
+    expect(zipUrl).toContain("CC-Switch-v{version}-Windows{suffix}-Portable.zip");
+    expect(command).toContain(`${forkReleases}/latest`);
+    expect(zipUrl).not.toContain("farion1231/cc-switch");
+    expect(command).not.toContain("farion1231/cc-switch");
+    expect(readRepoFile("src/lib/api/settings.ts")).toContain(
+      'invoke("open_portable_update_download", { version })',
+    );
+  });
+
+  it("runs cloud CI on the active fork integration branch", () => {
+    const ci = readRepoFile(".github/workflows/ci.yml");
+    const pushTriggers = ci.match(/\n  push:[\s\S]*?(?=\n  [a-z_]+:)/)?.[0];
+    expect(pushTriggers).toContain("feat/magpie-inspired");
+  });
+
   it("uses the same revision-aware comparator for UI checks and backend installs", () => {
     expect(readRepoFile("src-tauri/src/lib.rs")).toContain(
       ".plugin(app_updater::builder().build())",

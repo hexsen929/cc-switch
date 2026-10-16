@@ -88,6 +88,9 @@ function renderForm(
     modelAliases?: Record<string, string>;
     category?: ProviderCategory;
     codexCatalog?: Array<{ model: string; displayName?: string }>;
+    codexAutoReviewModel?: string;
+    codexInstructionsFiles?: string[];
+    codexActiveInstructionsFile?: string;
     modeView?: AppMode;
     onStackLayoutChange?: (stackLayout: boolean) => void;
   } = {},
@@ -98,9 +101,17 @@ function renderForm(
       : {
           modelAliases: options.modelAliases,
           auth: {},
-          config: CODEX_CONFIG,
+          config: options.codexActiveInstructionsFile
+            ? `model_instructions_file = ${JSON.stringify(options.codexActiveInstructionsFile)}\n${CODEX_CONFIG}`
+            : CODEX_CONFIG,
+          modelInstructionsFiles: options.codexInstructionsFiles,
           ...(options.codexCatalog
-            ? { modelCatalog: { models: options.codexCatalog } }
+            ? {
+                modelCatalog: {
+                  models: options.codexCatalog,
+                  autoReviewModel: options.codexAutoReviewModel,
+                },
+              }
             : {}),
         };
   return render(
@@ -151,7 +162,9 @@ describe("ProviderForm Stack layout (Claude Code)", () => {
     expect(screen.getByDisplayValue("m-s")).toBeInTheDocument();
     expect(screen.getByDisplayValue("Model S")).toBeInTheDocument();
     // 没有 ★：第一行是默认模型，写在「模型列表」后面的「?」里。
-    expect(screen.getByRole("button", { name: "模型列表" })).toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: "模型列表" }),
+    ).toBeInTheDocument();
     expect(screen.queryByText("providerForm.modelMappingLabel")).toBeNull();
     expect(screen.queryByText("默认兜底模型")).toBeNull();
   });
@@ -159,10 +172,14 @@ describe("ProviderForm Stack layout (Claude Code)", () => {
   it("简化面板的说明收进「?」，高级选项折叠时不挂说明", () => {
     renderForm("claude", vi.fn());
 
-    expect(screen.getByRole("button", { name: "上游格式" })).toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: "上游格式" }),
+    ).toBeInTheDocument();
     expect(screen.queryByText(/一般无需修改/)).toBeNull();
     fireEvent.click(
-      screen.getByRole("button", { name: "providerForm.advancedOptionsToggle" }),
+      screen.getByRole("button", {
+        name: "providerForm.advancedOptionsToggle",
+      }),
     );
     expect(
       screen.getByText("以下两项只在路由、聚合模式下生效。"),
@@ -297,6 +314,39 @@ describe("ProviderForm Stack layout (Codex)", () => {
     settingsState.enableStackMode = true;
   });
 
+  it.each(["m-2", "removed-model"])(
+    "saves aliases and instructions alongside auto-review selection %s",
+    async (autoReviewModel) => {
+      const onSubmit = vi.fn();
+      const aliases = { "codex-auto-review": "m-2" };
+      renderForm("codex", onSubmit, {
+        modelAliases: aliases,
+        codexCatalog: [{ model: "m-1" }, { model: "m-2" }],
+        codexAutoReviewModel: autoReviewModel,
+        codexInstructionsFiles: ["./saved.md"],
+        codexActiveInstructionsFile: "./active.md",
+      });
+
+      const { settings } = await save(onSubmit);
+
+      expect(settings.modelAliases).toEqual(aliases);
+      expect(settings.modelInstructionsFiles).toEqual([
+        "./saved.md",
+        "./active.md",
+      ]);
+      expect(settings.config).toContain(
+        'model_instructions_file = "./active.md"',
+      );
+      expect(settings.modelCatalog.models).toEqual([
+        { model: "m-1" },
+        { model: "m-2" },
+      ]);
+      expect(settings.modelCatalog.autoReviewModel).toBe(
+        autoReviewModel === "m-2" ? "m-2" : undefined,
+      );
+    },
+  );
+
   it("简化面板：模型列表在外面，没有配置编辑器；列表为空时显示要发布的默认模型", () => {
     renderForm("codex", vi.fn());
 
@@ -318,7 +368,9 @@ describe("ProviderForm Stack layout (Codex)", () => {
       ],
     });
 
-    expect(screen.getByRole("button", { name: "模型列表" })).toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: "模型列表" }),
+    ).toBeInTheDocument();
     // 有列表时第一行就是默认模型，不再单独显示默认模型框。
     expect(document.getElementById("codexDefaultModel")).toBeNull();
     fireEvent.change(screen.getByDisplayValue("m-1"), {

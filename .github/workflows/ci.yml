@@ -5,7 +5,7 @@ on:
     branches: [main]
   push:
     # Validate the fork integration branch before tag-driven release builds.
-    branches: [main, test/codex-chatgpt-auth-route]
+    branches: [main, test/codex-chatgpt-auth-route, feat/magpie-inspired]
   # 每周一次全量：push 到 main 也按路径过滤后，靠它在缓存被淘汰后重新建起来
   schedule:
     - cron: "41 19 * * 0" # 周一 03:41（北京时间）

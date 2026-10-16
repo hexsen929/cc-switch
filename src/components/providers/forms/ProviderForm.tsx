@@ -783,12 +783,14 @@ function ProviderFormFull({
     codexModelInstructionsEnabled,
     codexModelInstructionsFile,
     codexModelInstructionsFiles,
+    codexAutoReviewModel,
     codexAuthError,
     setCodexAuth,
     setCodexConfig,
     setCodexCatalogModels,
     setCodexModelAliases,
     setCodexModelInstructionsFiles,
+    setCodexAutoReviewModel,
     handleCodexApiKeyChange,
     handleCodexBaseUrlChange,
     handleCodexModelChange,
@@ -1783,12 +1785,25 @@ function ProviderFormFull({
         } as {
           auth: unknown;
           config: string;
-          modelCatalog?: { models: CodexCatalogModel[] };
           modelInstructionsFiles?: string[];
           modelAliases?: Record<string, string>;
+          modelCatalog?: {
+            models: CodexCatalogModel[];
+            autoReviewModel?: string;
+          };
         };
         if (normalizedCatalogModels.length > 0) {
           configObj.modelCatalog = { models: normalizedCatalogModels };
+          // 自动审批模型只能是列表里的（列表里删掉了就不再存，后端也只认列表里的）
+          const autoReviewModel = codexAutoReviewModel.trim();
+          if (
+            autoReviewModel &&
+            normalizedCatalogModels.some(
+              (model) => model.model === autoReviewModel,
+            )
+          ) {
+            configObj.modelCatalog.autoReviewModel = autoReviewModel;
+          }
         }
         if (normalizedModelInstructionsFiles.length > 0) {
           configObj.modelInstructionsFiles = normalizedModelInstructionsFiles;
@@ -2847,6 +2862,8 @@ function ProviderFormFull({
               onCatalogModelsChange={setCodexCatalogModels}
               modelAliases={codexModelAliases}
               onModelAliasesChange={setCodexModelAliases}
+              autoReviewModel={codexAutoReviewModel}
+              onAutoReviewModelChange={setCodexAutoReviewModel}
               speedTestEndpoints={speedTestEndpoints}
               customUserAgent={customUserAgent}
               onCustomUserAgentChange={setCustomUserAgent}

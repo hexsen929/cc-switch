@@ -177,6 +177,8 @@ export function useCodexConfigState({ initialData }: UseCodexConfigStateProps) {
     useState("");
   const [codexModelInstructionsFiles, setCodexModelInstructionsFilesState] =
     useState<string[]>([]);
+  // 自动审批（Auto Review）用的模型：`modelCatalog.autoReviewModel`，空串 = 用 Codex 的默认
+  const [codexAutoReviewModel, setCodexAutoReviewModel] = useState("");
   const [codexAuthError, setCodexAuthError] = useState("");
 
   const isUpdatingCodexBaseUrlRef = useRef(false);
@@ -236,6 +238,11 @@ export function useCodexConfigState({ initialData }: UseCodexConfigStateProps) {
         )
           ? current
           : nextAliases,
+      );
+      setCodexAutoReviewModel(
+        typeof modelCatalog?.autoReviewModel === "string"
+          ? modelCatalog.autoReviewModel.trim()
+          : "",
       );
 
       // 提取 Base URL
@@ -508,6 +515,7 @@ export function useCodexConfigState({ initialData }: UseCodexConfigStateProps) {
         activeInstructionsFile || savedInstructionsFiles[0] || "",
       );
       setCodexModelInstructionsFilesState(savedInstructionsFiles);
+      setCodexAutoReviewModel("");
 
       const baseUrl = extractCodexBaseUrl(config);
       setCodexBaseUrl(baseUrl || "");
@@ -530,12 +538,14 @@ export function useCodexConfigState({ initialData }: UseCodexConfigStateProps) {
     codexModelInstructionsEnabled,
     codexModelInstructionsFile,
     codexModelInstructionsFiles,
+    codexAutoReviewModel,
     codexAuthError,
     setCodexAuth,
     setCodexConfig,
     setCodexCatalogModels,
     setCodexModelAliases,
     setCodexModelInstructionsFiles,
+    setCodexAutoReviewModel,
     handleCodexApiKeyChange,
     handleCodexBaseUrlChange,
     handleCodexModelChange,

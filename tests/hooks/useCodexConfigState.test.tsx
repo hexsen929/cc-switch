@@ -2,8 +2,87 @@ import { act, renderHook } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
 import { parse as parseToml } from "smol-toml";
 import { useCodexConfigState } from "@/components/providers/forms/hooks/useCodexConfigState";
+import { serializeModelAliases } from "@/utils/modelAliases";
 
 describe("useCodexConfigState", () => {
+  it("hydrates auto-review model alongside aliases and instruction files", () => {
+    const initialData = {
+      settingsConfig: {
+        auth: {},
+        config: 'model_instructions_file = "./active.md"\n',
+        modelInstructionsFiles: ["./saved.md"],
+        modelAliases: { "codex-auto-review": "review-model" },
+        modelCatalog: {
+          models: [{ model: "review-model" }],
+          autoReviewModel: " review-model ",
+        },
+      },
+    };
+    const { result } = renderHook(() => useCodexConfigState({ initialData }));
+
+    expect(result.current.codexAutoReviewModel).toBe("review-model");
+    expect(serializeModelAliases(result.current.codexModelAliases)).toEqual(
+      initialData.settingsConfig.modelAliases,
+    );
+    expect(result.current.codexModelInstructionsEnabled).toBe(true);
+    expect(result.current.codexModelInstructionsFile).toBe("./active.md");
+    expect(result.current.codexModelInstructionsFiles).toEqual([
+      "./saved.md",
+      "./active.md",
+    ]);
+    expect(parseToml(result.current.codexConfig)).toEqual({
+      model_instructions_file: "./active.md",
+    });
+  });
+
+  it("resets auto-review while replacing preset aliases and instruction files", () => {
+    const initialData = {
+      settingsConfig: {
+        auth: {},
+        config: 'model_instructions_file = "./old.md"\n',
+        modelInstructionsFiles: ["./old.md"],
+        modelAliases: { "old-alias": "old-model" },
+        modelCatalog: {
+          models: [{ model: "old-model" }],
+          autoReviewModel: "old-model",
+        },
+      },
+    };
+    const { result } = renderHook(() => useCodexConfigState({ initialData }));
+
+    act(() => {
+      result.current.resetCodexConfig(
+        {},
+        'model = "new-model"\nmodel_instructions_file = "./new-active.md"\n',
+        [{ model: "new-model" }],
+        ["./new-saved.md"],
+        { "new-alias": "new-model" },
+      );
+    });
+
+    expect(result.current.codexAutoReviewModel).toBe("");
+    expect(serializeModelAliases(result.current.codexModelAliases)).toEqual({
+      "new-alias": "new-model",
+    });
+    expect(result.current.codexCatalogModels).toMatchObject([
+      { model: "new-model" },
+    ]);
+    expect(result.current.codexModelInstructionsFile).toBe("./new-active.md");
+    expect(result.current.codexModelInstructionsFiles).toEqual([
+      "./new-saved.md",
+      "./new-active.md",
+    ]);
+
+    act(() => result.current.resetCodexConfig({}, 'model = "plain-model"\n'));
+
+    expect(result.current.codexAutoReviewModel).toBe("");
+    expect(result.current.codexModelAliases).toEqual([]);
+    expect(result.current.codexModelInstructionsEnabled).toBe(false);
+    expect(result.current.codexModelInstructionsFile).toBe("");
+    expect(result.current.codexModelInstructionsFiles).toEqual([]);
+    expect(result.current.codexConfig).not.toContain("model_instructions_file");
+  });
+
   it("edits subagent defaults and instruction files without losing either setting", () => {
     const initialData = {
       settingsConfig: {
