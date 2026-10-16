@@ -4746,7 +4746,7 @@ data: {\"type\":\"response.output_item.done\",\"item\":{\"type\":\"message\"}}\n
         let error = ProxyError::UpstreamError {
             status: 413,
             body: Some(
-                json!({"error":{"message":"prompt is too long: 9000 tokens > 8192 maximum"}})
+                serde_json::json!({"error":{"message":"prompt is too long: 9000 tokens > 8192 maximum"}})
                     .to_string(),
             ),
         };
