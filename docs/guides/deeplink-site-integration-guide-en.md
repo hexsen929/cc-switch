@@ -184,7 +184,7 @@ Two forms:
 CC Switch does not copy the whole file into the user's `~/.codex/config.toml`. It only takes the parts that belong to this provider:
 
 - **The selected `[model_providers.<id>]` table**: the one `model_provider` points to; without `model_provider`, the file may contain only one such table. These keys are taken from the table: `name`, `base_url`, `wire_api`, `requires_openai_auth`, `experimental_bearer_token`, `model_catalog_url`, `capabilities`, `query_params`, `http_headers`, `request_max_retries`, `stream_max_retries`, `stream_idle_timeout_ms`, `websocket_connect_timeout_ms`, `supports_websockets`, `supports_standalone_web_search`.
-- **Top-level model fields**: `model`, `review_model`, `model_reasoning_effort`, `plan_mode_reasoning_effort`, `disable_response_storage`, `web_search`, `model_context_window`, `model_auto_compact_token_limit`, `model_supports_reasoning_summaries`, `model_verbosity`, plus the subagent models in `[agents]` and the memory model in `[memories]`.
+- **Top-level model fields**: `model`, `review_model`, `model_reasoning_effort`, `plan_mode_reasoning_effort`, `web_search`, `model_context_window`, `model_auto_compact_token_limit`, `model_supports_reasoning_summaries`, `model_verbosity`, plus the subagent models in `[agents]` and the memory model in `[memories]`.
 
 Nothing else is taken: `[features]`, `[tools]`, MCP, sandbox, `notify`, other provider tables and so on are the user's own global settings.
 

@@ -35,6 +35,24 @@ Shell 集成只在文件存在且非空、且用户未手动提供同类参数�
 
 `src-tauri/tauri.conf.json` 中的更新端点和签名公钥已替换为本仓库的配置。
 
+### Codex 配置兼容
+
+当前模板及写入链路不再输出 Codex 已忽略的 `disable_response_storage`、
+`preferred_auth_method`、`features.remote_connections`、
+`features.code_mode_tool_description_first` 和
+`features.guardianv2.thread_context`。清理限定于这些 TOML 路径及内嵌
+`profiles`，保留其它设置、路由和 `auth.json`；不会改成语义不同的
+`forced_login_method`。
+
+启动时先在本机 fork 数据库中保存旧供应商/通用片段快照，再原子迁移；
+当前配置文件通过既有文件锁、备份及冲突检测写入。以后保存、切换、MCP
+同步和压缩设置变更也使用相同清理逻辑，避免旧快照重新带回这些字段。
+
+GitHub CI 额外使用固定官方 Codex `0.162.1` 严格加载实际模板和预设，
+详见 [配置兼容契约](docs/codex-config-contract.md)。该检查不代表所有旧版本
+Codex 都具有相同配置语义，也不测试模型请求或认证。桌面应用通过
+`session-flags` 注入的内部参数不属于磁盘配置，须由桌面应用更新修正。
+
 ### 4. Magpie 功能适配
 
 参考 [Magpie](https://github.com/yetone/magpie/tree/674b6ca2881f1289c4ccdec158762978a463320c)

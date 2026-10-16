@@ -323,7 +323,7 @@ pub fn sync_enabled_to_codex(config: &MultiAppConfig) -> Result<(), AppError> {
 ///
 /// `enabled` 的 value 是 MCP server spec（不是带 enabled/server 包装的 UI entry）。
 /// 此函数只替换 `[mcp_servers]` 段并清理旧的 `[mcp.servers]` 错误格式，
-/// 其它 Codex 配置保持不变。
+/// 其它 Codex 配置保持不变，并清理已退役的配置键。
 pub fn sync_enabled_servers_to_codex_config_text(
     base_text: &str,
     enabled: &HashMap<String, Value>,
@@ -374,6 +374,7 @@ pub fn sync_enabled_servers_to_codex_config_text(
         doc["mcp_servers"] = Item::Table(servers_tbl);
     }
 
+    crate::codex_config_compat::strip_retired_settings(&mut doc);
     Ok(doc.to_string())
 }
 
@@ -486,6 +487,7 @@ pub fn sync_single_server_to_codex(
     upsert_mcp_server_table(&mut doc, id, toml_table)?;
 
     // 写回文件
+    crate::codex_config_compat::strip_retired_settings(&mut doc);
     let new_text = doc.to_string();
     crate::config::write_text_file_private(
         &crate::codex_config::get_codex_config_path(),
@@ -522,6 +524,7 @@ pub fn remove_server_from_codex(id: &str) -> Result<(), AppError> {
     remove_mcp_server_from_doc(&mut doc, id);
 
     // 写回文件
+    crate::codex_config_compat::strip_retired_settings(&mut doc);
     let new_text = doc.to_string();
     crate::config::write_text_file_private(
         &crate::codex_config::get_codex_config_path(),
@@ -820,6 +823,25 @@ pub(super) fn json_server_to_toml_table(spec: &Value) -> Result<toml_edit::Table
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn syncing_mcp_also_cleans_retired_codex_settings_without_touching_unrelated_fields() {
+        let base = "model = 'example'\npreferred_auth_method = 'old'\ndisable_response_storage = false\nforced_login_method = 'chatgpt'\n[features]\nremote_connections = true\nother = true\n[profiles.work.features.guardianv2]\nthread_context = true\nother = 7\n";
+        let normalized = sync_enabled_servers_to_codex_config_text(base, &HashMap::new()).unwrap();
+        let doc = normalized.parse::<toml_edit::DocumentMut>().unwrap();
+        assert!(doc.get("preferred_auth_method").is_none());
+        assert!(doc.get("disable_response_storage").is_none());
+        assert!(doc["features"].get("remote_connections").is_none());
+        assert!(doc["profiles"]["work"]["features"]["guardianv2"]
+            .get("thread_context")
+            .is_none());
+        assert_eq!(doc["forced_login_method"].as_str(), Some("chatgpt"));
+        assert_eq!(doc["features"]["other"].as_bool(), Some(true));
+        assert_eq!(
+            doc["profiles"]["work"]["features"]["guardianv2"]["other"].as_integer(),
+            Some(7)
+        );
+    }
 
     #[test]
     fn upsert_normalizes_non_table_mcp_servers_without_panicking() {

@@ -1038,7 +1038,6 @@ impl UniversalProvider {
             r#"model_provider = "custom"
 model = "{model}"
 model_reasoning_effort = "{reasoning_effort}"
-disable_response_storage = true
 
 [model_providers.custom]
 name = "NewAPI"
@@ -1592,6 +1591,23 @@ mod tests {
             .expect("config toml");
 
         assert!(config.contains("base_url = \"https://api.example.com/v1\""));
+        let parsed: toml::Value = toml::from_str(config).expect("parse generated Codex config");
+        assert!(parsed.get("disable_response_storage").is_none());
+        assert!(parsed.get("preferred_auth_method").is_none());
+        assert_eq!(
+            parsed.get("model").and_then(toml::Value::as_str),
+            Some("gpt-4o-mini")
+        );
+        assert_eq!(
+            parsed
+                .get("model_reasoning_effort")
+                .and_then(toml::Value::as_str),
+            Some("low")
+        );
+        assert_eq!(
+            parsed["model_providers"]["custom"]["requires_openai_auth"].as_bool(),
+            Some(true)
+        );
         assert_eq!(
             provider
                 .settings_config

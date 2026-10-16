@@ -3094,12 +3094,15 @@ request_max_retries = 2
 
         assert!(db.get_live_backup("codex").await.expect("read backup").is_none(),
             "new mode uses provider rows and transactional first-write backups, not stale takeover snapshots");
+        let mut expected_settings = updated.settings_config.clone();
+        crate::codex_config_compat::normalize_settings_config(&mut expected_settings)
+            .expect("normalize retired Codex fields");
         assert_eq!(
             db.get_provider_by_id("p1", "codex")
                 .unwrap()
                 .unwrap()
                 .settings_config,
-            updated.settings_config
+            expected_settings
         );
 
         let live_config =
@@ -3121,7 +3124,7 @@ request_max_retries = 2
             parsed
                 .get("disable_response_storage")
                 .and_then(|v| v.as_bool()),
-            Some(true)
+            None
         );
 
         let provider = parsed
@@ -3148,7 +3151,7 @@ request_max_retries = 2
         );
         assert_eq!(
             parsed.get("preferred_auth_method").and_then(|v| v.as_str()),
-            Some("chatgpt")
+            None
         );
 
         let auth: Value =

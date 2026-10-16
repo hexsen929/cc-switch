@@ -82,7 +82,6 @@ export function generateThirdPartyConfig(
   return `model_provider = "custom"
 model = ${tomlString(modelName)}
 model_reasoning_effort = "high"
-disable_response_storage = true
 
 [model_providers.custom]
 name = ${tomlString(providerName)}
@@ -483,7 +482,6 @@ export const codexProviderPresets: CodexProviderPreset[] = [
 model = "gpt-5.6-sol"
 review_model = "gpt-5.6-sol"
 model_reasoning_effort = "high"
-disable_response_storage = true
 
 [model_providers.custom]
 name = "APINebula"
@@ -861,7 +859,6 @@ requires_openai_auth = true`,
 model = "gpt-5.6-sol"
 review_model = "gpt-5.6-sol"
 model_reasoning_effort = "high"
-disable_response_storage = true
 
 [model_providers.custom]
 name = "APIKEY.FUN"
@@ -1412,7 +1409,6 @@ requires_openai_auth = true`,
 model = "gpt-5.6-sol"
 review_model = "gpt-5.6-sol"
 model_reasoning_effort = "high"
-disable_response_storage = true
 
 [model_providers.custom]
 name = "SudoCode"
@@ -1439,7 +1435,6 @@ requires_openai_auth = true`,
 model = "gpt-5.6-sol"
 review_model = "gpt-5.6-sol"
 model_reasoning_effort = "high"
-disable_response_storage = true
 model_verbosity = "high"
 
 [model_providers.custom]
@@ -1536,7 +1531,6 @@ requires_openai_auth = true`,
     auth: generateThirdPartyAuth(""),
     config: `model_provider = "custom"
 model = "zai-org/glm-5.2"
-disable_response_storage = true
 
 [model_providers.custom]
 name = "AtlasCloud"
@@ -1592,7 +1586,6 @@ requires_openai_auth = true`,
     config: `model_provider = "custom"
 model = "gpt-5.6-sol"
 model_reasoning_effort = "high"
-disable_response_storage = true
 
 [model_providers.custom]
 name = "Azure OpenAI"
@@ -2200,8 +2193,8 @@ requires_openai_auth = true`,
       "https://tokenhub.tencentmaas.cn/v1",
     ],
     // 腾讯 TokenHub 官方 Codex 文档（cloud.tencent.com/document/product/1823/133532）：
-    // hy3 原生 Responses（wire_api=responses；官方硬性要求的
-    // disable_response_storage=true 已由 generateThirdPartyConfig 输出）。
+    // hy3 原生 Responses（wire_api=responses）。文档里的旧存储开关已不被
+    // 当前 Codex 读取，不写入配置，也不据此保证服务端的存储或会话行为。
     // ⚠️ 须用 TokenHub API Key（创建时范围需勾选 Hy3）；Coding Plan / Token Plan
     // 订阅 Key 只能走各自 /plan 端点，对本预设的 /v1 不通。
     // hy3 在带 tools 的请求里会把 reasoning_effort=low 服务端自动升为 high
@@ -3581,8 +3574,7 @@ requires_openai_auth = true`,
     auth: generateThirdPartyAuth(""),
     // 官方 OpenAI 兼容文档（docs.ollama.com/api/openai-compatibility，
     // 2026-10-14 核对）：云端 base 为 https://ollama.com/v1，/v1/responses
-    // 只支持无状态（不认 previous_response_id，disable_response_storage 下
-    // Codex 每轮发完整 input，不受影响）
+    // 只支持无状态请求（不认 previous_response_id）；客户端须提供所需上下文。
     config: generateThirdPartyConfig(
       "ollama_cloud",
       "https://ollama.com/v1",
@@ -3645,8 +3637,8 @@ requires_openai_auth = true`,
     auth: generateThirdPartyAuth("ollama"),
     // 本机 /v1/responses（docs.ollama.com/api/openai-compatibility，2026-10-14
     // 核对）：文档写 v0.13.3 起，Codex 自己对 --oss 要求 0.13.4+；只支持无状态
-    // 请求（不认 previous_response_id），disable_response_storage 下每轮发完整
-    // input，不受影响。默认只监听 127.0.0.1:11434。gpt-oss:20b 是 codex --oss
+    // 请求（不认 previous_response_id），客户端须提供所需上下文。
+    // 默认只监听 127.0.0.1:11434。gpt-oss:20b 是 codex --oss
     // 的默认模型（docs.ollama.com/integrations/codex），需先 ollama pull，或换成
     // 自己已下载的模型 / 用「获取模型」从 /v1/models 拉取
     config: generateThirdPartyConfig(
@@ -3748,8 +3740,8 @@ requires_openai_auth = true`,
     // 本机 llama-server 的 /v1/responses（b7793 起，PR #18486；github.com/
     // ggml-org/llama.cpp/blob/master/tools/server/README.md，2026-10-14 核对），
     // base 带 /v1。只是部分实现：内部先转成 Chat 再处理，不认
-    // previous_response_id，disable_response_storage 下 Codex 每轮发完整 input，
-    // 不受影响。默认端口 b11521（PR #30159）起为 9931，v0.6.0 及更早、Homebrew
+    // previous_response_id，客户端须提供所需上下文。
+    // 默认端口 b11521（PR #30159）起为 9931，v0.6.0 及更早、Homebrew
     // 与 Docker 仍是 8080，见候选地址；只监听 IPv4 的 127.0.0.1。默认模型取
     // ggml-org 官方 GGUF 的 Qwen3-Coder 30B A3B，换成自己已下载的模型，或用
     // 「获取模型」从 /v1/models 拉取（单模型启动时 model 字段被忽略）
@@ -3793,8 +3785,8 @@ requires_openai_auth = true`,
     // 本机 vllm serve 的 /v1/responses（docs.vllm.ai/en/stable/serving/
     // integrations/codex，v0.31.0 源码，2026-10-14 核对），base 带 /v1，官方写法
     // 即 wire_api = "responses"；非 gpt-oss 模型的函数调用自 v0.11.1 起支持，
-    // 统一要求 vLLM ≥ 0.23.0。store 默认被静默关掉，disable_response_storage 下
-    // Codex 每轮发完整 input，不受影响。默认端口 8000，不带 --host 时监听全部
+    // 统一要求 vLLM ≥ 0.23.0。服务端默认不保存响应；这不是 Codex 配置开关
+    // 的保证。默认端口 8000，不带 --host 时监听全部
     // IPv4 网卡，建议加 --host 127.0.0.1；工具调用要启动时加
     // --enable-auto-tool-choice --tool-call-parser qwen3_coder（思考另加
     // --reasoning-parser qwen3）。默认模型取 Codex 接入页的示例
@@ -4144,8 +4136,8 @@ requires_openai_auth = true`,
     // Responses 只接受 type: "function" 工具，其余类型被服务端静默滤掉（OpenAPI
     // /responses 的 tools 描述）：NativeResponses 档案不发 freeform apply_patch、
     // 改用 shell_command 改文件，不受影响；但 web_search 与 namespace 形态的
-    // MCP 工具会被悄悄丢掉。previous_response_id / store 被忽略，Codex 每轮发
-    // 完整历史无碍。支持 Responses 的模型见 docs.sambanova.ai/docs/en/features/
+    // MCP 工具会被悄悄丢掉。previous_response_id / store 被忽略，客户端须提供
+    // 所需上下文。支持 Responses 的模型见 docs.sambanova.ai/docs/en/features/
     // responses；DeepSeek 系列不走 Responses（404），不进目录
     apiFormat: "openai_responses",
     // 档位取 OpenAPI 对 Responses 声明的 reasoning_effort 枚举 low/medium/high
@@ -4577,7 +4569,6 @@ requires_openai_auth = true`,
     config: `model_provider = "custom"
 model = "gpt-5.6-sol"
 model_reasoning_effort = "high"
-disable_response_storage = true
 
 [model_providers.custom]
 name = "E-FlowCode"
@@ -4601,7 +4592,6 @@ model_auto_compact_token_limit = 9000000`,
     config: `model_provider = "custom"
 model = "gpt-5.6-sol"
 model_reasoning_effort = "medium"
-disable_response_storage = true
 
 [model_providers.custom]
 name = "PIPELLM"

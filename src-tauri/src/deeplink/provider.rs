@@ -679,7 +679,6 @@ fn build_codex_settings(request: &DeepLinkImportRequest) -> Result<serde_json::V
         r#"model_provider = "custom"
 model = {model_name}
 model_reasoning_effort = "high"
-disable_response_storage = true
 
 [model_providers.custom]
 name = {provider_display_name}
@@ -1465,6 +1464,8 @@ mod tests {
             .and_then(|value| value.as_str())
             .expect("config text");
         let parsed: toml::Value = toml::from_str(config_text).expect("valid Codex config");
+        assert!(parsed.get("disable_response_storage").is_none());
+        assert!(parsed.get("preferred_auth_method").is_none());
 
         assert_eq!(
             parsed

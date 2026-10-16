@@ -184,7 +184,7 @@ URL と画像は以下の条件を満たす必要があります。1 つでも�
 CC Switch はファイル全体をユーザーの `~/.codex/config.toml` にそのまま持ち込むことはせず、このプロバイダーに属する部分だけを受け取ります。
 
 - **選ばれた `[model_providers.<id>]` テーブル**：`model_provider` が指しているテーブルです。`model_provider` を書かない場合、ファイル内のテーブルは 1 つだけでなければなりません。テーブルからは次のキーを受け取ります：`name`、`base_url`、`wire_api`、`requires_openai_auth`、`experimental_bearer_token`、`model_catalog_url`、`capabilities`、`query_params`、`http_headers`、`request_max_retries`、`stream_max_retries`、`stream_idle_timeout_ms`、`websocket_connect_timeout_ms`、`supports_websockets`、`supports_standalone_web_search`。
-- **トップレベルのモデル関連フィールド**：`model`、`review_model`、`model_reasoning_effort`、`plan_mode_reasoning_effort`、`disable_response_storage`、`web_search`、`model_context_window`、`model_auto_compact_token_limit`、`model_supports_reasoning_summaries`、`model_verbosity`、それに `[agents]` のサブエージェント用モデルと `[memories]` のメモリー用モデル。
+- **トップレベルのモデル関連フィールド**：`model`、`review_model`、`model_reasoning_effort`、`plan_mode_reasoning_effort`、`web_search`、`model_context_window`、`model_auto_compact_token_limit`、`model_supports_reasoning_summaries`、`model_verbosity`、それに `[agents]` のサブエージェント用モデルと `[memories]` のメモリー用モデル。
 
 それ以外は一切受け取りません。`[features]`、`[tools]`、MCP、sandbox、`notify`、ほかのプロバイダーテーブルなどは、ユーザー自身のグローバル設定だからです。
 

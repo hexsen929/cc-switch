@@ -125,6 +125,7 @@ pub const CODEX_FLOOR_TOP: &[&str] = &[
     "review_model",
     "model_reasoning_effort",
     "plan_mode_reasoning_effort",
+    // Legacy ownership: remove this on switch, never project it again.
     "disable_response_storage",
     "model_catalog_json",
     // 兜底写法会把 Key 写在顶层。

@@ -24,7 +24,7 @@ use crate::database::Database;
 use crate::error::AppError;
 use crate::live::engine::{read_current, LiveFile};
 use crate::live::floor;
-use crate::live::patch::toml::parse;
+use crate::live::patch::toml::{parse, TomlSteps};
 use crate::live::project::codex::{
     is_keyless_fallback, CodexProjection, Route, RowInput, OFFICIAL_PROXY_ROUTE_ID, ROUTE_ID,
 };
@@ -335,7 +335,8 @@ pub(crate) fn plan_save(
     proxy_injected_oauth: bool,
     on_conflict: ConflictPolicy,
 ) -> Result<CodexEditorPlan, AppError> {
-    let edited_doc = parse_text(config_text(edited), "edited")?;
+    let mut edited_doc = parse_text(config_text(edited), "edited")?;
+    crate::codex_config_compat::strip_retired_settings(&mut edited_doc);
     let base_doc = parse_text(config_text(base), "base")?;
     let mut projection = project_for_save(&RowInput {
         settings: edited,
@@ -385,6 +386,7 @@ fn store_into_row(
     let mut row = edited.clone();
     let stored_text = stored_row.map(config_text).unwrap_or("");
     let mut doc = parse_text(stored_text, "stored")?;
+    crate::codex_config_compat::strip_retired_settings(&mut doc);
 
     let stored_route = doc
         .get("model_provider")
@@ -503,11 +505,13 @@ pub(crate) fn write_live(
             if edits.is_empty() {
                 return Ok(());
             }
+            let retired = crate::codex_config_compat::RetiredSettingsPatch;
+            let normalized = TomlSteps(vec![edits, &retired]);
             AppWrite::begin(db, app())?.run(
                 op::APPLY,
                 &[FileChange {
                     file: LiveFile::private(get_codex_config_path()),
-                    patch: edits,
+                    patch: &normalized,
                 }],
                 PendingTarget::default(),
             )?;
@@ -536,6 +540,43 @@ mod tests {
     }
 
     const LIVE: &str = "approval_policy = \"on-request\"\nmodel = \"gpt-a\"\n\n[agents]\ndefault_subagent_model = \"mini\"\nmax_threads = 4\n\n[mcp_servers.fs]\ncommand = \"fs\"\n";
+
+    #[test]
+    fn saving_a_legacy_row_removes_retired_settings_without_touching_auth_or_user_preferences() {
+        let stored = json!({
+            "auth": {"OPENAI_API_KEY":"fixture-key", "preferred_auth_method":"chatgpt"},
+            "config": "model = 'example'\ndisable_response_storage = true\npreferred_auth_method = 'legacy'\napproval_policy = 'on-request'\n[features]\nremote_connections = false\nkeep = true\n[profiles.work]\npreferred_auth_method = 'legacy'\n[profiles.work.features.guardianv2]\nthread_context = false\nother = true\n"
+        });
+        let plan = plan_save(
+            Some(&stored),
+            &stored,
+            &stored,
+            &Origin::row(&stored).unwrap(),
+            true,
+            false,
+            ConflictPolicy::Refuse,
+        )
+        .unwrap();
+        assert_eq!(plan.row_settings["auth"], stored["auth"]);
+        let saved = doc(plan.row_settings["config"].as_str().unwrap());
+        assert!(saved.get("disable_response_storage").is_none());
+        assert!(saved.get("preferred_auth_method").is_none());
+        assert!(saved["features"].get("remote_connections").is_none());
+        assert!(saved["profiles"]["work"]
+            .get("preferred_auth_method")
+            .is_none());
+        assert_eq!(
+            saved["profiles"]["work"]["features"]["guardianv2"]["other"].as_bool(),
+            Some(true)
+        );
+        let mut live = doc(stored["config"].as_str().unwrap());
+        plan.edits
+            .apply_to(Path::new("config.toml"), &mut live)
+            .unwrap();
+        crate::codex_config_compat::strip_retired_settings(&mut live);
+        assert!(live.get("preferred_auth_method").is_none());
+        assert_eq!(live["approval_policy"].as_str(), Some("on-request"));
+    }
 
     #[test]
     fn instruction_file_and_exact_aliases_round_trip_as_provider_settings() {

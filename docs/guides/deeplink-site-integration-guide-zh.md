@@ -184,7 +184,7 @@ CC Switch 内置图标里没有你的品牌时，用 `iconUrl` 给一个图片�
 CC Switch 不会把整份文件照搬进用户的 `~/.codex/config.toml`，只收属于这个供应商的部分：
 
 - **选中的那张 `[model_providers.<id>]` 表**：`model_provider` 指向的那张；没写 `model_provider` 时文件里只能有一张。表里收这些键：`name`、`base_url`、`wire_api`、`requires_openai_auth`、`experimental_bearer_token`、`model_catalog_url`、`capabilities`、`query_params`、`http_headers`、`request_max_retries`、`stream_max_retries`、`stream_idle_timeout_ms`、`websocket_connect_timeout_ms`、`supports_websockets`、`supports_standalone_web_search`。
-- **顶层的模型相关字段**：`model`、`review_model`、`model_reasoning_effort`、`plan_mode_reasoning_effort`、`disable_response_storage`、`web_search`、`model_context_window`、`model_auto_compact_token_limit`、`model_supports_reasoning_summaries`、`model_verbosity`，以及 `[agents]` 的子代理模型、`[memories]` 的记忆模型。
+- **顶层的模型相关字段**：`model`、`review_model`、`model_reasoning_effort`、`plan_mode_reasoning_effort`、`web_search`、`model_context_window`、`model_auto_compact_token_limit`、`model_supports_reasoning_summaries`、`model_verbosity`，以及 `[agents]` 的子代理模型、`[memories]` 的记忆模型。
 
 其他的一律不收：`[features]`、`[tools]`、MCP、sandbox、`notify`、其他供应商表等，这些是用户自己的全局设置。
 

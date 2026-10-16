@@ -55,7 +55,6 @@ pub(crate) const ROW_TOP_FIELDS: &[&str] = &[
     "review_model",
     "model_reasoning_effort",
     "plan_mode_reasoning_effort",
-    "disable_response_storage",
 ];
 
 fn is_built_in_id(id: &str) -> bool {
@@ -105,7 +104,7 @@ pub enum Route {
 #[derive(Debug, Clone)]
 pub struct CodexProjection {
     pub route: Route,
-    /// 顶层关键字段（模型名、推理档位、`disable_response_storage`）。
+    /// 顶层关键字段（模型名、推理档位）。
     pub top: Vec<(String, TomlValue)>,
     /// 嵌在用户表里的模型名（`agents.default_subagent_model` 等）。
     pub nested: Vec<(Vec<String>, TomlValue)>,
@@ -141,12 +140,13 @@ impl CodexProjection {
             ));
         }
         let config_text = settings.get("config").and_then(Value::as_str).unwrap_or("");
-        let doc = config_text.parse::<DocumentMut>().map_err(|err| {
+        let mut doc = config_text.parse::<DocumentMut>().map_err(|err| {
             config_error(
                 format!("供应商的 Codex config.toml 无法解析：{err}"),
                 format!("The provider's Codex config.toml cannot be parsed: {err}"),
             )
         })?;
+        crate::codex_config_compat::strip_retired_settings(&mut doc);
 
         let mut top: Vec<(String, TomlValue)> = ROW_TOP_FIELDS
             .iter()
@@ -603,6 +603,7 @@ pub fn row_catalog_pointer(top: &[(String, TomlValue)]) -> Option<&(String, Toml
 
 impl CodexConfigPatch {
     pub fn apply_to(&self, path: &Path, doc: &mut DocumentMut) -> Result<(), LiveWriteError> {
+        crate::codex_config_compat::strip_retired_settings(doc);
         let target_top: Vec<&str> = self
             .top
             .iter()
@@ -699,6 +700,10 @@ impl CodexConfigPatch {
         if self.catalog && !row_pointer {
             put_value(root, MODEL_CATALOG_JSON, &TomlValue::from(CATALOG_FILENAME));
         }
+
+        // A saved projection or editor diff may originate from an older
+        // release. Enforce the same exact compatibility boundary on output.
+        crate::codex_config_compat::strip_retired_settings(doc);
 
         check_effective_route(doc, selector)
     }
@@ -1111,6 +1116,43 @@ mod tests {
             .apply_to(Path::new("config.toml"), &mut doc)
             .expect("apply");
         doc
+    }
+
+    #[test]
+    fn projection_and_live_patch_never_reintroduce_retired_settings() {
+        let legacy = row(
+            json!({"OPENAI_API_KEY":"fixture"}),
+            &format!("disable_response_storage = true\npreferred_auth_method = 'legacy'\n{RELAY}"),
+        );
+        let projection = project(&legacy).unwrap();
+        assert!(!projection
+            .top
+            .iter()
+            .any(|(key, _)| key == "disable_response_storage" || key == "preferred_auth_method"));
+        let patch = CodexConfigPatch {
+            top: vec![(
+                "disable_response_storage".to_string(),
+                TomlValue::from(true),
+            )],
+            nested: Vec::new(),
+            exclusive: Vec::new(),
+            outgoing: Vec::new(),
+            route: RouteWrite::Default,
+            catalog: false,
+            retired: Vec::new(),
+        };
+        let mut live = "preferred_auth_method = 'legacy'\nunknown = true\n[profiles.work.features]\nremote_connections = false\n[profiles.work.features.guardianv2]\nthread_context = false\nother = true\n".parse::<DocumentMut>().unwrap();
+        patch.apply_to(Path::new("config.toml"), &mut live).unwrap();
+        assert!(live.get("disable_response_storage").is_none());
+        assert!(live.get("preferred_auth_method").is_none());
+        assert!(live["profiles"]["work"]["features"]
+            .get("remote_connections")
+            .is_none());
+        assert_eq!(
+            live["profiles"]["work"]["features"]["guardianv2"]["other"].as_bool(),
+            Some(true)
+        );
+        assert_eq!(live["unknown"].as_bool(), Some(true));
     }
 
     const PROXY: &str = "http://127.0.0.1:15721/v1";

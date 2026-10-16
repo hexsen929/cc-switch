@@ -266,7 +266,7 @@ const CODEX_RESERVED_MODEL_PROVIDER_IDS: &[&str] = &[
     "lmstudio",
 ];
 
-/// Normalize Codex feature flags across Codex CLI config schema changes.
+/// Normalize Codex settings across Codex CLI config schema changes.
 ///
 /// `features.codex_hooks` was renamed to `features.hooks`. Keep accepting old
 /// provider/common-config snapshots but never write the deprecated key back to
@@ -280,15 +280,25 @@ pub fn normalize_codex_feature_flags_in_config_toml(config_text: &str) -> Result
         .parse::<DocumentMut>()
         .map_err(|e| AppError::Message(format!("Invalid Codex config.toml: {e}")))?;
 
+    let changed = crate::codex_config_compat::strip_retired_settings(&mut doc);
+
     let Some(features) = doc
         .get_mut("features")
         .and_then(|item| item.as_table_like_mut())
     else {
-        return Ok(config_text.to_string());
+        return Ok(if changed {
+            doc.to_string()
+        } else {
+            config_text.to_string()
+        });
     };
 
     let Some(codex_hooks) = features.remove("codex_hooks") else {
-        return Ok(config_text.to_string());
+        return Ok(if changed {
+            doc.to_string()
+        } else {
+            config_text.to_string()
+        });
     };
 
     let has_hooks = features.get("hooks").is_some_and(|item| !item.is_none());
@@ -3479,6 +3489,30 @@ mod tests {
 
         assert!(result.is_err(), "R1 live auth must reject an expected R0");
         assert_eq!(capture_codex_live_test_state(), before);
+    }
+
+    #[test]
+    fn retired_settings_and_hooks_are_normalized_together() {
+        let input = "disable_response_storage = false\npreferred_auth_method = 'legacy'\nforced_login_method = 'chatgpt'\n[features]\ncodex_hooks = true\nremote_connections = true\ncode_mode_tool_description_first = false\n[features.guardianv2]\nthread_context = true\nother = true\n";
+        let normalized = normalize_codex_feature_flags_in_config_toml(input).unwrap();
+        let doc = normalized.parse::<DocumentMut>().unwrap();
+        assert!(doc.get("disable_response_storage").is_none());
+        assert!(doc.get("preferred_auth_method").is_none());
+        assert_eq!(doc["forced_login_method"].as_str(), Some("chatgpt"));
+        assert!(doc["features"].get("codex_hooks").is_none());
+        assert_eq!(doc["features"]["hooks"].as_bool(), Some(true));
+        assert!(doc["features"].get("remote_connections").is_none());
+        assert!(doc["features"]
+            .get("code_mode_tool_description_first")
+            .is_none());
+        assert!(doc["features"]["guardianv2"]
+            .get("thread_context")
+            .is_none());
+        assert_eq!(doc["features"]["guardianv2"]["other"].as_bool(), Some(true));
+        assert_eq!(
+            normalize_codex_feature_flags_in_config_toml(&normalized).unwrap(),
+            normalized
+        );
     }
 
     #[test]

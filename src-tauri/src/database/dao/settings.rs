@@ -47,6 +47,12 @@ impl Database {
 
     /// 设置值
     pub fn set_setting(&self, key: &str, value: &str) -> Result<(), AppError> {
+        // Preserve invalid drafts for the editor, but never reintroduce retired
+        // options through a valid imported common-config snapshot.
+        let normalized = (key == "common_config_codex")
+            .then(|| crate::codex_config_compat::normalize_config_text(value))
+            .and_then(Result::ok);
+        let value = normalized.as_deref().unwrap_or(value);
         let conn = lock_conn!(self.conn);
         conn.execute(
             "INSERT OR REPLACE INTO settings (key, value) VALUES (?1, ?2)",

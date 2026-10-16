@@ -5,6 +5,65 @@ use indexmap::IndexMap;
 use rusqlite::{params, OptionalExtension};
 use std::collections::{HashMap, HashSet};
 
+// The DAO also accepts unfinished editor drafts. Normalize valid Codex TOML,
+// but retain invalid drafts verbatim; live projection rejects them before any
+// client file is changed. Authentication lives outside this TOML and is kept.
+fn compatible_settings<'a>(
+    app_type: &str,
+    settings: &'a serde_json::Value,
+) -> std::borrow::Cow<'a, serde_json::Value> {
+    if app_type == "codex" {
+        let mut normalized = settings.clone();
+        if matches!(
+            crate::codex_config_compat::normalize_settings_config(&mut normalized),
+            Ok(true)
+        ) {
+            return std::borrow::Cow::Owned(normalized);
+        }
+    }
+    std::borrow::Cow::Borrowed(settings)
+}
+
+#[cfg(test)]
+mod codex_compat_tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn codex_save_update_and_rename_do_not_restore_retired_options() {
+        let db = Database::memory().unwrap();
+        let settings = json!({
+            "auth": {"OPENAI_API_KEY": "fixture-key", "auth_mode": "chatgpt"},
+            "config": "model = 'fixture'\npreferred_auth_method = 'legacy'\ndisable_response_storage = false\n[features]\nremote_connections = true\nfuture_flag = true\n",
+            "unknown_metadata": {"keep": true}
+        });
+        let mut provider =
+            Provider::with_id("old".into(), "Fixture".into(), settings.clone(), None);
+        db.save_provider("codex", &provider).unwrap();
+        let stored = db.get_provider_by_id("old", "codex").unwrap().unwrap();
+        assert_eq!(stored.settings_config["auth"], settings["auth"]);
+        let text = stored.settings_config["config"].as_str().unwrap();
+        assert!(!text.contains("preferred_auth_method"));
+        assert!(!text.contains("disable_response_storage"));
+        assert!(!text.contains("remote_connections"));
+        assert!(text.contains("future_flag"));
+        db.update_provider_settings_config("codex", "old", &settings)
+            .unwrap();
+        provider.id = "renamed".into();
+        db.replace_provider_id("codex", "old", &provider).unwrap();
+        let renamed = db.get_provider_by_id("renamed", "codex").unwrap().unwrap();
+        assert_eq!(renamed.settings_config, stored.settings_config);
+    }
+
+    #[test]
+    fn unfinished_drafts_and_other_apps_are_preserved() {
+        let invalid = json!({"config": "model = [", "auth": {"OPENAI_API_KEY": "fixture"}});
+        assert_eq!(compatible_settings("codex", &invalid).as_ref(), &invalid);
+        let foreign = json!({"config": "disable_response_storage = true\n"});
+        assert_eq!(compatible_settings("claude", &foreign).as_ref(), &foreign);
+    }
+}
+
 type OmoProviderRow = (
     String,
     String,
@@ -264,6 +323,7 @@ impl Database {
     }
 
     pub fn save_provider(&self, app_type: &str, provider: &Provider) -> Result<(), AppError> {
+        let settings = compatible_settings(app_type, &provider.settings_config);
         let mut conn = lock_conn!(self.conn);
         let tx = conn
             .transaction()
@@ -302,7 +362,7 @@ impl Database {
                 WHERE id = ?13 AND app_type = ?14",
                 params![
                     provider.name,
-                    serde_json::to_string(&provider.settings_config).map_err(|e| {
+                    serde_json::to_string(settings.as_ref()).map_err(|e| {
                         AppError::Database(format!("Failed to serialize settings_config: {e}"))
                     })?,
                     provider.website_url,
@@ -332,7 +392,7 @@ impl Database {
                     provider.id,
                     app_type,
                     provider.name,
-                    serde_json::to_string(&provider.settings_config)
+                    serde_json::to_string(settings.as_ref())
                         .map_err(|e| AppError::Database(format!("Failed to serialize settings_config: {e}")))?,
                     provider.website_url,
                     provider.category,
@@ -375,6 +435,8 @@ impl Database {
         if original_id == provider.id {
             return self.save_provider(app_type, provider);
         }
+
+        let settings = compatible_settings(app_type, &provider.settings_config);
 
         let mut conn = lock_conn!(self.conn);
         let tx = conn
@@ -423,7 +485,7 @@ impl Database {
                 provider.id,
                 app_type,
                 provider.name,
-                serde_json::to_string(&provider.settings_config).map_err(|e| {
+                serde_json::to_string(settings.as_ref()).map_err(|e| {
                     AppError::Database(format!("Failed to serialize settings_config: {e}"))
                 })?,
                 provider.website_url,
@@ -534,13 +596,14 @@ impl Database {
         provider_id: &str,
         settings_config: &serde_json::Value,
     ) -> Result<(), AppError> {
+        let settings_config = compatible_settings(app_type, settings_config);
         let conn = lock_conn!(self.conn);
         conn.execute(
             "UPDATE providers SET settings_config = ?1 WHERE id = ?2 AND app_type = ?3",
             params![
-                serde_json::to_string(settings_config).map_err(|e| AppError::Database(format!(
-                    "Failed to serialize settings_config: {e}"
-                )))?,
+                serde_json::to_string(settings_config.as_ref()).map_err(|e| AppError::Database(
+                    format!("Failed to serialize settings_config: {e}")
+                ))?,
                 provider_id,
                 app_type
             ],

@@ -154,6 +154,100 @@ jobs:
                   print(f"::error title=prettier-patch::{path} PATCH_GZIP_BASE64:{encoded}")
           PY
 
+  codex-config-contract:
+    name: Official Codex configuration contract (0.162.1)
+    runs-on: ubuntu-latest
+    needs: changes
+    if: needs.changes.outputs.frontend == 'true' || needs.changes.outputs.backend == 'true'
+    permissions:
+      contents: read
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: "20"
+
+      - name: Setup Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.13"
+
+      - name: Setup pnpm
+        env:
+          COREPACK_ENABLE_DOWNLOAD_PROMPT: "0"
+        run: |
+          corepack enable
+          corepack install
+
+      - name: Install fixture export dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Install pinned official CLI
+        shell: bash
+        run: |
+          npm install --prefix "$RUNNER_TEMP/codex-contract-cli" --no-audit --no-fund @openai/codex@0.162.1
+          "$RUNNER_TEMP/codex-contract-cli/node_modules/.bin/codex" --version
+
+      - name: Export actual application configurations
+        shell: bash
+        run: |
+          CODEX_CONFIG_FIXTURES_DIR="$RUNNER_TEMP/codex-contract/fixtures" \
+            pnpm exec vitest run tests/contracts/codexConfigFixtures.test.ts
+
+      - name: Generate official app-server protocol schema
+        shell: bash
+        run: |
+          mkdir -p "$RUNNER_TEMP/codex-contract/schema-home"
+          CODEX_HOME="$RUNNER_TEMP/codex-contract/schema-home" \
+            "$RUNNER_TEMP/codex-contract-cli/node_modules/.bin/codex" \
+            app-server generate-json-schema --out "$RUNNER_TEMP/codex-contract/protocol-schema"
+
+      - name: Strict-load fixtures with official config/read
+        shell: bash
+        run: |
+          python scripts/validate-codex-config.py \
+            --codex "$RUNNER_TEMP/codex-contract-cli/node_modules/.bin/codex" \
+            --fixtures "$RUNNER_TEMP/codex-contract/fixtures" \
+            --report "$RUNNER_TEMP/codex-contract/report.json" \
+            2>&1 | tee "$RUNNER_TEMP/codex-contract-validation.log"
+
+      - name: Publish contract result
+        if: always()
+        shell: bash
+        run: |
+          python - <<'PY'
+          import json
+          import os
+          import pathlib
+
+          report = pathlib.Path(os.environ["RUNNER_TEMP"]) / "codex-contract/report.json"
+          if report.exists():
+              data = json.loads(report.read_text())
+              failures = [row for row in data["fixtures"] if row["status"] != "passed"]
+              with open(os.environ["GITHUB_STEP_SUMMARY"], "a") as summary:
+                  summary.write(f"Official Codex {data['version']}: {len(data['fixtures']) - len(failures)}/{len(data['fixtures'])} configurations loaded; {data['negativeControls']} unknown-field controls rejected.\n")
+              for row in failures:
+                  message = f"{row['name']}: {row['error']}".replace("%", "%25").replace("\r", "%0D").replace("\n", "%0A")
+                  print(f"::error title=Codex config contract::{message}")
+          PY
+
+      - name: Upload configuration contract evidence
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: codex-config-contract-0.162.1
+          path: |
+            ${{ runner.temp }}/codex-contract/report.json
+            ${{ runner.temp }}/codex-contract/fixtures/
+            ${{ runner.temp }}/codex-contract/protocol-schema/
+            ${{ runner.temp }}/codex-contract-validation.log
+          if-no-files-found: warn
+          retention-days: 7
+
   backend:
     name: Backend Checks
     runs-on: ${{ matrix.os }}

@@ -7,7 +7,10 @@ mod claude_desktop_config;
 mod claude_mcp;
 mod claude_plugin;
 mod codex_config;
+mod codex_config_compat;
+mod codex_config_migration;
 mod codex_history_migration;
+mod codex_live_compat_migration;
 mod codex_rollout_file;
 mod codex_state_db;
 mod commands;
@@ -692,6 +695,18 @@ pub fn run() {
             // 补完上次崩溃时写到一半的客户端文件（写前意图在 ~/.cc-switch/live-state.json），
             // 要在任何写客户端文件的启动步骤之前。
             crate::mode::operation::recover_on_startup(&app_state.db);
+
+            match crate::codex_config_migration::migrate_saved_configs(&app_state.db) {
+                Ok(outcome) if outcome.changed() => log::info!(
+                    "已备份并清理 Codex 旧配置：{} 个供应商、{} 个通用片段",
+                    outcome.providers, outcome.common_config
+                ),
+                Ok(_) => {},
+                Err(error) => log::warn!("清理 Codex 已保存配置失败，保留原数据: {error}"),
+            }
+            if let Err(error) = crate::codex_live_compat_migration::migrate_live_config(&app_state.db) {
+                log::warn!("清理 Codex 本机旧配置失败，保留原文件: {error}");
+            }
 
             if let Err(error) = crate::shared_instructions::sync_from_settings_for_state(&app_state) {
                 log::warn!("启动时同步共享指令文件失败，保留现有 Agent 文件: {error}");

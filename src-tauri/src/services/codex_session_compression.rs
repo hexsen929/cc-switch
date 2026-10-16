@@ -13,7 +13,7 @@ use crate::codex_config::{
 use crate::database::Database;
 use crate::error::AppError;
 use crate::live::engine::LiveFile;
-use crate::live::patch::toml::TomlPatch;
+use crate::live::patch::toml::{TomlPatch, TomlSteps};
 use crate::live::patch::KeyPath;
 use crate::mode::operation::{AppWrite, FileChange};
 use crate::mode::state::{op, PendingTarget};
@@ -38,11 +38,14 @@ pub fn set_enabled(db: &Database, enabled: bool) -> Result<bool, AppError> {
     if is_enabled()? == enabled {
         return Ok(enabled);
     }
+    let feature_patch = patch(enabled);
+    let retired = crate::codex_config_compat::RetiredSettingsPatch;
+    let normalized = TomlSteps(vec![&feature_patch, &retired]);
     AppWrite::begin(db, AppType::Codex.as_str())?.run(
         op::APPLY,
         &[FileChange {
             file: LiveFile::private(get_codex_config_path()),
-            patch: &patch(enabled),
+            patch: &normalized,
         }],
         PendingTarget::default(),
     )?;
