@@ -321,7 +321,9 @@ describe("SessionManagerPage", () => {
       screen.queryByRole("button", { name: /中恢复 Read Only Worker/ }),
     ).not.toBeInTheDocument();
     openRow("Read Only Worker");
-    expect(await screen.findByText("child question")).toBeInTheDocument();
+    expect(
+      await screen.findByText("child question", { selector: "p" }),
+    ).toBeInTheDocument();
     const resume = screen.getByRole("button", { name: /中恢复$/ });
     expect(resume).toHaveAttribute("aria-disabled", "true");
     fireEvent.click(resume);

@@ -113,12 +113,12 @@ impl SearchMcpConfig {
                 return Err(AppError::InvalidInput("搜索源无效或重复".into()));
             }
             source.base_url = source.base_url.trim().trim_end_matches('/').into();
-            if !source.base_url.is_empty() {
-                if network::parse_url(&source.base_url)?.query().is_some() {
-                    return Err(AppError::InvalidInput(
-                        "搜索源地址不能包含查询参数；密钥请填入 API 密钥栏".into(),
-                    ));
-                }
+            if !source.base_url.is_empty()
+                && network::parse_url(&source.base_url)?.query().is_some()
+            {
+                return Err(AppError::InvalidInput(
+                    "搜索源地址不能包含查询参数；密钥请填入 API 密钥栏".into(),
+                ));
             }
             if source.engine == "searxng" && source.enabled && source.base_url.is_empty() {
                 return Err(AppError::InvalidInput("SearXNG 需要实例地址".into()));

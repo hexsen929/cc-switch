@@ -230,7 +230,7 @@ fn read_subagent_tasks_with_limit(
         {
             continue;
         }
-        let Ok(value) = serde_json::from_str::<Value>(&line) else {
+        let Ok(value) = serde_json::from_str::<Value>(line) else {
             continue;
         };
         let Some(payload) = value.get("payload") else {

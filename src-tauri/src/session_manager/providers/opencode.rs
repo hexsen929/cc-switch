@@ -67,11 +67,10 @@ fn sqlite_column_exists(conn: &Connection, table: &str, column: &str) -> bool {
     let Ok(mut statement) = conn.prepare(&format!("PRAGMA table_info({table})")) else {
         return false;
     };
-    let Ok(columns) = statement.query_map([], |row| row.get::<_, String>(1)) else {
+    let Ok(mut columns) = statement.query_map([], |row| row.get::<_, String>(1)) else {
         return false;
     };
-    let found = columns.flatten().any(|name| name == column);
-    found
+    columns.any(|name| name.is_ok_and(|name| name == column))
 }
 
 fn sqlite_parent_expr(conn: &Connection, table: &str, prefix: &str) -> String {
