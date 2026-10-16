@@ -136,42 +136,70 @@ describe("SearchMcpPanel", () => {
     },
   );
 
-  it("keeps the saved search status until a pending toggle is successfully saved", async () => {
-    serverView.running = true;
-    await renderPanel();
-    fireEvent.click(
-      screen.getByRole("switch", { name: "启用统一联网搜索 MCP" }),
-    );
-    expect(screen.getByText("搜索 MCP 未启用")).toBeInTheDocument();
-    expect(
-      screen.getByText("启用状态尚未保存，点击保存后生效。"),
-    ).toBeInTheDocument();
+  it.each([false, true])(
+    "keeps saved enabled=%s until a pending toggle is successfully saved",
+    async (enabled) => {
+      serverView.config.enabled = enabled;
+      serverView.running = true;
+      const previous = enabled ? "搜索 MCP 已启用" : "搜索 MCP 未启用";
+      const next = enabled ? "搜索 MCP 未启用" : "搜索 MCP 已启用";
+      await renderPanel();
+      fireEvent.click(
+        screen.getByRole("switch", { name: "启用统一联网搜索 MCP" }),
+      );
+      expect(screen.getByText(previous)).toBeInTheDocument();
+      expect(
+        screen.getByText("启用状态尚未保存，点击保存后生效。"),
+      ).toBeInTheDocument();
 
+      const baseInvoke = mocks.invoke.getMockImplementation()!;
+      mocks.invoke.mockImplementation(
+        async (command: string, payload?: { config?: Config }) => {
+          if (command === "set_search_mcp_config") {
+            throw new Error("save failed");
+          }
+          return baseInvoke(command, payload);
+        },
+      );
+      fireEvent.click(screen.getByRole("button", { name: "保存" }));
+      await waitFor(() => expect(mocks.error).toHaveBeenCalled());
+      expect(screen.getByText(previous)).toBeInTheDocument();
+
+      mocks.invoke.mockImplementation(
+        async (command: string, payload?: { config?: Config }) => {
+          if (command === "set_search_mcp_config")
+            serverView.config = clone(payload!.config!);
+          return baseInvoke(command, payload);
+        },
+      );
+      await save(1);
+      expect(screen.getByText(next)).toBeInTheDocument();
+      expect(
+        screen.queryByText("启用状态尚未保存，点击保存后生效。"),
+      ).not.toBeInTheDocument();
+    },
+  );
+
+  it("does not report the old stopped proxy state after saving succeeds but refreshing fails", async () => {
+    await renderPanel();
     const baseInvoke = mocks.invoke.getMockImplementation()!;
     mocks.invoke.mockImplementation(
       async (command: string, payload?: { config?: Config }) => {
-        if (command === "set_search_mcp_config") {
-          throw new Error("save failed");
-        }
+        if (command === "get_search_mcp_config")
+          throw new Error("refresh failed");
         return baseInvoke(command, payload);
       },
     );
-    fireEvent.click(screen.getByRole("button", { name: "保存" }));
-    await waitFor(() => expect(mocks.error).toHaveBeenCalled());
-    expect(screen.getByText("搜索 MCP 未启用")).toBeInTheDocument();
-
-    mocks.invoke.mockImplementation(
-      async (command: string, payload?: { config?: Config }) => {
-        if (command === "set_search_mcp_config")
-          serverView.config = clone(payload!.config!);
-        return baseInvoke(command, payload);
-      },
+    fireEvent.click(
+      screen.getByRole("switch", { name: "启用统一联网搜索 MCP" }),
     );
     await save(1);
     expect(screen.getByText("搜索 MCP 已启用")).toBeInTheDocument();
-    expect(
-      screen.queryByText("启用状态尚未保存，点击保存后生效。"),
-    ).not.toBeInTheDocument();
+    expect(screen.getByText("共享本地代理状态待刷新")).toBeInTheDocument();
+    expect(screen.queryByText("共享本地代理未运行")).not.toBeInTheDocument();
+    expect(mocks.error).toHaveBeenCalledWith(
+      expect.stringContaining("refresh failed"),
+    );
   });
 
   it("saves untouched redacted keys as preserve and never implicitly installs clients", async () => {

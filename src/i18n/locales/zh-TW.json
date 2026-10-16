@@ -1106,7 +1106,8 @@
       "serviceDisabled": "搜尋 MCP 未啟用",
       "serviceEnabled": "搜尋 MCP 已啟用",
       "serviceUnavailable": "搜尋 MCP 已啟用，代理未執行",
-      "pendingEnabled": "啟用狀態尚未儲存，按下儲存後生效。"
+      "pendingEnabled": "啟用狀態尚未儲存，按下儲存後生效。",
+      "proxyStatusUnknown": "共用本機代理狀態待重新整理"
     }
   },
   "apps": {

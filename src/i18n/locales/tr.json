@@ -1068,7 +1068,8 @@
       "serviceDisabled": "Arama MCP kapalı",
       "serviceEnabled": "Arama MCP etkin",
       "serviceUnavailable": "Arama MCP etkin; vekil durmuş",
-      "pendingEnabled": "Etkinleştirme ayarında kaydedilmemiş değişiklik var. Uygulamak için kaydedin."
+      "pendingEnabled": "Etkinleştirme ayarında kaydedilmemiş değişiklik var. Uygulamak için kaydedin.",
+      "proxyStatusUnknown": "Ortak yerel vekil durumu yenilenmeyi bekliyor"
     }
   },
   "apps": {

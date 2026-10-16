@@ -1105,7 +1105,8 @@
       "serviceDisabled": "Search MCP disabled",
       "serviceEnabled": "Search MCP enabled",
       "serviceUnavailable": "Search MCP enabled; proxy stopped",
-      "pendingEnabled": "The enable setting has unsaved changes. Save to apply."
+      "pendingEnabled": "The enable setting has unsaved changes. Save to apply.",
+      "proxyStatusUnknown": "Shared local proxy status awaiting refresh"
     }
   },
   "apps": {

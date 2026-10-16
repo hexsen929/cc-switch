@@ -64,6 +64,7 @@ export function SearchMcpPanel() {
   const { t } = useTranslation();
   const [view, setView] = useState<SearchMcpView | null>(null);
   const [savedEnabled, setSavedEnabled] = useState(false);
+  const [proxyStatusKnown, setProxyStatusKnown] = useState(true);
   const [busy, setBusy] = useState(false);
   const [clients, setClients] = useState(["claude", "codex", "gemini"]);
   const [error, setError] = useState("");
@@ -74,6 +75,7 @@ export function SearchMcpPanel() {
     const next = await invoke<SearchMcpView>("get_search_mcp_config");
     setView(next);
     setSavedEnabled(next.config.enabled);
+    setProxyStatusKnown(true);
     setKeyDrafts({});
     setQuotas(null);
     setError("");
@@ -126,6 +128,9 @@ export function SearchMcpPanel() {
     try {
       await invoke("set_search_mcp_config", { config: view.config });
       setSavedEnabled(view.config.enabled);
+      // Saving may start the shared proxy. Until reloaded, its old state is
+      // no longer authoritative, especially if the follow-up read fails.
+      setProxyStatusKnown(false);
       try {
         if (install) await invoke("add_search_mcp_to_apps", { apps: clients });
       } catch (reason) {
@@ -196,7 +201,7 @@ export function SearchMcpPanel() {
                 ? t("settings.searchMcp.serviceDisabled", {
                     defaultValue: "搜索 MCP 未启用",
                   })
-                : view.running
+                : !proxyStatusKnown || view.running
                   ? t("settings.searchMcp.serviceEnabled", {
                       defaultValue: "搜索 MCP 已启用",
                     })
@@ -205,13 +210,17 @@ export function SearchMcpPanel() {
                     })}
             </span>
             <span className="text-fg-2">
-              {view.running
-                ? t("settings.searchMcp.running", {
-                    defaultValue: "共享本地代理运行中",
+              {!proxyStatusKnown
+                ? t("settings.searchMcp.proxyStatusUnknown", {
+                    defaultValue: "共享本地代理状态待刷新",
                   })
-                : t("settings.searchMcp.stopped", {
-                    defaultValue: "共享本地代理未运行",
-                  })}
+                : view.running
+                  ? t("settings.searchMcp.running", {
+                      defaultValue: "共享本地代理运行中",
+                    })
+                  : t("settings.searchMcp.stopped", {
+                      defaultValue: "共享本地代理未运行",
+                    })}
             </span>
           </div>
         </div>

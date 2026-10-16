@@ -1105,7 +1105,8 @@
       "serviceDisabled": "検索 MCP は無効",
       "serviceEnabled": "検索 MCP は有効",
       "serviceUnavailable": "検索 MCP は有効、プロキシは停止中",
-      "pendingEnabled": "有効化設定に未保存の変更があります。保存すると適用されます。"
+      "pendingEnabled": "有効化設定に未保存の変更があります。保存すると適用されます。",
+      "proxyStatusUnknown": "共用ローカルプロキシの状態を再取得してください"
     }
   },
   "apps": {
