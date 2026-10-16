@@ -7,6 +7,21 @@ import {
 } from "@/config/codexProviderPresets";
 
 describe("Codex custom templates", () => {
+  it("places E-FlowCode context limits at the Codex root with compaction below the window", () => {
+    const preset = codexProviderPresets.find(
+      (preset) => preset.name === "E-FlowCode",
+    )!;
+    const config = parseToml(preset.config);
+    expect(config.model_context_window).toBe(1000000);
+    expect(config.model_auto_compact_token_limit).toBe(900000);
+    expect(config).not.toHaveProperty(
+      "model_providers.custom.model_context_window",
+    );
+    expect(config).not.toHaveProperty(
+      "model_providers.custom.model_auto_compact_token_limit",
+    );
+  });
+
   it.each([
     ["custom", getCodexCustomTemplate().config],
     [
