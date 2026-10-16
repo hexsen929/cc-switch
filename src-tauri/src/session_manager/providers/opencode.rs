@@ -70,7 +70,8 @@ fn sqlite_column_exists(conn: &Connection, table: &str, column: &str) -> bool {
     let Ok(columns) = statement.query_map([], |row| row.get::<_, String>(1)) else {
         return false;
     };
-    columns.flatten().any(|name| name == column)
+    let found = columns.flatten().any(|name| name == column);
+    found
 }
 
 fn sqlite_parent_expr(conn: &Connection, table: &str, prefix: &str) -> String {

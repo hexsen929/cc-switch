@@ -153,7 +153,10 @@ export interface ClaudeDesktopModelRoute {
 }
 
 export type CodexChatThinkingParam =
-  "none" | "thinking" | "enable_thinking" | "reasoning_split";
+  | "none"
+  | "thinking"
+  | "enable_thinking"
+  | "reasoning_split";
 
 export type CodexChatEffortParam =
   | "none"
@@ -229,7 +232,10 @@ export interface ProviderMeta {
   // - "openai_responses": OpenAI Responses API 格式，需要格式转换
   // - "gemini_native": Gemini Native generateContent API 格式，需要格式转换
   apiFormat?:
-    "anthropic" | "openai_chat" | "openai_responses" | "gemini_native";
+    | "anthropic"
+    | "openai_chat"
+    | "openai_responses"
+    | "gemini_native";
   // Managed Codex Copilot uses this instead of apiFormat. Missing/unknown means auto.
   // Keep the raw string so selections from newer versions survive an edit/save.
   codexCopilotApiFormat?: string;
@@ -303,7 +309,10 @@ export type SkillStorageLocation = "cc_switch" | "unified";
 // - "openai_responses": OpenAI Responses API 格式，需要格式转换
 // - "gemini_native": Gemini Native generateContent API 格式，需要格式转换
 export type ClaudeApiFormat =
-  "anthropic" | "openai_chat" | "openai_responses" | "gemini_native";
+  | "anthropic"
+  | "openai_chat"
+  | "openai_responses"
+  | "gemini_native";
 
 // Codex API 格式类型
 // - "openai_responses": OpenAI Responses API 格式，直接透传
@@ -581,7 +590,11 @@ export type ToolKind =
   | "other";
 
 export type ToolStatus =
-  "success" | "error" | "interrupted" | "pending" | "unknown";
+  | "success"
+  | "error"
+  | "interrupted"
+  | "pending"
+  | "unknown";
 
 export type EventKind =
   | "aborted"

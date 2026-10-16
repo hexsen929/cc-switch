@@ -960,9 +960,12 @@ fn write_direct_for_exit(
     Ok(())
 }
 
-/// 没有应用在代理模式（含 Claude Desktop 的路由模式）时，停掉代理服务。
+/// 没有应用处于代理模式、且统一联网搜索未启用时，自动停掉代理服务。
+/// 显式关闭全部路由及退出应用仍直接停服，不受此保活判断影响。
 async fn stop_server_if_unused(state: &AppState) {
-    if current::proxy_flags(PROXY_APPS).contains(&true) {
+    if current::proxy_flags(PROXY_APPS).contains(&true)
+        || crate::settings::get_settings().search_mcp.enabled
+    {
         return;
     }
     if state.proxy_service.is_running().await {
@@ -5897,6 +5900,83 @@ model_provider = "c"
         assert!(!current::is_proxy(&AppType::Claude));
         assert_back_to_user_settings();
         assert_eq!(stack_state().members, vec!["kimi", "a"], "the list stays");
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn search_mcp_keeps_the_gateway_after_last_route_exits_but_explicit_stops_win() {
+        let _home = Home::new();
+        seed_settings(USER_SETTINGS);
+        let state = state_with(
+            AppType::Claude,
+            &[claude("a", "https://a.example", json!({}))],
+            "a",
+        )
+        .await;
+        let mut settings = crate::settings::get_settings();
+        settings.search_mcp.enabled = true;
+        crate::settings::update_settings(settings).expect("enable search MCP");
+
+        enter(&state, &AppType::Claude, false)
+            .await
+            .expect("enter route");
+        exit(&state, &AppType::Claude)
+            .await
+            .expect("exit last route");
+        assert!(!current::proxy_flags(PROXY_APPS).contains(&true));
+        assert!(
+            state.proxy_service.is_running().await,
+            "search still owns the gateway"
+        );
+
+        // Check the actual socket, not merely the cached running flag: an agent
+        // already configured with the MCP endpoint must still be able to use it.
+        let status = state
+            .proxy_service
+            .get_status()
+            .await
+            .expect("gateway status");
+        let response = reqwest::Client::builder()
+            .no_proxy()
+            .timeout(std::time::Duration::from_secs(5))
+            .build()
+            .unwrap()
+            .post(format!(
+                "http://127.0.0.1:{}{}",
+                status.port,
+                crate::search_mcp::MCP_PATH
+            ))
+            .json(&json!({"jsonrpc":"2.0","id":1,"method":"ping"}))
+            .send()
+            .await
+            .expect("search MCP still answers after the last route exits");
+        assert!(response.status().is_success());
+        assert_eq!(response.json::<Value>().await.unwrap()["result"], json!({}));
+
+        exit_all(&state).await.expect("explicit close all");
+        assert!(
+            !state.proxy_service.is_running().await,
+            "explicit close wins over search keepalive"
+        );
+        assert!(crate::settings::get_settings().search_mcp.enabled);
+        state.proxy_service.start().await.expect("restart gateway");
+        detach_all(&state).await;
+        assert!(
+            !state.proxy_service.is_running().await,
+            "application exit always stops the gateway"
+        );
+
+        // The opt-in does not change the existing idle-stop behavior when off.
+        let mut settings = crate::settings::get_settings();
+        settings.search_mcp.enabled = false;
+        crate::settings::update_settings(settings).expect("disable search MCP");
+        state
+            .proxy_service
+            .start()
+            .await
+            .expect("start idle gateway");
+        stop_server_if_unused(&state).await;
+        assert!(!state.proxy_service.is_running().await);
     }
 
     /// Claude Desktop 的配置目录在 Linux 跟 `XDG_CONFIG_HOME`、在 Windows 跟 `LOCALAPPDATA`：
