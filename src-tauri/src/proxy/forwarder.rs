@@ -377,6 +377,7 @@ impl Drop for ActiveConnectionGuard {
 }
 
 pub struct RequestForwarder {
+    diagnostics: Option<super::diagnostics::DiagnosticHandle>,
     /// 共享的 ProviderRouter（持有熔断器状态）
     router: Arc<ProviderRouter>,
     status: Arc<RwLock<ProxyStatus>>,
@@ -649,6 +650,7 @@ impl RequestForwarder {
         let max_attempts = (max_retries as usize).saturating_add(1);
         Self {
             router,
+            diagnostics: None,
             status,
             current_providers,
             gemini_shadow,
@@ -685,6 +687,14 @@ impl RequestForwarder {
 
     pub fn intent_model(mut self, model: Option<String>) -> Self {
         self.intent_model = model.filter(|m| !m.is_empty());
+        self
+    }
+
+    pub fn diagnostics(
+        mut self,
+        diagnostics: Option<super::diagnostics::DiagnosticHandle>,
+    ) -> Self {
+        self.diagnostics = diagnostics;
         self
     }
 
@@ -1189,6 +1199,9 @@ impl RequestForwarder {
         let mut last_error = None;
         let mut last_provider = None;
         let mut attempted_providers = 0usize;
+        let mut input_limit_seen = false;
+        let mut input_limit_floor: Option<u64> = None;
+        let mut required_input_tokens: Option<u64> = None;
 
         // 单 Provider 场景下跳过熔断器检查（故障转移关闭时）；Stack 模型的请求不碰熔断器。
         let bypass_circuit_breaker = providers.len() == 1 || !self.routing_state_enabled();
@@ -1211,6 +1224,26 @@ impl RequestForwarder {
                     self.max_attempts
                 );
                 break;
+            }
+
+            if input_limit_seen {
+                // The enabled failover queue owns ordering and retry budget.
+                // Skip only capacities explicitly known to be insufficient;
+                // unknown capacities remain user-selected candidates, not guesses.
+                let window = self.configured_input_window(app_type, provider, &body);
+                let too_small = window.is_some_and(|window| {
+                    required_input_tokens.map_or_else(
+                        || input_limit_floor.is_some_and(|failed| window <= failed),
+                        |required| window < required,
+                    )
+                });
+                if super::providers::is_codex_official_provider(provider) || too_small {
+                    log::debug!(
+                        "[{app_type_str}] 跳过输入容量不足或不允许接续的候选: {}",
+                        provider.name
+                    );
+                    continue;
+                }
             }
 
             // 发起请求前先获取熔断器放行许可（HalfOpen 会占用探测名额）
@@ -1715,6 +1748,38 @@ impl RequestForwarder {
                             .await);
                     }
 
+                    if let Some(limit) = input_context_limit(&e).filter(|_| {
+                        self.routing_state_enabled()
+                            && providers.len() > 1
+                            && self.max_attempts > 1
+                            && !super::providers::is_codex_official_provider(provider)
+                    }) {
+                        // A valid request exceeded this channel's input capacity.
+                        // It is neither an account-auth retry nor a broken provider:
+                        // release the probe neutrally, then try the existing queue.
+                        self.router
+                            .release_permit_neutral(
+                                &provider.id,
+                                app_type_str,
+                                used_half_open_permit,
+                            )
+                            .await;
+                        input_limit_seen = true;
+                        let failed_window = limit
+                            .limit
+                            .or_else(|| self.configured_input_window(app_type, provider, &body));
+                        input_limit_floor =
+                            input_limit_floor.into_iter().chain(failed_window).max();
+                        required_input_tokens = required_input_tokens
+                            .into_iter()
+                            .chain(limit.input_tokens)
+                            .max();
+                        log::warn!("[{app_type_str}] [FWD-INPUT-LIMIT] {} 输入上下文超限，尝试下一候选（已知不足容量会跳过）", provider.name);
+                        last_error = Some(e);
+                        last_provider = Some(provider.clone());
+                        continue;
+                    }
+
                     // 先分类错误，决定是否计入 provider 健康度
                     // —— NonRetryable / ClientAbort 是客户端层错误，无论换哪家 provider 都会被拒绝，
                     //    不应污染熔断器和数据库健康度（与 release_permit_neutral 同语义）。
@@ -1805,6 +1870,61 @@ impl RequestForwarder {
         extensions: &Extensions,
         adapter: &dyn ProviderAdapter,
         codex_upstream_format_out: &mut Option<CodexUpstreamFormat>,
+    ) -> Result<(ProxyResponse, Option<String>, Option<String>), ProxyError> {
+        let mut attempt = self.diagnostics.as_ref().map(|diagnostics| {
+            diagnostics.attempt(
+                &provider.id,
+                &provider.name,
+                body.get("model")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default(),
+            )
+        });
+        let result = self
+            .forward_observed(
+                app_type,
+                method,
+                provider,
+                endpoint,
+                body,
+                headers,
+                extensions,
+                adapter,
+                codex_upstream_format_out,
+                attempt.as_mut(),
+            )
+            .await;
+        match result {
+            Ok(forwarded) => Ok(forwarded),
+            Err(error) => {
+                if let Some(attempt) = attempt.as_mut() {
+                    if let ProxyError::UpstreamError { status, body } = &error {
+                        if let Some(body) = body {
+                            attempt.error_body(body);
+                        }
+                        attempt.fail(&format!("Upstream HTTP {status}"));
+                    } else {
+                        attempt.fail("Request failed before a readable upstream response");
+                    }
+                }
+                Err(error)
+            }
+        }
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    async fn forward_observed(
+        &self,
+        app_type: &AppType,
+        method: &http::Method,
+        provider: &Provider,
+        endpoint: &str,
+        body: &Value,
+        headers: &axum::http::HeaderMap,
+        extensions: &Extensions,
+        adapter: &dyn ProviderAdapter,
+        codex_upstream_format_out: &mut Option<CodexUpstreamFormat>,
+        mut diagnostic_attempt: Option<&mut super::diagnostics::AttemptGuard>,
     ) -> Result<(ProxyResponse, Option<String>, Option<String>), ProxyError> {
         *codex_upstream_format_out = None;
         if matches!(app_type, AppType::Codex)
@@ -3334,6 +3454,32 @@ impl RequestForwarder {
         );
 
         // 发送请求
+        if let Some(attempt) = diagnostic_attempt.as_mut() {
+            // Headers themselves are never captured; their credential values are used only for masking.
+            let mut secrets = log_secrets.clone();
+            for name in [
+                "authorization",
+                "x-api-key",
+                "x-goog-api-key",
+                "cookie",
+                "proxy-authorization",
+            ] {
+                for value in ordered_headers
+                    .get_all(name)
+                    .iter()
+                    .filter_map(|value| value.to_str().ok())
+                {
+                    secrets.push(value.to_string());
+                    if let Some(token) = value
+                        .strip_prefix("Bearer ")
+                        .or_else(|| value.strip_prefix("bearer "))
+                    {
+                        secrets.push(token.to_string());
+                    }
+                }
+            }
+            attempt.prepared(&filtered_body, &secrets);
+        }
         let response = if is_socks_proxy || !preserve_exact_header_case {
             // OpenAI / Copilot / Codex 类后端不依赖原始 header 大小写；走 reqwest
             // 连接池，避免 raw TCP/TLS path 每次请求都重新握手。SOCKS5 也只能走 reqwest。
@@ -3393,6 +3539,13 @@ impl RequestForwarder {
 
         // 检查响应状态
         let status = response.status();
+        if let Some(attempt) = diagnostic_attempt.as_ref() {
+            attempt.headers(status.as_u16());
+        }
+        let response = match diagnostic_attempt.as_mut() {
+            Some(attempt) => attempt.observe(response),
+            None => response,
+        };
 
         if status.is_success() {
             // Fork 扩展：2xx 却是 HTML/Cloudflare 挑战页（非 API 响应）→ 转成可重试的
@@ -3945,6 +4098,70 @@ impl RequestForwarder {
                 None
             }
         }
+    }
+
+    /// Only use explicit per-model/provider capacities. Middleware and semantic
+    /// rewriting can select another model, so their capacities remain unknown.
+    fn configured_input_window(
+        &self,
+        app: &AppType,
+        provider: &Provider,
+        body: &Value,
+    ) -> Option<u64> {
+        if self.request_middleware.is_active()
+            || self.request_rewrite.is_active()
+            || self.intent_model.is_some()
+        {
+            return None;
+        }
+        let number = |value: &Value| {
+            value
+                .as_u64()
+                .or_else(|| value.as_str()?.trim().parse::<u64>().ok())
+                .filter(|value| *value > 0)
+        };
+        if *app == AppType::Codex {
+            if let Some(window) = provider
+                .settings_config
+                .get("config")
+                .and_then(Value::as_str)
+                .and_then(|text| text.parse::<toml::Value>().ok())
+                .and_then(|config| {
+                    config
+                        .get("model_context_window")
+                        .and_then(toml::Value::as_integer)
+                })
+                .and_then(|window| u64::try_from(window).ok())
+                .filter(|window| *window > 0)
+            {
+                return Some(window);
+            }
+        }
+        let incoming = body.get("model").and_then(Value::as_str)?;
+        let mut model =
+            super::model_mapper::ModelMapping::from_provider(provider).map_model(incoming);
+        if *app == AppType::Codex
+            && provider
+                .meta
+                .as_ref()
+                .and_then(|meta| meta.api_format.as_deref())
+                .is_some_and(|format| matches!(format, "openai_chat" | "anthropic"))
+        {
+            model = super::providers::codex_provider_upstream_model(provider).unwrap_or(model);
+        }
+        let model = super::model_mapper::strip_one_m_suffix_for_upstream(&model);
+        provider
+            .settings_config
+            .pointer("/modelCatalog/models")?
+            .as_array()?
+            .iter()
+            .find(|entry| entry.get("model").and_then(Value::as_str) == Some(model))
+            .and_then(|entry| {
+                entry
+                    .get("contextWindow")
+                    .or_else(|| entry.get("context_window"))
+            })
+            .and_then(number)
     }
 
     fn categorize_proxy_error(&self, error: &ProxyError, provider: &Provider) -> ErrorCategory {
@@ -5509,6 +5726,7 @@ mod tests {
         let db = Arc::new(Database::memory().expect("memory db"));
 
         RequestForwarder {
+            diagnostics: None,
             router: Arc::new(ProviderRouter::new(db.clone())),
             status: Arc::new(RwLock::new(ProxyStatus::default())),
             current_providers: Arc::new(RwLock::new(HashMap::new())),
@@ -6336,6 +6554,34 @@ mod tests {
     }
 
     #[test]
+    fn input_capacity_uses_only_explicit_mapped_model_metadata() {
+        let mut fwd = test_forwarder(Duration::ZERO, Duration::ZERO);
+        let mut provider = test_provider_with_type(None);
+        provider.settings_config = json!({
+            "env": {"ANTHROPIC_MODEL":"mapped"},
+            "modelCatalog":{"models":[
+                {"model":"other", "contextWindow":1_000_000},
+                {"model":"mapped", "context_window":"128000"}
+            ]}
+        });
+        let body = json!({"model":"client"});
+        assert_eq!(
+            fwd.configured_input_window(&AppType::Claude, &provider, &body),
+            Some(128000)
+        );
+        provider.settings_config["config"] = json!("model_context_window = 200000\n");
+        assert_eq!(
+            fwd.configured_input_window(&AppType::Codex, &provider, &body),
+            Some(200000)
+        );
+        fwd.intent_model = Some("rewritten".into());
+        assert_eq!(
+            fwd.configured_input_window(&AppType::Claude, &provider, &body),
+            None
+        );
+    }
+
+    #[test]
     fn official_codex_failures_are_not_retryable() {
         let forwarder = test_forwarder(Duration::ZERO, Duration::ZERO);
         let mut provider = test_provider_with_type(None);
@@ -6355,6 +6601,10 @@ mod tests {
             ProxyError::UpstreamError {
                 status: 429,
                 body: None,
+            },
+            ProxyError::UpstreamError {
+                status: 400,
+                body: Some("prompt is too long".into()),
             },
             ProxyError::Timeout("timeout".to_string()),
         ] {
@@ -8921,6 +9171,37 @@ mod tests {
         }
 
         #[tokio::test]
+        async fn diagnostics_follow_real_failover_and_preserve_reply_bytes() {
+            let up1 = upstream(vec![error(500, "boom")]).await;
+            let up2 = upstream(vec![ok()]).await;
+            let diagnostics = crate::proxy::diagnostics::DiagnosticHandle::isolated(true);
+            diagnostics.bind("diagnostic-failover");
+            let fwd = forwarder(2, "p1").diagnostics(Some(diagnostics.clone()));
+            let result = match send(
+                &fwd,
+                vec![provider("p1", &up1), provider("p2", &up2)],
+                plain_body(),
+            )
+            .await
+            {
+                Ok(result) => result,
+                Err(_) => panic!("expected successful failover"),
+            };
+            let bytes = result.response.bytes_with_limit(4096).await.unwrap();
+            let body: Value = serde_json::from_slice(&bytes).unwrap();
+            assert_eq!(body["id"], "msg_1");
+            let got = diagnostics.snapshot("diagnostic-failover").unwrap();
+            assert_eq!(got.attempts.len(), 2);
+            assert_eq!(got.attempts[0].status_code, Some(500));
+            assert!(got.attempts[0].error.is_some());
+            assert_eq!(got.attempts[1].status_code, Some(200));
+            assert!(got.attempts[1].headers_ms.is_some());
+            assert!(got.attempts[1].duration_ms.is_some());
+            assert!(!got.request_body.contains("sk-test"));
+            assert!(got.response_body.contains("msg_1"));
+        }
+
+        #[tokio::test]
         async fn failover_to_the_second_provider_counts_a_switch() {
             let up1 = upstream(vec![error(500, "boom")]).await;
             let up2 = upstream(vec![ok()]).await;
@@ -8949,6 +9230,114 @@ mod tests {
             );
             assert_eq!(breaker(&fwd, "p1").await, Some((1, 1)));
             assert_eq!(breaker(&fwd, "p2").await, Some((1, 0)));
+        }
+
+        #[tokio::test]
+        async fn input_limit_skips_known_small_candidates_without_poisoning_health() {
+            let small = upstream(vec![error(
+                400,
+                "prompt is too long: 9000 tokens > 8192 maximum",
+            )])
+            .await;
+            let insufficient = upstream(vec![ok()]).await;
+            let large = upstream(vec![ok()]).await;
+            let mut p2 = provider("p2", &insufficient);
+            p2.settings_config["modelCatalog"] =
+                json!({"models":[{"model":"claude-sonnet-4-5", "contextWindow":8192}]});
+            let mut p3 = provider("p3", &large);
+            p3.settings_config["modelCatalog"] =
+                json!({"models":[{"model":"claude-sonnet-4-5", "contextWindow":16384}]});
+            let fwd = forwarder(2, "p1");
+            let result = send(&fwd, vec![provider("p1", &small), p2, p3], plain_body()).await;
+            assert_eq!(
+                result.ok().map(|result| result.provider.id),
+                Some("p3".into())
+            );
+            assert_eq!(small.requests.lock().await.len(), 1);
+            assert!(insufficient.requests.lock().await.is_empty());
+            assert_eq!(large.requests.lock().await.len(), 1);
+            let first = fwd.router.get_circuit_breaker_stats("p1", "claude").await;
+            assert!(first.map_or(true, |stats| stats.failed_requests == 0));
+        }
+
+        #[tokio::test]
+        async fn input_limit_uses_unknown_queued_capacity_but_never_retries_single_or_stack() {
+            for (attempts, stack, should_succeed) in
+                [(2, false, true), (1, false, false), (2, true, false)]
+            {
+                let small = upstream(vec![error(422, "Input token exceed the limit")]).await;
+                let next = upstream(vec![ok()]).await;
+                let fwd = forwarder(attempts, "p1").stack_request(stack);
+                let result = send(
+                    &fwd,
+                    vec![provider("p1", &small), provider("p2", &next)],
+                    plain_body(),
+                )
+                .await;
+                assert_eq!(result.is_ok(), should_succeed);
+                assert_eq!(
+                    next.requests.lock().await.len(),
+                    usize::from(should_succeed)
+                );
+            }
+            let small = upstream(vec![error(413, "prompt is too long")]).await;
+            let fwd = forwarder(3, "p1");
+            assert!(send(&fwd, vec![provider("p1", &small)], plain_body())
+                .await
+                .is_err());
+            assert_eq!(small.requests.lock().await.len(), 1);
+        }
+
+        #[tokio::test]
+        async fn generic_400_and_gateway_or_output_413_do_not_fail_over() {
+            for (status, message) in [
+                (400, "invalid JSON"),
+                (413, "request body exceeds gateway limit"),
+                (
+                    400,
+                    "maximum context length exceeded: max_tokens must be smaller",
+                ),
+                (400, "input is too long: TPM rate limit"),
+            ] {
+                let first = upstream(vec![error(status, message)]).await;
+                let next = upstream(vec![ok()]).await;
+                let fwd = forwarder(2, "p1");
+                assert!(send(
+                    &fwd,
+                    vec![provider("p1", &first), provider("p2", &next)],
+                    plain_body()
+                )
+                .await
+                .is_err());
+                assert!(next.requests.lock().await.is_empty(), "{status}: {message}");
+            }
+        }
+
+        #[tokio::test]
+        async fn input_limit_never_moves_an_official_route_or_enters_an_official_candidate() {
+            for official_first in [false, true] {
+                let first = upstream(vec![error(400, "prompt is too long")]).await;
+                let official_up = upstream(vec![ok()]).await;
+                let final_up = upstream(vec![ok()]).await;
+                let mut first_provider = provider("p1", &first);
+                let mut official = provider("codex-official", &official_up);
+                official.category = Some("official".into());
+                let providers = if official_first {
+                    first_provider.id = "codex-official".into();
+                    first_provider.category = Some("official".into());
+                    vec![first_provider, provider("p3", &final_up)]
+                } else {
+                    vec![first_provider, official, provider("p3", &final_up)]
+                };
+                let fwd = forwarder(2, "p1");
+                let result = send(&fwd, providers, plain_body()).await;
+                assert_eq!(result.is_ok(), !official_first);
+                assert!(official_up.requests.lock().await.is_empty());
+                assert_eq!(
+                    final_up.requests.lock().await.len(),
+                    usize::from(!official_first)
+                );
+            }
         }
 
         #[tokio::test]

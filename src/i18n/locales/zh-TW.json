@@ -1073,6 +1073,36 @@
     },
     "data": {
       "location": "儲存位置"
+    },
+    "searchMcp": {
+      "saved": "網路搜尋設定已儲存",
+      "enabled": "啟用統一網路搜尋 MCP",
+      "description": "讓各用戶端共用 web_search 與 web_fetch，依下列順序嘗試搜尋來源。預設關閉，保留用戶端原有搜尋功能。",
+      "endpoint": "統一 MCP 位址",
+      "running": "閘道執行中",
+      "stopped": "閘道尚未啟動",
+      "gatewayHint": "啟用後會啟動 CC Switch 閘道，不改變模型路由。使用時需保持閘道執行。區域網路存取需要允許 web-search 的閘道金鑰；網頁讀取不存取內網位址。",
+      "moveUp": "提高優先順序",
+      "moveDown": "降低優先順序",
+      "instanceUrl": "SearXNG 執行個體位址（必填）",
+      "baseUrl": "自訂 API 位址（留空使用官方位址）",
+      "baseUrlLabel": "搜尋來源位址",
+      "keys": "API 金鑰",
+      "keysPlaceholder": "已儲存 {{count}} 個金鑰；留空保留，多個替換金鑰以逗號分隔",
+      "orderedKeys": "依序使用金鑰（關閉則輪替）",
+      "clearKeys": "清除已儲存的金鑰",
+      "backoff": "遭拒絕或限流的金鑰暫時後移",
+      "timeout": "總逾時（5–120 秒）",
+      "maxChars": "最多回傳字元數",
+      "dailyLimit": "每個閘道金鑰每日呼叫上限，UTC 日界（0 不限）",
+      "clients": "新增到這些用戶端的 MCP 清單",
+      "install": "儲存並新增到 MCP",
+      "readQuota": "查詢已儲存金鑰的額度",
+      "quotaHint": "目前支援讀取 Tavily 額度；其他搜尋來源或查詢失敗會顯示未知，不會將未知額度當成 0。",
+      "unlimited": "不限",
+      "unknown": "未知",
+      "keyNumber": "金鑰 {{number}}",
+      "installFailed": "網路搜尋設定已儲存，但新增到用戶端失敗：{{error}}"
     }
   },
   "apps": {
@@ -1534,6 +1564,13 @@
       "rawMatch": "原文中的相符項目",
       "expandContent": "展開完整內容",
       "collapseContent": "收合"
+    },
+    "subagents": {
+      "expand": "展開「{{title}}」的子代理對話",
+      "collapse": "收合「{{title}}」的子代理對話",
+      "count": "子代理：{{count}} 個",
+      "readOnly": "子代理 · 唯讀",
+      "readOnlyHint": "子代理對話僅供閱讀，請在主要對話中繼續操作。"
     }
   },
   "console": {
@@ -4126,7 +4163,8 @@
         "day": "每天",
         "week": "每週",
         "month": "每月"
-      }
+      },
+      "webSearch": "網路搜尋 MCP"
     },
     "autoFailover": {
       "info": "當故障轉移佇列中設定了多個供應商時，系統會在請求失敗時按優先順序依次嘗試。當某個供應商連續失敗達到閾值時，斷路器會打開並在一段時間內跳過該供應商。",
@@ -5229,6 +5267,28 @@
       "loading": "正在查詢額度…",
       "refresh": "重新整理額度",
       "refreshAria": "重新整理 {{login}} 的額度"
+    }
+  },
+  "requestDiagnostics": {
+    "title": "請求診斷",
+    "scope": "僅保留最近 40 次代理請求。本文預覽預設關閉，遮蔽敏感資料後僅存於記憶體，請求與回應各限 128 KiB。啟用後記錄新請求，關閉會清除預覽。",
+    "capture": "請求與回應本文預覽",
+    "captureOn": "已啟用",
+    "captureOff": "已關閉",
+    "loadFailed": "讀取或儲存診斷設定失敗。",
+    "unavailable": "此請求的診斷已過期或未收集。歷史記錄和匯入的對話不包含診斷。",
+    "truncated": "預覽已達收集上限，後續內容已截斷。",
+    "noBody": "未收集到可讀的本文預覽。",
+    "canceled": "回應尚未完成，讀取已停止。",
+    "attemptsTruncated": "後續嘗試超出預覽上限，未顯示。",
+    "upstream": "以下為最後一次上游嘗試的內容，尚未轉換為用戶端協定。不會收集驗證請求標頭。",
+    "request": "上游請求",
+    "response": "上游回應",
+    "phases": {
+      "prepare": "本機準備",
+      "headers": "等待上游標頭",
+      "content": "等待首段內容",
+      "receive": "讀取回應"
     }
   }
 }

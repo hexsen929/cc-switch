@@ -1072,6 +1072,36 @@
     },
     "data": {
       "location": "Location"
+    },
+    "searchMcp": {
+      "saved": "Web search settings saved",
+      "enabled": "Enable shared web search MCP",
+      "description": "Share web_search and web_fetch across clients, trying search sources in the order below. Off by default; existing client search stays available.",
+      "endpoint": "Shared MCP address",
+      "running": "Gateway running",
+      "stopped": "Gateway stopped",
+      "gatewayHint": "Keep the CC Switch gateway running. Enabling search starts it without changing model routes. LAN callers need a gateway key allowing web-search. Page fetching excludes private networks.",
+      "moveUp": "Move up",
+      "moveDown": "Move down",
+      "instanceUrl": "SearXNG instance URL (required)",
+      "baseUrl": "Custom API base URL (blank for official endpoint)",
+      "baseUrlLabel": "Search source URL",
+      "keys": "API keys",
+      "keysPlaceholder": "{{count}} saved keys; leave blank to keep them, or enter comma-separated replacements",
+      "orderedKeys": "Use keys in order (off for rotation)",
+      "clearKeys": "Clear saved keys",
+      "backoff": "Deprioritize rejected or rate-limited keys temporarily",
+      "timeout": "Total timeout (5–120 seconds)",
+      "maxChars": "Maximum returned characters",
+      "dailyLimit": "Daily tool-call limit per gateway key, UTC (0 for unlimited)",
+      "clients": "Add to these clients’ MCP lists",
+      "install": "Save and add to MCP",
+      "readQuota": "Check saved-key quotas",
+      "quotaHint": "Quota lookup currently supports Tavily. Other sources or failed lookups are unknown, never treated as zero.",
+      "unlimited": "Unlimited",
+      "unknown": "Unknown",
+      "keyNumber": "Key {{number}}",
+      "installFailed": "Search settings were saved, but adding to clients failed: {{error}}"
     }
   },
   "apps": {
@@ -1533,6 +1563,13 @@
       "rawMatch": "Matches in source",
       "expandContent": "Show full content",
       "collapseContent": "Collapse"
+    },
+    "subagents": {
+      "expand": "Expand subagent sessions for {{title}}",
+      "collapse": "Collapse subagent sessions for {{title}}",
+      "count": "Subagents: {{count}}",
+      "readOnly": "Subagent · Read only",
+      "readOnlyHint": "Subagent sessions are read only. Continue in the parent session."
     }
   },
   "console": {
@@ -4125,7 +4162,8 @@
         "day": "Per day",
         "week": "Per week",
         "month": "Per month"
-      }
+      },
+      "webSearch": "Web search MCP"
     },
     "autoFailover": {
       "info": "When the failover queue has multiple providers, the system will try them in priority order when requests fail. When a provider reaches the consecutive failure threshold, the circuit breaker will open and skip it temporarily.",
@@ -5228,6 +5266,28 @@
       "loading": "Checking quota…",
       "refresh": "Refresh quota",
       "refreshAria": "Refresh quota for {{login}}"
+    }
+  },
+  "requestDiagnostics": {
+    "title": "Request diagnostics",
+    "scope": "Recent 40 proxy requests only. Bodies are off by default, masked in memory, and capped at 128 KiB each. Enabling capture affects future requests; turning it off clears previews.",
+    "capture": "Request and response previews",
+    "captureOn": "Enabled",
+    "captureOff": "Disabled",
+    "loadFailed": "Could not load or save diagnostics.",
+    "unavailable": "No diagnostics remain for this request. Historical and imported session records are not captured.",
+    "truncated": "Preview truncated at the capture limit.",
+    "noBody": "No readable preview was captured.",
+    "canceled": "Response reading stopped before completion.",
+    "attemptsTruncated": "Additional attempts were omitted from this preview.",
+    "upstream": "These previews show the last upstream attempt, before client protocol conversion. Authorization headers are never captured.",
+    "request": "Upstream request",
+    "response": "Upstream response",
+    "phases": {
+      "prepare": "Local preparation",
+      "headers": "Upstream headers",
+      "content": "First content",
+      "receive": "Read response"
     }
   }
 }

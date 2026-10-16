@@ -51,6 +51,9 @@ fn merge_settings_for_save(
     // 客户端地址只经 set_proxy_client_host 保存（它还要重写客户端）；全量保存带的是前端
     // 缓存里的旧值，透传会把刚保存的地址冲掉。
     incoming.proxy_client_host = existing.proxy_client_host.clone();
+    // Search credentials and source ordering are edited through their dedicated
+    // command. Ordinary settings saves contain only the redacted frontend view.
+    incoming.search_mcp = existing.search_mcp.clone();
     incoming
 }
 
@@ -438,6 +441,22 @@ mod tests {
         CodexThirdPartyHistoryProviderBucketMigration, LocalMigrations, S3SyncSettings,
         WebDavSyncSettings,
     };
+
+    #[test]
+    fn general_settings_save_preserves_private_search_sources() {
+        let mut existing = AppSettings::default();
+        existing.search_mcp.enabled = true;
+        existing.search_mcp.sources[0].enabled = true;
+        existing.search_mcp.sources[0].keys = vec!["fixture-search-key".into()];
+        let mut incoming = existing.clone();
+        incoming.search_mcp.redact();
+        incoming.language = Some("zh".into());
+
+        let merged = merge_settings_for_save(incoming, &existing);
+        assert!(merged.search_mcp.enabled);
+        assert_eq!(merged.search_mcp.sources[0].keys, ["fixture-search-key"]);
+        assert_eq!(merged.language.as_deref(), Some("zh"));
+    }
 
     #[test]
     fn save_settings_should_keep_the_existing_proxy_client_host() {

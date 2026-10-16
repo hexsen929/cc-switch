@@ -9,6 +9,7 @@ use super::codex_chat_common::{
     response_function_call_item, response_function_call_item_with_namespace,
 };
 use super::codex_compaction;
+use super::codex_responses_sse::{assign_message_phases, chat_final_answer_eligible};
 use super::inline_think::split_leading_think_block;
 use crate::provider::CodexChatReasoningConfig;
 use crate::proxy::{
@@ -1777,6 +1778,7 @@ pub(crate) fn chat_completion_to_response_with_context(
         )));
     }
     output.extend(tool_calls.items);
+    assign_message_phases(&mut output, chat_final_answer_eligible(finish_reason));
 
     let mut response = json!({
         "id": response_id,
@@ -2320,6 +2322,31 @@ pub fn chat_error_to_response_error(body: Option<&Value>) -> Value {
 mod tests {
     use super::*;
     use base64::{engine::general_purpose::STANDARD, Engine as _};
+
+    #[test]
+    fn chat_response_phases_distinguish_tool_progress_and_normal_answer() {
+        for (reason, tools, expected) in [
+            (Some("stop"), json!([]), Some("final_answer")),
+            (
+                Some("tool_calls"),
+                json!([{ "id": "phase_call", "type": "function", "function": { "name": "Read", "arguments": "{}" } }]),
+                Some("commentary"),
+            ),
+            (Some("length"), json!([]), None),
+            (Some("content_filter"), json!([]), None),
+            (Some("unknown"), json!([]), None),
+            (None, json!([]), None),
+        ] {
+            let response = chat_completion_to_response(json!({
+                "choices": [{ "message": { "role": "assistant", "content": "Text", "tool_calls": tools }, "finish_reason": reason }]
+            })).unwrap();
+            assert_eq!(response["output"][0]["phase"].as_str(), expected);
+        }
+        let refusal = chat_completion_to_response(json!({
+            "choices": [{"message": {"content": "Cannot answer", "refusal": "Refused"}, "finish_reason": "stop"}]
+        })).unwrap();
+        assert!(refusal["output"][0].get("phase").is_none());
+    }
 
     fn large_test_image_data_url() -> String {
         let bytes = b"CC_SWITCH_TOOL_MEDIA_SENTINEL".repeat(400);

@@ -37,6 +37,9 @@ export function useSessionSearch({
         session.summary,
         session.projectDir,
         session.sourcePath,
+        session.nickname,
+        session.agentType,
+        session.task,
       ]
         .filter(Boolean)
         .join(" ");

@@ -30,6 +30,7 @@ import {
 } from "./format";
 import { appDisplayName } from "./RequestLogTable";
 import { getUsageProviderLabel } from "./providerLabel";
+import { RequestDiagnostics } from "./RequestDiagnostics";
 
 interface RequestDetailPanelProps {
   /** 要看的请求；null 时抽屉关闭 */
@@ -391,7 +392,15 @@ export function RequestDetailPanel({
           {isLoading ? (
             <div className="h-[320px] animate-pulse rounded-panel bg-subtle" />
           ) : request ? (
-            <RequestDetailBody request={request} />
+            <div className="flex flex-col gap-5">
+              <RequestDetailBody request={request} />
+              {(!request.dataSource || request.dataSource === "proxy") && (
+                <RequestDiagnostics
+                  key={request.requestId}
+                  requestId={request.requestId}
+                />
+              )}
+            </div>
           ) : error ? (
             // 查询失败和「没有这条记录」分开说：前者能重试，也要让人看到原因
             <Notice

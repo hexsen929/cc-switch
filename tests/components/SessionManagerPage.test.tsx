@@ -189,6 +189,172 @@ describe("SessionManagerPage", () => {
     discovery.mockRestore();
   });
 
+  it.each(["claude", "codex", "opencode"])(
+    "%s nests child sessions and search opens their ancestors and descendants",
+    async (providerId) => {
+      window.localStorage.setItem("cc-switch.sessionManager.groupMode", "time");
+      const now = Date.now();
+      const treeSessions: SessionMeta[] = [
+        {
+          providerId,
+          sessionId: "main",
+          title: "Parent Session",
+          projectDir: "/mock/tree",
+          sourcePath: "/mock/tree/main.jsonl",
+          lastActiveAt: now - HOUR,
+        },
+        {
+          providerId,
+          sessionId: "worker",
+          parentSessionId: "main",
+          role: "subagent",
+          readOnly: true,
+          title: "Worker Session",
+          nickname: "Scout",
+          agentType: "explorer",
+          task: "needlewords",
+          projectDir: "/mock/tree",
+          sourcePath: "/mock/tree/worker.jsonl",
+          lastActiveAt: now,
+        },
+        {
+          providerId,
+          sessionId: "nested",
+          parentSessionId: "worker",
+          role: "subagent",
+          readOnly: true,
+          title: "Nested Session",
+          projectDir: "/mock/tree",
+          sourcePath: "/mock/tree/nested.jsonl",
+          lastActiveAt: now,
+        },
+      ];
+      setSessionFixtures(treeSessions, {});
+      renderPage(providerId);
+
+      await screen.findByRole("button", { name: "Parent Session" });
+      expect(
+        screen.queryByRole("button", { name: "Worker Session" }),
+      ).not.toBeInTheDocument();
+      fireEvent.click(
+        screen.getByRole("button", {
+          name: "展开 Parent Session 的子代理会话",
+        }),
+      );
+      expect(
+        screen.getByRole("button", { name: "Worker Session" }),
+      ).toBeInTheDocument();
+      expect(
+        screen.queryByRole("button", { name: "Nested Session" }),
+      ).not.toBeInTheDocument();
+      fireEvent.click(
+        screen.getByRole("button", {
+          name: "展开 Worker Session 的子代理会话",
+        }),
+      );
+      expect(
+        screen.getByRole("button", { name: "Nested Session" }),
+      ).toBeInTheDocument();
+      fireEvent.click(
+        screen.getByRole("button", {
+          name: "收起 Parent Session 的子代理会话",
+        }),
+      );
+      expect(
+        screen.queryByRole("button", { name: "Worker Session" }),
+      ).not.toBeInTheDocument();
+
+      fireEvent.change(screen.getByRole("textbox", { name: "搜索会话" }), {
+        target: { value: "needlewords" },
+      });
+      expect(
+        await screen.findByRole("button", { name: "Worker Session" }),
+      ).toBeInTheDocument();
+      expect(
+        screen.getByRole("button", { name: "Parent Session" }),
+      ).toBeInTheDocument();
+      expect(
+        screen.getByRole("button", { name: "Nested Session" }),
+      ).toBeInTheDocument();
+    },
+  );
+
+  it("keeps child sessions readable but blocks resume and batch selection", async () => {
+    platform.mac = true;
+    window.localStorage.setItem("cc-switch.sessionManager.groupMode", "time");
+    const parent: SessionMeta = {
+      providerId: "codex",
+      sessionId: "main",
+      title: "Parent Session",
+      projectDir: "/mock/tree",
+      sourcePath: "/mock/tree/main.jsonl",
+    };
+    const child: SessionMeta = {
+      ...parent,
+      sessionId: "child",
+      parentSessionId: "main",
+      role: "subagent",
+      readOnly: true,
+      title: "Read Only Worker",
+      sourcePath: "/mock/tree/child.jsonl",
+      resumeCommand: "must never launch",
+    };
+    setSessionFixtures([parent, child], {
+      "codex:/mock/tree/child.jsonl": [
+        { role: "user", content: "child question" },
+        { role: "assistant", content: "child answer" },
+      ],
+    });
+    const launch = vi
+      .spyOn(sessionsApi, "launchTerminal")
+      .mockResolvedValue(true);
+    renderPage("codex");
+    fireEvent.click(
+      await screen.findByRole("button", {
+        name: "展开 Parent Session 的子代理会话",
+      }),
+    );
+    expect(
+      screen.getByRole("checkbox", { name: "选择 Read Only Worker" }),
+    ).toBeDisabled();
+    expect(
+      screen.queryByRole("button", { name: /中恢复 Read Only Worker/ }),
+    ).not.toBeInTheDocument();
+    openRow("Read Only Worker");
+    expect(await screen.findByText("child question")).toBeInTheDocument();
+    const resume = screen.getByRole("button", { name: /中恢复$/ });
+    expect(resume).toHaveAttribute("aria-disabled", "true");
+    fireEvent.click(resume);
+    expect(launch).not.toHaveBeenCalled();
+    await userEvent.click(
+      screen.getByRole("button", { name: "Read Only Worker 的更多操作" }),
+    );
+    expect(screen.getByRole("menuitem", { name: "删除…" })).toHaveAttribute(
+      "aria-disabled",
+      "true",
+    );
+    expect(
+      screen.getByRole("menuitem", { name: "导出为 Markdown 文件" }),
+    ).not.toHaveAttribute("aria-disabled", "true");
+    fireEvent.keyDown(document.activeElement ?? document.body, {
+      key: "Escape",
+    });
+    fireEvent.click(screen.getByRole("button", { name: "返回会话列表" }));
+    fireEvent.click(
+      within(sessionList()).getByRole("checkbox", {
+        name: "选择 Parent Session",
+      }),
+    );
+    fireEvent.click(screen.getByRole("button", { name: "全选匹配结果" }));
+    expect(
+      screen.getByRole("checkbox", { name: "选择 Parent Session" }),
+    ).toBeChecked();
+    expect(
+      screen.getByRole("checkbox", { name: "选择 Read Only Worker" }),
+    ).not.toBeChecked();
+    launch.mockRestore();
+  });
+
   it("lists the current app's sessions grouped by project with unknown last", async () => {
     renderPage("codex");
 
@@ -423,6 +589,9 @@ describe("SessionManagerPage", () => {
       expect(launch).toHaveBeenCalledWith({
         command: "codex resume codex-session-1",
         cwd: "/mock/codex",
+        providerId: "codex",
+        sessionId: "codex-session-1",
+        sourcePath: "/mock/codex/session-1.jsonl",
       }),
     );
     expect(toastSuccessMock).toHaveBeenCalled();

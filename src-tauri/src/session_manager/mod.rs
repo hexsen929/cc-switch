@@ -13,7 +13,7 @@ use std::time::Instant;
 pub use model::SessionMessage;
 use providers::{claude, codex, gemini, grokbuild, hermes, mcode, openclaw, opencode, pi};
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Default, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SessionMeta {
     pub provider_id: String,
@@ -32,6 +32,71 @@ pub struct SessionMeta {
     pub source_path: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub resume_command: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub parent_session_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub role: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub nickname: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub agent_type: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub task: Option<String>,
+    #[serde(skip_serializing_if = "is_false")]
+    pub read_only: bool,
+}
+
+fn is_false(value: &bool) -> bool {
+    !value
+}
+
+impl SessionMeta {
+    fn mark_subagent(&mut self, parent: Option<String>) {
+        self.parent_session_id = parent;
+        self.role = Some("subagent".to_string());
+        self.read_only = true;
+        self.resume_command = None;
+    }
+}
+
+/// Resolve a fresh, scoped native session before resuming it. In particular,
+/// callers cannot turn a subagent's transcript into its lead's resume command.
+pub fn resume_session_target(
+    provider_id: &str,
+    session_id: &str,
+    source_path: &str,
+) -> Result<(String, Option<String>), String> {
+    let source = content::validate_source(provider_id, source_path)?;
+    let sessions = match provider_id {
+        "claude" => claude::scan_sessions(),
+        "codex" => codex::scan_sessions(),
+        "opencode" => opencode::scan_sessions(),
+        "gemini" => gemini::scan_sessions(),
+        "grokbuild" => grokbuild::scan_sessions(),
+        "pi" => pi::scan_sessions(),
+        "mcode" => mcode::scan_sessions(),
+        _ => return Err("This application does not support session resume".to_string()),
+    };
+    let mut matching = sessions.into_iter().filter(|session| {
+        session.session_id == session_id
+            && session.source_path.as_deref().is_some_and(|path| {
+                content::validate_source(provider_id, path)
+                    .is_ok_and(|candidate| candidate.location == source.location)
+            })
+    });
+    let session = matching
+        .next()
+        .ok_or("Session is no longer available; refresh the list")?;
+    if matching.next().is_some() {
+        return Err("Session identity is ambiguous; refresh the list".to_string());
+    }
+    if session.read_only || session.role.as_deref() == Some("subagent") {
+        return Err("Subagent conversations are read-only".to_string());
+    }
+    let command = session
+        .resume_command
+        .ok_or("This session cannot be resumed")?;
+    Ok((command, session.project_dir))
 }
 
 #[derive(Debug, Clone, Deserialize)]

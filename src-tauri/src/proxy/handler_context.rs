@@ -38,6 +38,8 @@ pub struct StreamingTimeoutConfig {
 /// - 日志标签
 /// - Session ID（用于日志关联）
 pub struct RequestContext {
+    /// Process-local observation handle; usage IDs are bound without changing deduplication.
+    pub diagnostics: Option<crate::proxy::diagnostics::DiagnosticHandle>,
     /// 请求开始时间
     pub start_time: Instant,
     /// 应用级代理配置（per-app，包含重试次数和超时配置）
@@ -475,7 +477,23 @@ impl RequestContext {
             }
         }
 
+        let diagnostics = state
+            .config
+            .try_read()
+            .ok()
+            .filter(|config| config.enable_logging)
+            .map(|_| {
+                let capture = state
+                    .db
+                    .get_setting(crate::proxy::diagnostics::CAPTURE_SETTING)
+                    .ok()
+                    .flatten()
+                    .as_deref()
+                    == Some("true");
+                crate::proxy::diagnostics::DiagnosticHandle::new(capture, pii_redaction.clone())
+            });
         Ok(Self {
+            diagnostics,
             start_time,
             app_config,
             provider,
@@ -562,6 +580,7 @@ impl RequestContext {
         )
         .stack_request(self.is_stack)
         .intent_model(self.intent_model.clone())
+        .diagnostics(self.diagnostics.clone())
     }
 
     /// 获取 Provider 列表（用于故障转移）

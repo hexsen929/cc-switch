@@ -36,9 +36,16 @@ export const SESSION_SOURCE_PATHS: Record<SessionAppId, string[]> = {
   mcode: ["~/.minimax"],
 };
 
-/** MiniMax Code 的会话只能在 MiniMax Code 里删（后端也会拒绝）。 */
+export const isReadOnlySession = (session: SessionMeta) =>
+  session.readOnly === true ||
+  session.role === "subagent" ||
+  Boolean(session.parentSessionId);
+
+/** 子代理只读；MiniMax Code 的会话只能在 MiniMax Code 里删。 */
 export const canDeleteSession = (session: SessionMeta) =>
-  Boolean(session.sourcePath) && session.providerId !== "mcode";
+  Boolean(session.sourcePath) &&
+  session.providerId !== "mcode" &&
+  !isReadOnlySession(session);
 
 export interface SessionProjectGroup {
   key: string;
@@ -143,6 +150,8 @@ export const formatRelativeTime = (
 export const formatSessionTitle = (session: SessionMeta) => {
   return (
     session.title ||
+    session.nickname ||
+    session.task ||
     getBaseName(session.projectDir) ||
     session.sessionId.slice(0, 8)
   );
@@ -150,7 +159,7 @@ export const formatSessionTitle = (session: SessionMeta) => {
 
 /** 第二行的「最后：…」：summary 和标题相同时不写。 */
 export const getSessionLastText = (session: SessionMeta) => {
-  const summary = session.summary?.trim();
+  const summary = (session.summary || session.task)?.trim();
   if (!summary) return "";
   if (summary === formatSessionTitle(session).trim()) return "";
   return summary;

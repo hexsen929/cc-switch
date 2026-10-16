@@ -1,5 +1,12 @@
 import { useId, useState } from "react";
-import { Copy, Folder, MoreHorizontal, Play } from "lucide-react";
+import {
+  ChevronDown,
+  ChevronRight,
+  Copy,
+  Folder,
+  MoreHorizontal,
+  Play,
+} from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { Checkbox } from "@/components/ui/checkbox";
 import {
@@ -23,6 +30,7 @@ import {
   highlightText,
   isArchivedSession,
   isSessionAppId,
+  isReadOnlySession,
 } from "./utils";
 
 const rowIconButton =
@@ -32,6 +40,10 @@ export const sessionMenuItemClass = "h-8 rounded-control px-2.5 text-body";
 
 interface SessionItemProps {
   session: SessionMeta;
+  depth?: number;
+  childCount?: number;
+  expanded?: boolean;
+  onToggleExpanded?: () => void;
   /** 选了「全部应用」时行首显示应用图标 */
   showAppIcon: boolean;
   /** 按时间模式在第二行先写项目目录名 */
@@ -55,6 +67,10 @@ interface SessionItemProps {
 
 export function SessionItem({
   session,
+  depth = 0,
+  childCount = 0,
+  expanded = false,
+  onToggleExpanded,
   showAppIcon,
   showDir,
   selectionMode,
@@ -83,18 +99,24 @@ export function SessionItem({
   const lastText = getSessionLastText(session);
   const archived = isArchivedSession(session);
   const deletable = canDeleteSession(session);
+  const readOnly = isReadOnlySession(session);
   const blocked = selectionMode && !deletable;
-  const hasCommand = Boolean(session.resumeCommand);
+  const hasCommand =
+    !readOnly && Boolean(session.resumeCommand && session.sourcePath);
   const lastActive = session.lastActiveAt ?? session.createdAt;
   const dirName = session.projectDir
     ? getBaseName(session.projectDir)
     : t("sessionManager.unknownDirectory", { defaultValue: "未知目录" });
-  const hasMeta = showDir || Boolean(lastText) || archived || blocked;
+  const hasMeta =
+    showDir || Boolean(lastText) || archived || blocked || readOnly;
   const appId = isSessionAppId(session.providerId) ? session.providerId : null;
 
   const tip = [
     title,
     lastText,
+    session.nickname,
+    session.agentType,
+    session.task,
     t("sessionManager.rowTimes", {
       defaultValue: "最近活跃 {{last}} · 创建 {{created}}",
       last: formatShortDateTime(lastActive) || "-",
@@ -105,9 +127,13 @@ export function SessionItem({
     .join("\n");
 
   const deleteReason = !deletable
-    ? t("sessionManager.mcodeDeleteHint", {
-        defaultValue: "请在 MiniMax Code 中删除",
-      })
+    ? readOnly
+      ? t("sessionManager.subagents.readOnlyHint", {
+          defaultValue: "子代理会话仅供阅读，请在主会话中继续操作",
+        })
+      : t("sessionManager.mcodeDeleteHint", {
+          defaultValue: "请在 MiniMax Code 中删除",
+        })
     : null;
 
   return (
@@ -117,7 +143,41 @@ export function SessionItem({
         bordered && "border-t border-border",
         menuOpen && "bg-subtle",
       )}
+      style={
+        depth ? { paddingInlineStart: 16 + Math.min(depth, 8) * 20 } : undefined
+      }
+      data-session-depth={depth}
     >
+      {(childCount > 0 || depth > 0) &&
+        (childCount > 0 ? (
+          <button
+            type="button"
+            aria-expanded={expanded}
+            aria-label={t(
+              expanded
+                ? "sessionManager.subagents.collapse"
+                : "sessionManager.subagents.expand",
+              {
+                defaultValue: expanded
+                  ? "收起 {{title}} 的子代理会话"
+                  : "展开 {{title}} 的子代理会话",
+                title,
+                count: childCount,
+              },
+            )}
+            onClick={onToggleExpanded}
+            disabled={!onToggleExpanded}
+            className="relative z-[1] inline-flex h-7 w-5 shrink-0 items-center justify-center rounded-control text-fg-2 hover:bg-selected disabled:cursor-default"
+          >
+            {expanded ? (
+              <ChevronDown className="h-3.5 w-3.5" />
+            ) : (
+              <ChevronRight className="h-3.5 w-3.5" />
+            )}
+          </button>
+        ) : (
+          <span aria-hidden="true" className="w-5 shrink-0" />
+        ))}
       {selectionMode ? (
         <>
           <label
@@ -132,6 +192,7 @@ export function SessionItem({
           <Checkbox
             id={checkboxId}
             checked={isChecked}
+            disabled={readOnly}
             aria-label={t("sessionManager.selectSessionLabel", {
               defaultValue: "选择 {{title}}",
               title,
@@ -158,11 +219,14 @@ export function SessionItem({
           <Checkbox
             tabIndex={-1}
             checked={false}
+            disabled={readOnly}
             aria-label={t("sessionManager.selectSessionLabel", {
               defaultValue: "选择 {{title}}",
               title,
             })}
-            onCheckedChange={onStartSelect}
+            onCheckedChange={() => {
+              if (!readOnly) onStartSelect();
+            }}
             className="relative z-[1] opacity-0 transition-opacity group-hover:opacity-100"
           />
         </>
@@ -185,6 +249,17 @@ export function SessionItem({
           >
             {searchQuery ? highlightText(title, searchQuery) : title}
           </span>
+          {childCount > 0 && (
+            <span
+              className="shrink-0 text-caption text-fg-3"
+              aria-hidden="true"
+            >
+              {t("sessionManager.subagents.count", {
+                defaultValue: "{{count}} 个子代理",
+                count: childCount,
+              })}
+            </span>
+          )}
         </div>
         {hasMeta && (
           <div
@@ -194,6 +269,13 @@ export function SessionItem({
               showAppIcon && "ps-6",
             )}
           >
+            {readOnly && (
+              <span className="shrink-0 rounded-full border border-border px-1.5 text-badge text-fg-2">
+                {t("sessionManager.subagents.readOnly", {
+                  defaultValue: "子代理 · 只读",
+                })}
+              </span>
+            )}
             {showDir && (
               <>
                 <Folder className="h-3.5 w-3.5 shrink-0" strokeWidth={1.5} />

@@ -356,6 +356,7 @@ fn parse_session(path: &Path) -> Result<SessionMeta, String> {
             "pi --session {}",
             crate::session_manager::terminal::shell_escape(&source_path)
         )),
+        ..SessionMeta::default()
     })
 }
 

@@ -20,7 +20,7 @@ import { sessionsApi } from "@/lib/api";
 import { cn } from "@/lib/utils";
 import type { SessionMessage, SessionMeta, TurnIndex } from "@/types";
 import { extractErrorMessage } from "@/utils/errorUtils";
-import { getBaseName } from "../utils";
+import { getBaseName, isReadOnlySession } from "../utils";
 import { getAgentReaderStyle } from "./agentStyles";
 import { ReaderContext, type ReaderContextValue } from "./context";
 import { transcriptToMarkdown, turnToMarkdown } from "./exportMarkdown";
@@ -71,6 +71,8 @@ const EMPTY_OVERRIDES: ReadonlyMap<string, boolean> = new Map();
 /** 会话标题：会话自带标题 → 第一条提问 → 项目目录名 → 会话 ID 前 8 位 */
 export const readerTitle = (session: SessionMeta, turns: TurnIndex[]) =>
   session.title?.trim() ||
+  session.nickname?.trim() ||
+  session.task?.trim() ||
   turns[0]?.questionPreview ||
   getBaseName(session.projectDir) ||
   session.sessionId.slice(0, 8);
@@ -479,19 +481,23 @@ export function SessionReader({
     ],
   );
 
-  const noResumeReason = !session.resumeCommand
-    ? session.providerId === "openclaw"
-      ? t("sessionManager.noResumeOpenclaw", {
-          defaultValue: "OpenClaw 会话由网关管理，不能在终端恢复",
-        })
-      : session.providerId === "hermes"
-        ? t("sessionManager.noResumeHermes", {
-            defaultValue: "暂不支持从命令行恢复 Hermes 会话",
+  const noResumeReason = isReadOnlySession(session)
+    ? t("sessionManager.subagents.readOnlyHint", {
+        defaultValue: "子代理会话仅供阅读，请在主会话中继续操作",
+      })
+    : !session.resumeCommand
+      ? session.providerId === "openclaw"
+        ? t("sessionManager.noResumeOpenclaw", {
+            defaultValue: "OpenClaw 会话由网关管理，不能在终端恢复",
           })
-        : t("sessionManager.noResumeCommand", {
-            defaultValue: "此会话无法恢复",
-          })
-    : null;
+        : session.providerId === "hermes"
+          ? t("sessionManager.noResumeHermes", {
+              defaultValue: "暂不支持从命令行恢复 Hermes 会话",
+            })
+          : t("sessionManager.noResumeCommand", {
+              defaultValue: "此会话无法恢复",
+            })
+      : null;
 
   const loadingFirst =
     !failed &&

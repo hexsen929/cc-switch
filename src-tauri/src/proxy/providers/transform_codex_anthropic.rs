@@ -11,6 +11,7 @@
 //! - this module:               Responses request → Anthropic request, Anthropic response → Responses response
 
 use super::codex_compaction;
+use super::codex_responses_sse::{anthropic_final_answer_eligible, assign_message_phases};
 use super::transform_codex_chat::{
     build_codex_tool_context_from_request, response_tool_call_item_from_chat_name,
     response_tool_call_item_id_from_chat_name, CodexToolContext,
@@ -1379,6 +1380,10 @@ pub(crate) fn anthropic_response_to_responses_with_context(
 
     let (status, incomplete_reason) =
         map_anthropic_stop_reason_to_status(body.get("stop_reason").and_then(|s| s.as_str()));
+    assign_message_phases(
+        &mut output,
+        anthropic_final_answer_eligible(body.get("stop_reason").and_then(Value::as_str)),
+    );
     let usage = build_responses_usage_from_anthropic(body.get("usage"));
 
     let mut result = json!({
@@ -1643,6 +1648,36 @@ fn append_str_field(block: &mut Value, field: &str, text: &str) {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn anthropic_response_phases_keep_progress_separate_from_a_finished_answer() {
+        let response = super::anthropic_response_to_responses(serde_json::json!({
+            "stop_reason": "end_turn",
+            "content": [
+                { "type": "text", "text": "Checking" },
+                { "type": "tool_use", "id": "phase_call", "name": "Read", "input": {} },
+                { "type": "text", "text": "Answer" },
+                { "type": "thinking", "thinking": "Tail", "signature": "signed" }
+            ]
+        }))
+        .unwrap();
+        assert_eq!(response["output"][0]["phase"], "commentary");
+        assert_eq!(response["output"][2]["phase"], "final_answer");
+        assert!(response["output"][1].get("phase").is_none());
+        for reason in [
+            None,
+            Some("max_tokens"),
+            Some("refusal"),
+            Some("pause_turn"),
+            Some("unknown"),
+        ] {
+            let response = super::anthropic_response_to_responses(serde_json::json!({
+                "stop_reason": reason, "content": [{ "type": "text", "text": "Partial" }]
+            }))
+            .unwrap();
+            assert!(response["output"][0].get("phase").is_none());
+        }
+    }
+
     use super::*;
 
     // ==================== Request: Responses → Anthropic ====================

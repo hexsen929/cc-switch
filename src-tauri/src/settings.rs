@@ -422,6 +422,9 @@ pub struct AppSettings {
     /// Optional user-owned instruction file synchronized into each agent's managed block.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub shared_instruction_file: Option<String>,
+    /// Device-local web-tool credentials; only dedicated commands may update.
+    #[serde(default)]
+    pub search_mcp: crate::search_mcp::SearchMcpConfig,
     /// Keep Codex ChatGPT login material in auth.json when switching to third-party providers.
     /// Opt-in: defaults to false so third-party switches cleanly overwrite auth.json.
     #[serde(default)]
@@ -607,6 +610,7 @@ impl Default for AppSettings {
             show_provider_search: true,
             check_tool_updates_on_startup: false,
             shared_instruction_file: None,
+            search_mcp: crate::search_mcp::SearchMcpConfig::default(),
             preserve_codex_official_auth_on_switch: false,
             unify_codex_session_history: false,
             unify_codex_migrate_existing: None,
@@ -865,6 +869,7 @@ pub fn get_settings() -> AppSettings {
 
 pub fn get_settings_for_frontend() -> AppSettings {
     let mut settings = get_settings();
+    settings.search_mcp.redact();
     if let Some(sync) = &mut settings.webdav_sync {
         sync.password.clear();
     }

@@ -1072,6 +1072,36 @@
     },
     "data": {
       "location": "保存場所"
+    },
+    "searchMcp": {
+      "saved": "ウェブ検索設定を保存しました",
+      "enabled": "共通ウェブ検索 MCP を有効にする",
+      "description": "各クライアントで web_search と web_fetch を共有し、以下の順で検索元を試します。既定は無効で、既存の検索機能は維持されます。",
+      "endpoint": "共通 MCP アドレス",
+      "running": "ゲートウェイ稼働中",
+      "stopped": "ゲートウェイ停止中",
+      "gatewayHint": "有効化するとモデルの経路を変えずに CC Switch ゲートウェイを起動します。利用中は起動したままにしてください。LAN 接続には web-search を許可するキーが必要です。ページ取得はプライベートネットワークに接続しません。",
+      "moveUp": "優先度を上げる",
+      "moveDown": "優先度を下げる",
+      "instanceUrl": "SearXNG インスタンス URL（必須）",
+      "baseUrl": "カスタム API URL（空欄で公式 URL）",
+      "baseUrlLabel": "検索元 URL",
+      "keys": "API キー",
+      "keysPlaceholder": "保存済み {{count}} 件。空欄で維持、置換キーはカンマ区切り",
+      "orderedKeys": "キーを順に使用（オフでローテーション）",
+      "clearKeys": "保存済みキーを削除",
+      "backoff": "拒否・制限されたキーを一時的に後回し",
+      "timeout": "合計タイムアウト（5～120 秒）",
+      "maxChars": "最大返却文字数",
+      "dailyLimit": "ゲートウェイキーごとの一日上限、UTC（0 は無制限）",
+      "clients": "次のクライアントの MCP 一覧に追加",
+      "install": "保存して MCP に追加",
+      "readQuota": "保存済みキーの残量を確認",
+      "quotaHint": "残量取得は現在 Tavily に対応しています。他の検索元や取得失敗時は不明と表示し、ゼロとは扱いません。",
+      "unlimited": "無制限",
+      "unknown": "不明",
+      "keyNumber": "キー {{number}}",
+      "installFailed": "検索設定は保存されましたが、クライアントへの追加に失敗しました：{{error}}"
     }
   },
   "apps": {
@@ -1533,6 +1563,13 @@
       "rawMatch": "原文での一致",
       "expandContent": "全文を表示",
       "collapseContent": "折りたたむ"
+    },
+    "subagents": {
+      "expand": "「{{title}}」のサブエージェントを展開",
+      "collapse": "「{{title}}」のサブエージェントを折りたたむ",
+      "count": "サブエージェント：{{count}}",
+      "readOnly": "サブエージェント · 読み取り専用",
+      "readOnlyHint": "サブエージェントの会話は閲覧専用です。親の会話で操作を続けてください。"
     }
   },
   "console": {
@@ -4125,7 +4162,8 @@
         "day": "1 日ごと",
         "week": "1 週間ごと",
         "month": "1 か月ごと"
-      }
+      },
+      "webSearch": "ウェブ検索 MCP"
     },
     "autoFailover": {
       "info": "フェイルオーバーキューに複数のプロバイダーが設定されている場合、リクエストが失敗すると優先度順に試行します。プロバイダーが連続失敗のしきい値に達すると、サーキットブレーカーが開き、一時的にスキップされます。",
@@ -5228,6 +5266,28 @@
       "loading": "残量を確認中…",
       "refresh": "残量を更新",
       "refreshAria": "{{login}} の残量を更新"
+    }
+  },
+  "requestDiagnostics": {
+    "title": "リクエスト診断",
+    "scope": "直近 40 件のプロキシリクエストのみ保持します。本文は既定で記録せず、有効時は機密値を伏せてメモリ内に保存します。各本文の上限は 128 KiB です。無効にするとプレビューを消去します。",
+    "capture": "リクエストとレスポンスの本文プレビュー",
+    "captureOn": "有効",
+    "captureOff": "無効",
+    "loadFailed": "診断の読み込みまたは保存に失敗しました。",
+    "unavailable": "このリクエストの診断は期限切れか未収集です。履歴やインポートした会話には含まれません。",
+    "truncated": "収集上限に達したため、プレビューを切り詰めました。",
+    "noBody": "読み取り可能なプレビューがありません。",
+    "canceled": "完了する前にレスポンスの読み取りが停止しました。",
+    "attemptsTruncated": "上限を超えた試行は表示していません。",
+    "upstream": "クライアント向け変換前の、最後の上流試行を表示します。認証ヘッダーは記録しません。",
+    "request": "上流リクエスト",
+    "response": "上流レスポンス",
+    "phases": {
+      "prepare": "ローカル準備",
+      "headers": "上流ヘッダー待機",
+      "content": "最初の内容まで",
+      "receive": "レスポンス読取"
     }
   }
 }

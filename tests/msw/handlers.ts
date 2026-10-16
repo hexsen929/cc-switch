@@ -53,6 +53,40 @@ export const handlers = [
     success(null),
   ),
   http.post(`${TAURI_ENDPOINT}/list_profiles`, () => success([])),
+  http.post(`${TAURI_ENDPOINT}/get_request_diagnostics`, () => success(null)),
+  http.post(`${TAURI_ENDPOINT}/get_request_diagnostics_config`, () =>
+    success({ captureBodies: false }),
+  ),
+  http.post(`${TAURI_ENDPOINT}/set_request_diagnostics_config`, () =>
+    success(null),
+  ),
+  http.post(`${TAURI_ENDPOINT}/get_search_mcp_config`, () =>
+    success({
+      config: {
+        enabled: false,
+        sources: ["tavily", "brave", "exa", "firecrawl", "you", "searxng"].map(
+          (engine) => ({
+            engine,
+            enabled: false,
+            baseUrl: "",
+            keys: [],
+            orderedKeys: false,
+            keyCount: 0,
+            clearKeys: false,
+          }),
+        ),
+        keyBackoff: true,
+        timeoutSeconds: 30,
+        maxResultChars: 20_000,
+        dailyCallLimit: 1000,
+      },
+      endpoint: "http://127.0.0.1:15721/mcp/cc-switch/web-search",
+      running: false,
+    }),
+  ),
+  http.post(`${TAURI_ENDPOINT}/set_search_mcp_config`, () => success(null)),
+  http.post(`${TAURI_ENDPOINT}/add_search_mcp_to_apps`, () => success(null)),
+  http.post(`${TAURI_ENDPOINT}/get_search_mcp_quotas`, () => success([])),
   http.post(`${TAURI_ENDPOINT}/get_providers`, async ({ request }) => {
     const { app } = await withJson<{ app: AppId }>(request);
     return success(getProviders(app));

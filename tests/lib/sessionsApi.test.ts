@@ -17,6 +17,22 @@ describe("sessionsApi · 阅读页命令（P2 契约）", () => {
     core.invoke.mockReset();
   });
 
+  it("launchTerminal includes the scanned session identity for backend validation", async () => {
+    core.invoke.mockResolvedValue(true);
+    const options = {
+      command: "codex resume main",
+      cwd: "/work/project",
+      providerId: "codex",
+      sessionId: "main",
+      sourcePath: "/sessions/main.jsonl",
+    };
+    await sessionsApi.launchTerminal(options);
+    expect(core.invoke).toHaveBeenCalledWith("launch_session_terminal", {
+      ...options,
+      customConfig: undefined,
+    });
+  });
+
   it("streamMessages：传 onChunk Channel，chunk 回调给调用方", async () => {
     const chunks: TranscriptChunk[] = [];
     core.invoke.mockImplementation(

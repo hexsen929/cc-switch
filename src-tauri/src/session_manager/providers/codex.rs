@@ -1,10 +1,10 @@
 use std::borrow::Cow;
 use std::collections::{HashMap, HashSet};
 use std::fs::File;
-use std::io::{BufRead, BufReader};
+use std::io::{BufRead, BufReader, Read};
 use std::path::{Path, PathBuf};
-use std::sync::LazyLock;
-use std::time::Duration;
+use std::sync::{LazyLock, Mutex};
+use std::time::{Duration, SystemTime};
 
 use regex::Regex;
 use rusqlite::Connection;
@@ -90,11 +90,202 @@ fn scan_sessions_in_roots_with_titles(
             meta.title = Some(truncate_summary(title, TITLE_MAX_CHARS));
         }
     }
+    apply_subagent_tasks(&mut sessions, thread_titles);
     sessions
 }
 
 /// 会话页每次打开都会全量扫描；没变过的文件直接复用上次的解析结果。
 static PARSE_CACHE: LazyLock<FileParseCache> = LazyLock::new(FileParseCache::new);
+
+#[derive(Clone)]
+struct SpawnCacheEntry {
+    modified: Option<SystemTime>,
+    len: u64,
+    tasks: HashMap<String, String>,
+}
+
+static SPAWN_CACHE: LazyLock<Mutex<HashMap<PathBuf, SpawnCacheEntry>>> =
+    LazyLock::new(|| Mutex::new(HashMap::new()));
+
+fn apply_subagent_tasks(sessions: &mut [SessionMeta], titles: &HashMap<String, String>) {
+    let mut tasks = HashMap::new();
+    let mut parent_paths = HashSet::new();
+    let mut by_identity: HashMap<(&str, Option<&str>), Option<&SessionMeta>> = HashMap::new();
+    for session in sessions.iter() {
+        by_identity
+            .entry((session.session_id.as_str(), session.project_dir.as_deref()))
+            .and_modify(|candidate| *candidate = None)
+            .or_insert(Some(session));
+    }
+    for child in sessions.iter().filter(|session| session.read_only) {
+        let Some(parent_id) = child.parent_session_id.as_ref() else {
+            continue;
+        };
+        // Native ids normally identify one thread, but refuse ambiguous copies
+        // across projects instead of attaching a task from the wrong parent.
+        let Some(Some(parent)) =
+            by_identity.get(&(parent_id.as_str(), child.project_dir.as_deref()))
+        else {
+            continue;
+        };
+        let Some(path) = parent.source_path.as_ref() else {
+            continue;
+        };
+        parent_paths.insert(PathBuf::from(path));
+        tasks
+            .entry((parent_id.clone(), child.project_dir.clone()))
+            .or_insert_with(|| cached_subagent_tasks(Path::new(path)));
+    }
+    if let Ok(mut cache) = SPAWN_CACHE.lock() {
+        cache.retain(|path, _| parent_paths.contains(path));
+    }
+    drop(by_identity);
+    for child in sessions.iter_mut().filter(|session| session.read_only) {
+        let Some(parent) = child.parent_session_id.as_ref() else {
+            continue;
+        };
+        if let Some(task) = tasks
+            .get(&(parent.clone(), child.project_dir.clone()))
+            .and_then(|names| names.get(&child.session_id))
+        {
+            child.task = Some(task.clone());
+            if !titles.contains_key(&child.session_id) {
+                child.title = Some(truncate_summary(task, TITLE_MAX_CHARS));
+            }
+        }
+    }
+}
+
+fn cached_subagent_tasks(path: &Path) -> HashMap<String, String> {
+    let Ok(metadata) = std::fs::metadata(path) else {
+        return HashMap::new();
+    };
+    let modified = metadata.modified().ok();
+    if let Ok(cache) = SPAWN_CACHE.lock() {
+        if let Some(entry) = cache.get(path) {
+            if entry.modified == modified && entry.len == metadata.len() {
+                return entry.tasks.clone();
+            }
+        }
+    }
+    let Ok(tasks) = read_subagent_tasks(path) else {
+        return HashMap::new();
+    };
+    if let Ok(mut cache) = SPAWN_CACHE.lock() {
+        cache.insert(
+            path.to_path_buf(),
+            SpawnCacheEntry {
+                modified,
+                len: metadata.len(),
+                tasks: tasks.clone(),
+            },
+        );
+    }
+    tasks
+}
+
+fn note_unique(map: &mut HashMap<String, Option<String>>, id: &str, value: &str) {
+    if id.is_empty() || value.is_empty() {
+        return;
+    }
+    map.entry(id.to_string())
+        .and_modify(|old| {
+            if old.as_deref() != Some(value) {
+                *old = None;
+            }
+        })
+        .or_insert_with(|| Some(value.to_string()));
+}
+
+fn read_subagent_tasks(path: &Path) -> std::io::Result<HashMap<String, String>> {
+    read_subagent_tasks_with_limit(path, 32 * 1024 * 1024)
+}
+
+fn read_subagent_tasks_with_limit(
+    path: &Path,
+    limit: u64,
+) -> std::io::Result<HashMap<String, String>> {
+    let mut names = HashMap::new();
+    let mut children = HashMap::new();
+    // Titles are optional enrichment. Bound cold reads, including decompressed
+    // rollouts; no inferred parent relationship ever depends on this scan.
+    let mut reader = codex_rollout_file::open_reader(path)?.take(limit);
+    let mut line = Vec::new();
+    loop {
+        line.clear();
+        if reader.read_until(b'\n', &mut line)? == 0 {
+            break;
+        }
+        // A hard budget may split a JSON event or a multibyte character. Keep
+        // all previously confirmed events and ignore only that partial line.
+        if reader.limit() == 0 && !line.ends_with(b"\n") {
+            break;
+        }
+        let Ok(line) = std::str::from_utf8(&line) else {
+            continue;
+        };
+        if !line.contains("spawn_agent")
+            && !line.contains("agent_activity")
+            && !line.contains("SubAgentActivity")
+        {
+            continue;
+        }
+        let Ok(value) = serde_json::from_str::<Value>(&line) else {
+            continue;
+        };
+        let Some(payload) = value.get("payload") else {
+            continue;
+        };
+        let event_type = value.get("type").and_then(Value::as_str);
+        let payload_type = payload.get("type").and_then(Value::as_str);
+        if event_type == Some("response_item")
+            && payload_type == Some("function_call")
+            && payload.get("name").and_then(Value::as_str) == Some("spawn_agent")
+        {
+            if let (Some(call), Some(arguments)) = (
+                payload.get("call_id").and_then(Value::as_str),
+                payload.get("arguments").and_then(Value::as_str),
+            ) {
+                if let Ok(arguments) = serde_json::from_str::<Value>(arguments) {
+                    if let Some(task) = arguments.get("task_name").and_then(Value::as_str) {
+                        note_unique(&mut names, call, &truncate_summary(task.trim(), 160));
+                    }
+                }
+            }
+        } else if event_type == Some("event_msg") {
+            let (activity, call_key) = if payload_type == Some("sub_agent_activity") {
+                (payload, "event_id")
+            } else if payload_type == Some("item_completed") {
+                let Some(item) = payload.get("item").filter(|item| {
+                    item.get("type").and_then(Value::as_str) == Some("SubAgentActivity")
+                }) else {
+                    continue;
+                };
+                (item, "id")
+            } else {
+                continue;
+            };
+            if activity.get("kind").and_then(Value::as_str) == Some("started") {
+                if let (Some(call), Some(child)) = (
+                    activity.get(call_key).and_then(Value::as_str),
+                    activity.get("agent_thread_id").and_then(Value::as_str),
+                ) {
+                    note_unique(&mut children, call, child);
+                }
+            }
+        }
+    }
+    let mut tasks = HashMap::new();
+    for (call, task) in names {
+        if let (Some(task), Some(Some(child))) = (task, children.get(&call)) {
+            note_unique(&mut tasks, child, &task);
+        }
+    }
+    Ok(tasks
+        .into_iter()
+        .filter_map(|(child, task)| task.map(|task| (child, task)))
+        .collect())
+}
 
 fn load_thread_titles() -> HashMap<String, String> {
     let config_dir = get_codex_config_dir();
@@ -1872,6 +2063,10 @@ pub fn delete_session(_root: &Path, path: &Path, session_id: &str) -> Result<boo
     let meta = parse_session(path)
         .ok_or_else(|| format!("Failed to parse Codex session metadata: {}", path.display()))?;
 
+    if meta.read_only {
+        return Err("Subagent conversations are read-only".to_string());
+    }
+
     if meta.session_id != session_id {
         return Err(format!(
             "Codex session ID mismatch: expected {session_id}, found {}",
@@ -1974,6 +2169,10 @@ fn parse_session_lines(
     let mut project_dir: Option<String> = None;
     let mut created_at: Option<i64> = None;
     let mut first_user_message: Option<String> = None;
+    let mut subagent = false;
+    let mut parent_session_id = None;
+    let mut nickname = None;
+    let mut agent_type = None;
 
     // Extract metadata and first user message from head lines
     for line in &head {
@@ -1986,9 +2185,32 @@ fn parse_session_lines(
         }
         if value.get("type").and_then(Value::as_str) == Some("session_meta") {
             if let Some(payload) = value.get("payload") {
-                if is_subagent_source(payload.get("source")) {
-                    return None;
+                if is_subagent_source(payload.get("source"))
+                    || payload
+                        .get("parent_thread_id")
+                        .and_then(Value::as_str)
+                        .is_some()
+                {
+                    subagent = true;
+                    let spawn = payload.pointer("/source/subagent/thread_spawn");
+                    let source_parent = spawn
+                        .and_then(|spawn| spawn.get("parent_thread_id"))
+                        .and_then(Value::as_str);
+                    let top_parent = payload.get("parent_thread_id").and_then(Value::as_str);
+                    parent_session_id = match (source_parent, top_parent) {
+                        (Some(left), Some(right)) if left != right => None,
+                        (Some(parent), _) | (_, Some(parent)) => Some(parent.to_string()),
+                        _ => None,
+                    };
+                    agent_type = spawn
+                        .and_then(|spawn| spawn.get("agent_role"))
+                        .and_then(Value::as_str)
+                        .map(|role| truncate_summary(role, TITLE_MAX_CHARS));
                 }
+                nickname = payload
+                    .get("agent_nickname")
+                    .and_then(Value::as_str)
+                    .map(|name| truncate_summary(name, TITLE_MAX_CHARS));
                 if session_id.is_none() {
                     session_id = payload
                         .get("id")
@@ -2074,7 +2296,7 @@ fn parse_session_lines(
 
     let summary = summary.map(|text| truncate_summary(&text, 160));
 
-    Some(SessionMeta {
+    let mut meta = SessionMeta {
         provider_id: PROVIDER_ID.to_string(),
         session_id: session_id.clone(),
         title,
@@ -2084,7 +2306,14 @@ fn parse_session_lines(
         last_active_at,
         source_path: Some(path.to_string_lossy().to_string()),
         resume_command: Some(format!("codex resume {session_id}")),
-    })
+        nickname,
+        agent_type,
+        ..SessionMeta::default()
+    };
+    if subagent {
+        meta.mark_subagent(parent_session_id);
+    }
+    Some(meta)
 }
 
 fn is_subagent_source(source: Option<&Value>) -> bool {
@@ -2554,7 +2783,7 @@ mod tests {
     }
 
     #[test]
-    fn parse_session_skips_subagent_sessions() {
+    fn parse_session_keeps_subagent_sessions_read_only() {
         let temp = tempdir().expect("tempdir");
         let path = temp.path().join("session.jsonl");
         std::fs::write(
@@ -2566,7 +2795,124 @@ mod tests {
         )
         .expect("write");
 
-        assert!(parse_session(&path).is_none());
+        let meta = parse_session(&path).expect("subagent");
+        assert_eq!(meta.parent_session_id.as_deref(), Some("parent-id"));
+        assert_eq!(meta.role.as_deref(), Some("subagent"));
+        assert_eq!(meta.agent_type.as_deref(), Some("explorer"));
+        assert!(meta.read_only);
+        assert!(meta.resume_command.is_none());
+        assert!(delete_session(temp.path(), &path, "subagent-id")
+            .unwrap_err()
+            .contains("read-only"));
+        assert!(path.exists());
+    }
+
+    #[test]
+    fn subagent_task_title_requires_a_confirmed_spawn_from_its_own_parent() {
+        let temp = tempdir().expect("tempdir");
+        let parent = temp.path().join("parent.jsonl");
+        let child = temp.path().join("child.jsonl");
+        let lines = [
+            serde_json::json!({"type":"session_meta","payload":{"id":"parent","cwd":"/work"}}),
+            serde_json::json!({"type":"response_item","payload":{"type":"function_call","name":"spawn_agent","call_id":"call-scout","arguments":"{\"task_name\":\"Inspect parser\"}"}}),
+            serde_json::json!({"type":"event_msg","payload":{"type":"sub_agent_activity","event_id":"call-scout","kind":"started","agent_thread_id":"child"}}),
+            serde_json::json!({"type":"response_item","payload":{"type":"function_call","name":"spawn_agent","call_id":"unmatched","arguments":"{\"task_name\":\"Do not guess\"}"}}),
+        ];
+        std::fs::write(
+            &parent,
+            lines
+                .iter()
+                .map(Value::to_string)
+                .collect::<Vec<_>>()
+                .join("\n"),
+        )
+        .expect("parent");
+        std::fs::write(&child, serde_json::json!({"type":"session_meta","payload":{"id":"child","cwd":"/work","agent_nickname":"Scout","source":{"subagent":{"thread_spawn":{"parent_thread_id":"parent"}}}}}).to_string()).expect("child");
+        let mut sessions = vec![
+            parse_session(&parent).unwrap(),
+            parse_session(&child).unwrap(),
+        ];
+        apply_subagent_tasks(&mut sessions, &HashMap::new());
+        assert_eq!(sessions[1].task.as_deref(), Some("Inspect parser"));
+        assert_eq!(sessions[1].title.as_deref(), Some("Inspect parser"));
+        assert_eq!(sessions[1].nickname.as_deref(), Some("Scout"));
+        let named = HashMap::from([("child".to_string(), "Native title".to_string())]);
+        sessions[1].title = Some("Native title".to_string());
+        apply_subagent_tasks(&mut sessions, &named);
+        assert_eq!(sessions[1].title.as_deref(), Some("Native title"));
+        assert_eq!(read_subagent_tasks(&parent).unwrap().len(), 1);
+    }
+
+    #[test]
+    fn conflicting_subagent_parents_remain_read_only_without_a_guessed_parent() {
+        let lines = SessionLines { head: vec![serde_json::json!({"type":"session_meta","payload":{"id":"child","parent_thread_id":"other","source":{"subagent":{"thread_spawn":{"parent_thread_id":"parent"}}}}}).to_string()], tail: vec![], fallback_last_active: None };
+        let meta = parse_session_lines(Path::new("child.jsonl"), lines, &HashMap::new()).unwrap();
+        assert!(meta.read_only);
+        assert!(meta.parent_session_id.is_none());
+        assert!(meta.resume_command.is_none());
+    }
+
+    #[test]
+    fn conflicting_spawn_names_are_not_used_as_subagent_tasks() {
+        let temp = tempdir().unwrap();
+        let path = temp.path().join("parent.jsonl");
+        let lines = [
+            serde_json::json!({"type":"response_item","payload":{"type":"function_call","name":"spawn_agent","call_id":"c","arguments":"{\"task_name\":\"First\"}"}}),
+            serde_json::json!({"type":"response_item","payload":{"type":"function_call","name":"spawn_agent","call_id":"c","arguments":"{\"task_name\":\"Conflicting\"}"}}),
+            serde_json::json!({"type":"event_msg","payload":{"type":"item_completed","item":{"type":"SubAgentActivity","id":"c","kind":"started","agent_thread_id":"child"}}}),
+        ];
+        std::fs::write(
+            &path,
+            lines
+                .iter()
+                .map(Value::to_string)
+                .collect::<Vec<_>>()
+                .join("\n"),
+        )
+        .unwrap();
+        assert!(read_subagent_tasks(&path).unwrap().is_empty());
+    }
+
+    #[test]
+    fn subagent_task_budget_keeps_complete_events_before_a_split_utf8_character() {
+        let temp = tempdir().unwrap();
+        let path = temp.path().join("parent.jsonl");
+        let prefix = concat!(
+            "{\"type\":\"response_item\",\"payload\":{\"type\":\"function_call\",\"name\":\"spawn_agent\",\"call_id\":\"c\",\"arguments\":\"{\\\"task_name\\\":\\\"Inspect parser\\\"}\"}}\n",
+            "{\"type\":\"event_msg\",\"payload\":{\"type\":\"sub_agent_activity\",\"event_id\":\"c\",\"kind\":\"started\",\"agent_thread_id\":\"child\"}}\n"
+        );
+        std::fs::write(&path, format!("{prefix}中文partial")).unwrap();
+        let tasks = read_subagent_tasks_with_limit(&path, prefix.len() as u64 + 1).unwrap();
+        assert_eq!(
+            tasks.get("child").map(String::as_str),
+            Some("Inspect parser")
+        );
+    }
+
+    #[test]
+    fn copied_parent_history_cannot_name_another_projects_child() {
+        let temp = tempdir().unwrap();
+        let path = temp.path().join("parent.jsonl");
+        std::fs::write(&path, concat!(
+            "{\"type\":\"response_item\",\"payload\":{\"type\":\"function_call\",\"name\":\"spawn_agent\",\"call_id\":\"c\",\"arguments\":\"{\\\"task_name\\\":\\\"Wrong project\\\"}\"}}\n",
+            "{\"type\":\"event_msg\",\"payload\":{\"type\":\"sub_agent_activity\",\"event_id\":\"c\",\"kind\":\"started\",\"agent_thread_id\":\"child\"}}\n"
+        )).unwrap();
+        let parent = SessionMeta {
+            session_id: "parent".to_string(),
+            project_dir: Some("/other".to_string()),
+            source_path: Some(path.to_string_lossy().into_owned()),
+            ..SessionMeta::default()
+        };
+        let mut child = SessionMeta {
+            session_id: "child".to_string(),
+            project_dir: Some("/work".to_string()),
+            ..SessionMeta::default()
+        };
+        child.mark_subagent(Some("parent".to_string()));
+        let mut sessions = vec![parent, child];
+        apply_subagent_tasks(&mut sessions, &HashMap::new());
+        assert!(sessions[1].task.is_none());
+        assert!(sessions[1].read_only);
     }
 
     #[test]

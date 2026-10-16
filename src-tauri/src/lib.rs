@@ -37,6 +37,7 @@ mod prompt;
 mod prompt_files;
 mod provider;
 mod proxy;
+mod search_mcp;
 mod services;
 mod session_manager;
 mod settings;
@@ -1324,6 +1325,19 @@ pub fn run() {
                 // 定下各应用的直连 / 代理模式（处理旧版遗留的接管状态），再把代理模式的
                 // 应用接上。要排在通用配置片段的自动提取之后：它读的是直连的 live。
                 crate::mode::controller::startup(&state).await;
+                // Standalone search MCP also needs the existing gateway when no
+                // model application is in routed mode. Do not change app modes.
+                if crate::settings::get_settings().search_mcp.enabled {
+                    match state.proxy_service.get_status().await {
+                        Ok(status) if !status.running => {
+                            if let Err(error) = state.proxy_service.start().await {
+                                log::warn!("启动统一搜索 MCP 网关失败: {error}");
+                            }
+                        }
+                        Err(error) => log::warn!("读取搜索 MCP 网关状态失败: {error}"),
+                        _ => {}
+                    }
+                }
                 // 启动流程走完：托盘这时才开始报「路由服务没在运行」，并记下退回直连的应用。
                 crate::tray::mark_startup_settled(&app_handle);
                 // Codex 官方做路由、发布了 Stack 模型时，官方模型列表过期就在后台刷新。
@@ -1465,6 +1479,10 @@ pub fn run() {
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
+            crate::search_mcp::get_search_mcp_config,
+            crate::search_mcp::get_search_mcp_quotas,
+            crate::search_mcp::set_search_mcp_config,
+            crate::search_mcp::add_search_mcp_to_apps,
             commands::get_providers,
             commands::get_current_provider,
             commands::add_provider,
@@ -1788,6 +1806,9 @@ pub fn run() {
             commands::get_model_stats,
             commands::get_request_logs,
             commands::get_request_detail,
+            commands::get_request_diagnostics,
+            commands::get_request_diagnostics_config,
+            commands::set_request_diagnostics_config,
             commands::get_model_pricing,
             commands::update_model_pricing,
             commands::update_model_pricing_batch,

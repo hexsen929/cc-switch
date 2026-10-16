@@ -54,6 +54,7 @@ import {
   groupSessionsByProject,
   groupSessionsByTime,
   isSessionAppId,
+  isReadOnlySession,
   SESSION_APP_IDS,
   SESSION_SOURCE_PATHS,
   shortenHomePath,
@@ -61,6 +62,12 @@ import {
   type SessionAppId,
   type SessionTimeBucket,
 } from "./utils";
+import {
+  buildSessionForest,
+  flattenSessionTree,
+  sessionSearchContext,
+  type SessionTreeRow,
+} from "./sessionTree";
 
 const GROUP_MODE_STORAGE_KEY = "cc-switch.sessionManager.groupMode";
 // 按项目分组时默认全部收起，只记住用户手动展开过的项目。
@@ -117,7 +124,7 @@ type SessionListRow =
       group: ReturnType<typeof groupSessionsByProject>[number];
       first: boolean;
     }
-  | { kind: "session"; key: string; session: SessionMeta; bordered: boolean };
+  | ({ kind: "session"; bordered: boolean } & SessionTreeRow);
 
 /** 虚拟列表每种行的固定高度：时间分组标题 h-7、项目分组标题 h-9、会话行 h-14 */
 const LIST_ROW_HEIGHT = { time: 28, project: 36, session: 56 } as const;
@@ -150,6 +157,9 @@ export function SessionManagerPage({
   const [query, setQuery] = useState("");
   const [groupMode, setGroupMode] = useState<GroupMode>(readGroupMode);
   const [expanded, setExpanded] = useState<Set<string>>(readExpanded);
+  const [expandedSessions, setExpandedSessions] = useState<Set<string>>(
+    () => new Set(),
+  );
   const [readerKey, setReaderKey] = useState<string | null>(null);
   const [selectionMode, setSelectionMode] = useState(false);
   const [selectedKeys, setSelectedKeys] = useState<Set<string>>(
@@ -239,9 +249,37 @@ export function SessionManagerPage({
     (key: string) => trimmedQuery !== "" || expanded.has(key),
     [trimmedQuery, expanded],
   );
-  const matches = useMemo(
+  const searchHits = useMemo(
     () => sortSessionsByTime(searchSessions(query)),
     [searchSessions, query],
+  );
+  const forest = useMemo(
+    () =>
+      buildSessionForest(
+        sortSessionsByTime(
+          scopedSessions.filter(
+            (session) =>
+              appFilter === "all" || session.providerId === appFilter,
+          ),
+        ),
+      ),
+    [scopedSessions, appFilter],
+  );
+  const treeContext = useMemo(
+    () => (trimmedQuery ? sessionSearchContext(forest, searchHits) : undefined),
+    [forest, searchHits, trimmedQuery],
+  );
+  const rootSessions = useMemo(
+    () =>
+      forest.roots
+        .filter((node) => !treeContext || treeContext.has(node.key))
+        .map((node) => node.session),
+    [forest, treeContext],
+  );
+  const matches = useMemo(
+    () =>
+      flattenSessionTree(forest.roots, treeContext).map((row) => row.session),
+    [forest, treeContext],
   );
 
   const unknownLabel = t("sessionManager.unknownDirectory", {
@@ -250,22 +288,47 @@ export function SessionManagerPage({
   const projectGroups = useMemo(
     () =>
       groupMode === "project"
-        ? groupSessionsByProject(matches, unknownLabel)
+        ? groupSessionsByProject(rootSessions, unknownLabel)
         : [],
-    [groupMode, matches, unknownLabel],
+    [groupMode, rootSessions, unknownLabel],
   );
   const timeGroups = useMemo(
-    () => (groupMode === "time" ? groupSessionsByTime(matches) : []),
-    [groupMode, matches],
+    () => (groupMode === "time" ? groupSessionsByTime(rootSessions) : []),
+    [groupMode, rootSessions],
   );
   // 阅读页的「上一个 / 下一个」按列表上的顺序走
   const orderedSessions = useMemo(
     () =>
       groupMode === "project"
-        ? projectGroups.flatMap((group) => group.sessions)
+        ? projectGroups.flatMap((group) =>
+            flattenSessionTree(
+              group.sessions.flatMap((session) => {
+                const node = forest.nodes.get(getSessionKey(session));
+                return node ? [node] : [];
+              }),
+              treeContext,
+            ).map((row) => row.session),
+          )
         : matches,
-    [groupMode, projectGroups, matches],
+    [groupMode, projectGroups, matches, forest, treeContext],
   );
+
+  // Reader navigation can enter a child while its branch was collapsed. Keep
+  // that ancestor path visible when returning to the virtualized list.
+  useEffect(() => {
+    if (!readerKey) return;
+    const ancestors: string[] = [];
+    let node = forest.nodes.get(readerKey)?.parent;
+    while (node) {
+      ancestors.push(node.key);
+      node = node.parent;
+    }
+    if (!ancestors.length) return;
+    setExpandedSessions((current) => {
+      if (ancestors.every((key) => current.has(key))) return current;
+      return new Set([...current, ...ancestors]);
+    });
+  }, [readerKey, forest]);
 
   const readerSession = useMemo(
     () =>
@@ -333,6 +396,7 @@ export function SessionManagerPage({
   );
 
   const handleLaunch = async (session: SessionMeta) => {
+    if (isReadOnlySession(session) || !session.sourcePath) return;
     const command = session.resumeCommand;
     if (!command) return;
     if (!terminalName) {
@@ -349,6 +413,9 @@ export function SessionManagerPage({
       await sessionsApi.launchTerminal({
         command,
         cwd: session.projectDir ?? undefined,
+        providerId: session.providerId,
+        sessionId: session.sessionId,
+        sourcePath: session.sourcePath,
       });
       toast.success(
         t("sessionManager.launchedIn", {
@@ -629,12 +696,32 @@ export function SessionManagerPage({
   });
 
   // ─── 列表行 ────────────────────────────────────────────────────────────
-  const renderRow = (session: SessionMeta, bordered: boolean) => {
+  const renderRow = ({
+    session,
+    bordered,
+    depth,
+    childCount,
+    expanded: branchOpen,
+  }: Extract<SessionListRow, { kind: "session" }>) => {
     const key = getSessionKey(session);
     return (
       <SessionItem
         key={key}
         session={session}
+        depth={depth}
+        childCount={childCount}
+        expanded={branchOpen}
+        onToggleExpanded={
+          trimmedQuery
+            ? undefined
+            : () =>
+                setExpandedSessions((current) => {
+                  const next = new Set(current);
+                  if (next.has(key)) next.delete(key);
+                  else next.add(key);
+                  return next;
+                })
+        }
         showAppIcon={showAppIcon}
         showDir={groupMode === "time"}
         selectionMode={selectionMode}
@@ -648,6 +735,7 @@ export function SessionManagerPage({
         onStartSelect={() => enterSelection(session)}
         onLaunch={() => void handleLaunch(session)}
         onCopyResume={() =>
+          !isReadOnlySession(session) &&
           session.resumeCommand &&
           handleCopy(
             session.resumeCommand,
@@ -695,6 +783,23 @@ export function SessionManagerPage({
   // 项目分组的标题用 rangeExtractor 留在渲染范围里并吸顶（原来的 sticky 效果）。
   const listRows = useMemo<SessionListRow[]>(() => {
     const rows: SessionListRow[] = [];
+    const appendBranches = (roots: SessionMeta[], bordered: boolean) => {
+      const nodes = roots.flatMap((session) => {
+        const node = forest.nodes.get(getSessionKey(session));
+        return node ? [node] : [];
+      });
+      flattenSessionTree(
+        nodes,
+        treeContext,
+        trimmedQuery ? undefined : expandedSessions,
+      ).forEach((row, index) =>
+        rows.push({
+          ...row,
+          kind: "session",
+          bordered: bordered || index > 0,
+        }),
+      );
+    };
     if (groupMode === "time") {
       timeGroups.forEach((group, groupIndex) => {
         rows.push({
@@ -703,14 +808,7 @@ export function SessionManagerPage({
           bucket: group.bucket,
           first: groupIndex === 0,
         });
-        group.sessions.forEach((session, index) =>
-          rows.push({
-            kind: "session",
-            key: getSessionKey(session),
-            session,
-            bordered: index > 0,
-          }),
-        );
+        appendBranches(group.sessions, false);
       });
     } else {
       projectGroups.forEach((group, groupIndex) => {
@@ -721,18 +819,20 @@ export function SessionManagerPage({
           first: groupIndex === 0,
         });
         if (!isGroupOpen(group.key)) return;
-        group.sessions.forEach((session) =>
-          rows.push({
-            kind: "session",
-            key: getSessionKey(session),
-            session,
-            bordered: true,
-          }),
-        );
+        appendBranches(group.sessions, true);
       });
     }
     return rows;
-  }, [groupMode, timeGroups, projectGroups, isGroupOpen]);
+  }, [
+    groupMode,
+    timeGroups,
+    projectGroups,
+    isGroupOpen,
+    forest,
+    treeContext,
+    trimmedQuery,
+    expandedSessions,
+  ]);
 
   const stickyIndexes = useMemo(
     () =>
@@ -780,10 +880,17 @@ export function SessionManagerPage({
       ? fullPath.slice(0, fullPath.length - group.label.length)
       : fullPath;
     const pathTail = fullPath.endsWith(group.label) ? group.label : "";
+    const groupSessions = flattenSessionTree(
+      group.sessions.flatMap((session) => {
+        const node = forest.nodes.get(getSessionKey(session));
+        return node ? [node] : [];
+      }),
+      treeContext,
+    ).map((row) => row.session);
     let meta: string;
     if (appFilter === "all") {
       const perApp = new Map<string, number>();
-      group.sessions.forEach((session) =>
+      groupSessions.forEach((session) =>
         perApp.set(
           session.providerId,
           (perApp.get(session.providerId) ?? 0) + 1,
@@ -796,7 +903,7 @@ export function SessionManagerPage({
     } else {
       meta = t("sessionManager.groupMeta", {
         defaultValue: "{{count}} 个会话 · {{time}}",
-        count: group.sessions.length,
+        count: groupSessions.length,
         time: formatRelativeTime(group.latest, t),
       });
     }
@@ -874,7 +981,7 @@ export function SessionManagerPage({
             ) : row.kind === "project" ? (
               renderProjectHeader(row.group, row.first)
             ) : (
-              renderRow(row.session, row.bordered)
+              renderRow(row)
             )}
           </div>
         );

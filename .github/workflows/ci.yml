@@ -102,16 +102,57 @@ jobs:
         run: pnpm install --frozen-lockfile
 
       - name: TypeScript type check
-        run: pnpm typecheck
+        shell: bash
+        run: pnpm typecheck 2>&1 | tee "$RUNNER_TEMP/frontend-types.log"
 
       - name: Check formatting
-        run: pnpm format:check
+        shell: bash
+        run: pnpm format:check 2>&1 | tee "$RUNNER_TEMP/frontend-format.log"
 
       - name: Unit tests
-        run: pnpm test:unit
+        shell: bash
+        run: pnpm test:unit 2>&1 | tee "$RUNNER_TEMP/frontend-tests.log"
 
       - name: Build frontend
-        run: pnpm build:renderer
+        shell: bash
+        run: pnpm build:renderer 2>&1 | tee "$RUNNER_TEMP/frontend-build.log"
+
+      - name: Report frontend failure diagnostics
+        if: failure()
+        shell: bash
+        run: |
+          python - <<'PY'
+          import os
+          import pathlib
+          import re
+
+          for path in sorted(pathlib.Path(os.environ["RUNNER_TEMP"]).glob("frontend-*.log")):
+              text = path.read_text(encoding="utf-8", errors="replace")
+              text = re.sub(r"\x1b\[[0-9;]*m", "", text)
+              tail = "\n".join(text.splitlines()[-120:])[-12000:]
+              escaped = tail.replace("%", "%25").replace("\r", "%0D").replace("\n", "%0A")
+              print(f"::error title={path.stem}::{escaped}")
+          PY
+
+      # Produce reviewable formatting patches in the cloud as well. This allows
+      # source-only local checkouts to fix formatting without installing Node deps.
+      - name: Report frontend formatting patches
+        if: failure()
+        shell: bash
+        run: |
+          pnpm format > "$RUNNER_TEMP/frontend-format-fixes.log" 2>&1
+          python - <<'PY'
+          import base64
+          import gzip
+          import subprocess
+
+          paths = subprocess.check_output(["git", "diff", "--name-only", "--", "src/"]).decode().splitlines()
+          for path in paths:
+              patch = subprocess.check_output(["git", "diff", "--", path])
+              encoded = base64.b64encode(gzip.compress(patch)).decode()
+              if len(encoded) <= 55000:
+                  print(f"::error title=prettier-patch::{path} PATCH_GZIP_BASE64:{encoded}")
+          PY
 
   backend:
     name: Backend Checks

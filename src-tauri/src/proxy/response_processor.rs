@@ -455,7 +455,7 @@ impl SseUsageCollector {
 /// 判断一行 SSE data 是否标志着模型开始输出（口径同 Sub2API 的 semantic TTFT）：
 /// 跳过只宣告响应开始或保活的元数据事件，其余非空事件都算。Chat Completions /
 /// Gemini 的分块没有事件类型，一律算。
-fn sse_data_starts_output(event_name: Option<&str>, data: &str) -> bool {
+pub(crate) fn sse_data_starts_output(event_name: Option<&str>, data: &str) -> bool {
     let data = data.trim();
     if data.is_empty() || data == "[DONE]" {
         return false;
@@ -538,6 +538,7 @@ pub(crate) fn create_usage_collector(
     let session_id = ctx.session_id.clone();
     // Fork：把本次请求归因到发起它的局域网网关密钥，供 per-key 配额统计。
     let gateway_key_id = ctx.gateway_key_id.clone();
+    let diagnostics = ctx.diagnostics.clone();
 
     Some(SseUsageCollector::new(
         start_time,
@@ -553,6 +554,7 @@ pub(crate) fn create_usage_collector(
                 let request_model = request_model.clone();
                 let outbound_model = fallback_model.clone();
                 let gateway_key_id = gateway_key_id.clone();
+                let diagnostics = diagnostics.clone();
 
                 tokio::spawn(async move {
                     log_usage_internal(
@@ -569,6 +571,7 @@ pub(crate) fn create_usage_collector(
                         status_code,
                         Some(session_id),
                         gateway_key_id,
+                        diagnostics,
                     )
                     .await;
                 });
@@ -581,6 +584,7 @@ pub(crate) fn create_usage_collector(
                 let request_model = request_model.clone();
                 let outbound_model = fallback_model.clone();
                 let gateway_key_id = gateway_key_id.clone();
+                let diagnostics = diagnostics.clone();
 
                 tokio::spawn(async move {
                     log_usage_internal(
@@ -597,6 +601,7 @@ pub(crate) fn create_usage_collector(
                         status_code,
                         Some(session_id),
                         gateway_key_id,
+                        diagnostics,
                     )
                     .await;
                 });
@@ -633,6 +638,7 @@ fn spawn_log_usage(
     let latency_ms = ctx.latency_ms();
     let session_id = ctx.session_id.clone();
     let gateway_key_id = ctx.gateway_key_id.clone();
+    let diagnostics = ctx.diagnostics.clone();
 
     tokio::spawn(async move {
         log_usage_internal(
@@ -649,6 +655,7 @@ fn spawn_log_usage(
             status_code,
             Some(session_id),
             gateway_key_id,
+            diagnostics,
         )
         .await;
     });
@@ -690,6 +697,7 @@ async fn log_usage_internal(
     status_code: u16,
     session_id: Option<String>,
     gateway_key_id: Option<String>,
+    diagnostics: Option<super::diagnostics::DiagnosticHandle>,
 ) {
     use super::usage::logger::UsageLogger;
 
@@ -699,6 +707,9 @@ async fn log_usage_internal(
     }
     let dedup_scope = super::usage::parser::dedup_scope_for_app(app_type, provider_id);
     let request_id = usage.dedup_request_id(dedup_scope);
+    if let Some(diagnostics) = diagnostics {
+        diagnostics.bind(&request_id);
+    }
 
     log::debug!(
         "[{app_type}] 记录请求日志: id={request_id}, provider={provider_id}, model={model}, streaming={is_streaming}, status={status_code}, latency_ms={latency_ms}, first_token_ms={first_token_ms:?}, session={}, input={}, output={}, cache_read={}, cache_creation={}",
@@ -1517,6 +1528,36 @@ mod tests {
         ProxyState::for_test(db)
     }
 
+    #[tokio::test]
+    async fn diagnostics_bind_the_existing_deduplication_id() {
+        let db = Arc::new(Database::memory().unwrap());
+        let state = build_state(db);
+        let diagnostics = super::super::diagnostics::DiagnosticHandle::isolated(false);
+        let usage = TokenUsage {
+            message_id: Some("msg-diagnostics".into()),
+            input_tokens: 1,
+            ..Default::default()
+        };
+        log_usage_internal(
+            &state,
+            "provider",
+            "claude",
+            "m",
+            "m",
+            "m",
+            usage,
+            1,
+            None,
+            false,
+            200,
+            None,
+            None,
+            Some(diagnostics.clone()),
+        )
+        .await;
+        assert!(diagnostics.snapshot("session:msg-diagnostics").is_some());
+    }
+
     fn seed_pricing(db: &Database) -> Result<(), AppError> {
         let conn = crate::database::lock_conn!(db.conn);
         conn.execute(
@@ -1603,6 +1644,7 @@ mod tests {
             200,
             None,
             None,
+            None,
         )
         .await;
 
@@ -1669,6 +1711,7 @@ mod tests {
             None,
             false,
             200,
+            None,
             None,
             None,
         )
@@ -1764,6 +1807,7 @@ mod tests {
                 None,
                 false,
                 200,
+                None,
                 None,
                 None,
             )

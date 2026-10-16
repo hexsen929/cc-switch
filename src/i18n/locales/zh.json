@@ -1072,6 +1072,36 @@
     },
     "data": {
       "location": "存储位置"
+    },
+    "searchMcp": {
+      "saved": "联网搜索设置已保存",
+      "enabled": "启用统一联网搜索 MCP",
+      "description": "让各客户端共用 web_search 与 web_fetch，按下列顺序尝试搜索源。默认关闭，保留客户端原有联网功能。",
+      "endpoint": "统一 MCP 地址",
+      "running": "网关运行中",
+      "stopped": "网关尚未运行",
+      "gatewayHint": "启用后会启动 CC Switch 网关，不改变模型路由。使用时需保持网关运行。局域网访问需要允许 web-search 的网关密钥；网页抓取不访问内网地址。",
+      "moveUp": "提高优先级",
+      "moveDown": "降低优先级",
+      "instanceUrl": "SearXNG 实例地址（必填）",
+      "baseUrl": "自定义 API 地址（留空使用官方地址）",
+      "baseUrlLabel": "搜索源地址",
+      "keys": "API 密钥",
+      "keysPlaceholder": "已保存 {{count}} 个密钥；留空保持，多个替换密钥用逗号分隔",
+      "orderedKeys": "按顺序使用密钥（关闭则轮询）",
+      "clearKeys": "清除已保存密钥",
+      "backoff": "被拒绝或限流的密钥暂时后置",
+      "timeout": "总超时（5–120 秒）",
+      "maxChars": "最多返回字符数",
+      "dailyLimit": "每个网关密钥每日调用上限，UTC 日界（0 不限）",
+      "clients": "添加到这些客户端的 MCP 列表",
+      "install": "保存并添加到 MCP",
+      "readQuota": "查询已保存密钥的额度",
+      "quotaHint": "目前支持读取 Tavily 额度；其它搜索源或查询失败显示未知，不会将未知额度当作 0。",
+      "unlimited": "不限",
+      "unknown": "未知",
+      "keyNumber": "密钥 {{number}}",
+      "installFailed": "联网搜索设置已保存，但添加到客户端失败：{{error}}"
     }
   },
   "apps": {
@@ -1533,6 +1563,13 @@
       "rawMatch": "原文中的匹配",
       "expandContent": "展开完整内容",
       "collapseContent": "收起"
+    },
+    "subagents": {
+      "expand": "展开“{{title}}”的子代理会话",
+      "collapse": "收起“{{title}}”的子代理会话",
+      "count": "子代理：{{count}} 个",
+      "readOnly": "子代理 · 只读",
+      "readOnlyHint": "子代理会话仅供阅读，请在主会话中继续操作。"
     }
   },
   "console": {
@@ -4125,7 +4162,8 @@
         "day": "每天",
         "week": "每周",
         "month": "每月"
-      }
+      },
+      "webSearch": "联网搜索 MCP"
     },
     "autoFailover": {
       "info": "当故障转移队列中配置了多个供应商时，系统会在请求失败时按优先级顺序依次尝试。当某个供应商连续失败达到阈值时，熔断器会打开并在一段时间内跳过该供应商。",
@@ -5228,6 +5266,28 @@
       "loading": "正在查询额度…",
       "refresh": "刷新额度",
       "refreshAria": "刷新 {{login}} 的额度"
+    }
+  },
+  "requestDiagnostics": {
+    "title": "请求诊断",
+    "scope": "仅保留最近 40 次代理请求。正文预览默认关闭，脱敏后仅存于内存，请求与响应各限 128 KiB。开启后记录新请求，关闭会清除预览。",
+    "capture": "请求与响应正文预览",
+    "captureOn": "已开启",
+    "captureOff": "已关闭",
+    "loadFailed": "读取或保存诊断设置失败。",
+    "unavailable": "此请求的诊断已过期或未采集。历史记录和导入的会话不包含诊断。",
+    "truncated": "预览已达到采集上限，后续内容已截断。",
+    "noBody": "未采集到可读的正文预览。",
+    "canceled": "响应尚未完成，读取已停止。",
+    "attemptsTruncated": "后续尝试超出预览上限，未显示。",
+    "upstream": "以下为最后一次上游尝试的内容，尚未转换为客户端协议。不会采集鉴权请求头。",
+    "request": "上游请求",
+    "response": "上游响应",
+    "phases": {
+      "prepare": "本地准备",
+      "headers": "等待上游响应头",
+      "content": "等待首段内容",
+      "receive": "读取响应"
     }
   }
 }

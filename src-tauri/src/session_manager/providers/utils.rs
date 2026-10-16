@@ -362,6 +362,7 @@ mod tests {
             last_active_at: None,
             source_path: Some(path.to_string_lossy().to_string()),
             resume_command: None,
+            ..SessionMeta::default()
         })
     }
 

@@ -40,10 +40,21 @@ pub fn scan_sessions() -> Vec<SessionMeta> {
     let mut files = Vec::new();
     collect_jsonl_files(&root, &mut files);
 
-    PARSE_CACHE.scan(files, scan_session_file)
+    let mut sessions = PARSE_CACHE.scan(files, scan_session_file);
+    // Sidecar metadata is written separately from the transcript and must not
+    // be hidden by the transcript's mtime/size cache.
+    for meta in &mut sessions {
+        if let Some(path) = meta.source_path.clone().filter(|_| meta.read_only) {
+            apply_subagent_sidecar(Path::new(&path), meta);
+        }
+    }
+    sessions
 }
 
 pub fn delete_session(_root: &Path, path: &Path, session_id: &str) -> Result<bool, String> {
+    if is_agent_session(path) {
+        return Err("Subagent conversations are read-only".to_string());
+    }
     let meta = parse_session(path).ok_or_else(|| {
         format!(
             "Failed to parse Claude session metadata: {}",
@@ -85,7 +96,12 @@ fn parse_session(path: &Path) -> Option<SessionMeta> {
 /// 列表扫描用：读不了（权限、文件被占用等）返回 `Err`，不进解析缓存、下轮重试；
 /// 读到了但不是会话返回 `Ok(None)`，可以缓存。
 fn scan_session_file(path: &Path) -> std::io::Result<Option<SessionMeta>> {
-    if is_agent_session(path) {
+    if path.file_name().and_then(|name| name.to_str()) == Some("journal.jsonl")
+        || path
+            .file_stem()
+            .and_then(|stem| stem.to_str())
+            .is_some_and(|stem| stem.starts_with("agent-acompact-"))
+    {
         return Ok(None);
     }
     let (head, tail) = read_head_tail_lines(path, 10, 30)?;
@@ -205,7 +221,7 @@ fn parse_session_lines(path: &Path, head: Vec<String>, tail: Vec<String>) -> Opt
 
     let summary = summary.map(|text| truncate_summary(&text, 160));
 
-    Some(SessionMeta {
+    let mut meta = SessionMeta {
         provider_id: PROVIDER_ID.to_string(),
         session_id: session_id.clone(),
         title,
@@ -215,7 +231,73 @@ fn parse_session_lines(path: &Path, head: Vec<String>, tail: Vec<String>) -> Opt
         last_active_at,
         source_path: Some(path.to_string_lossy().to_string()),
         resume_command: Some(format!("claude --resume {session_id}")),
-    })
+        ..SessionMeta::default()
+    };
+    if is_agent_session(path) {
+        let (root_id, agent_id) = subagent_identity(path, &session_id)?;
+        meta.session_id = subagent_session_id(&root_id, &agent_id);
+        meta.task = meta.title.clone();
+        meta.mark_subagent(Some(root_id));
+    }
+    Some(meta)
+}
+
+fn subagent_session_id(root: &str, agent: &str) -> String {
+    format!("claude-agent:{root}:{agent}")
+}
+
+fn subagent_identity(path: &Path, native_id: &str) -> Option<(String, String)> {
+    let agent = path.file_stem()?.to_str()?.strip_prefix("agent-")?;
+    if agent.is_empty() || agent.starts_with("acompact-") {
+        return None;
+    }
+    let parent = path.parent()?;
+    let root = if parent.file_name()?.to_str()? == "subagents" {
+        parent.parent()?.file_name()?.to_str()?
+    } else {
+        // Legacy agents share their lead's sessionId in the transcript.
+        if native_id.starts_with("agent-") {
+            return None;
+        }
+        native_id
+    };
+    (!root.is_empty()).then(|| (root.to_string(), agent.to_string()))
+}
+
+fn apply_subagent_sidecar(path: &Path, meta: &mut SessionMeta) {
+    let Some(root) = meta.parent_session_id.clone() else {
+        return;
+    };
+    let sidecar = path.with_extension("meta.json");
+    if !std::fs::metadata(&sidecar).is_ok_and(|metadata| metadata.len() <= 64 * 1024) {
+        return;
+    }
+    let Some(value) = std::fs::read_to_string(sidecar)
+        .ok()
+        .and_then(|content| serde_json::from_str::<Value>(&content).ok())
+    else {
+        return;
+    };
+    if let Some(parent) = value.get("parentAgentId").and_then(Value::as_str) {
+        if !parent.is_empty() && parent != "main" {
+            meta.parent_session_id = Some(subagent_session_id(&root, parent));
+        }
+    }
+    meta.agent_type = value
+        .get("agentType")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|kind| !kind.is_empty())
+        .map(|kind| truncate_summary(kind, TITLE_MAX_CHARS));
+    if let Some(description) = value
+        .get("description")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|description| !description.is_empty())
+    {
+        meta.task = Some(truncate_summary(description, 160));
+        meta.title = Some(truncate_summary(description, TITLE_MAX_CHARS));
+    }
 }
 
 fn is_agent_session(path: &Path) -> bool {
@@ -274,7 +356,7 @@ fn remove_path_if_exists(path: &Path) -> std::io::Result<()> {
 pub fn load_messages(path: &Path) -> Result<Vec<SessionMessage>, String> {
     let file = File::open(path).map_err(|e| format!("Failed to open session file: {e}"))?;
     let mut lines = LineSpans::new(BufReader::with_capacity(256 * 1024, file));
-    let mut builder = TranscriptBuilder::new(path.with_extension(""));
+    let mut builder = TranscriptBuilder::new(transcript_sidecar(path), is_agent_session(path));
 
     // 读错误（文件被截断/替换）时保留已解析部分，与旧实现跳过坏行的行为一致
     while let Ok(Some(span)) = lines.next_line() {
@@ -289,6 +371,20 @@ pub fn load_messages(path: &Path) -> Result<Vec<SessionMessage>, String> {
     }
 
     Ok(builder.finish())
+}
+
+pub(crate) fn transcript_sidecar(path: &Path) -> PathBuf {
+    if is_agent_session(path) {
+        if let Some(parent) = path
+            .parent()
+            .filter(|parent| parent.file_name().and_then(|name| name.to_str()) == Some("subagents"))
+        {
+            if let Some(session) = parent.parent() {
+                return session.to_path_buf();
+            }
+        }
+    }
+    path.with_extension("")
 }
 
 /// 解析中的消息；全部记录处理完后再统一投影出 `content`（结果记录会回填前面的 ToolCall）。
@@ -315,6 +411,7 @@ struct CallSlot {
 struct TranscriptBuilder {
     /// 会话附属目录 `<sessionId>/`（tool-results 等落盘文件）
     sidecar_dir: PathBuf,
+    include_sidechain: bool,
     drafts: Vec<Draft>,
     calls: HashMap<String, CallSlot>,
     /// pr-link 会在每轮结束时重复写入，同一个 URL 只出一次
@@ -322,9 +419,10 @@ struct TranscriptBuilder {
 }
 
 impl TranscriptBuilder {
-    fn new(sidecar_dir: PathBuf) -> Self {
+    fn new(sidecar_dir: PathBuf, include_sidechain: bool) -> Self {
         Self {
             sidecar_dir,
+            include_sidechain,
             drafts: Vec::new(),
             calls: HashMap::new(),
             pr_urls: HashSet::new(),
@@ -349,7 +447,7 @@ impl TranscriptBuilder {
     }
 
     fn push(&mut self, record: RawRecord<'_>, line: JsonlSpan) {
-        if is_true(&record.is_sidechain) || is_true(&record.is_meta) {
+        if (!self.include_sidechain && is_true(&record.is_sidechain)) || is_true(&record.is_meta) {
             return;
         }
         let ts = record.timestamp.as_ref().and_then(parse_timestamp_to_ms);
@@ -1942,12 +2040,59 @@ mod tests {
     }
 
     #[test]
-    fn agent_session_files_are_still_excluded() {
+    fn agent_session_without_a_known_lead_is_excluded() {
         let temp = tempdir().expect("tempdir");
         let path = temp.path().join("agent-abc123.jsonl");
         std::fs::write(&path, "{\"type\":\"user\",\"isSidechain\":true}\n").expect("write");
 
         assert!(is_agent_session(&path));
+        assert!(scan_session_file(&path).expect("scan").is_none());
+    }
+
+    #[test]
+    fn subagent_transcript_is_readable_nested_and_cannot_be_deleted() {
+        let temp = tempdir().expect("tempdir");
+        let folder = temp.path().join("lead").join("subagents");
+        std::fs::create_dir_all(&folder).expect("subagents");
+        let path = folder.join("agent-scout.jsonl");
+        std::fs::write(&path, concat!(
+            "{\"sessionId\":\"lead\",\"isSidechain\":true,\"cwd\":\"/work\",\"type\":\"user\",\"message\":{\"role\":\"user\",\"content\":\"Inspect the parser\"}}\n",
+            "{\"sessionId\":\"lead\",\"isSidechain\":true,\"type\":\"assistant\",\"message\":{\"role\":\"assistant\",\"content\":\"Found the parser\"}}\n"
+        )).expect("write transcript");
+        std::fs::write(
+            path.with_extension("meta.json"),
+            r#"{"agentType":"Explore","description":"Inspect imports","parentAgentId":"reviewer"}"#,
+        )
+        .expect("sidecar");
+        let mut meta = scan_session_file(&path).expect("scan").expect("subagent");
+        assert_eq!(meta.session_id, "claude-agent:lead:scout");
+        assert_eq!(meta.parent_session_id.as_deref(), Some("lead"));
+        apply_subagent_sidecar(&path, &mut meta);
+        assert_eq!(
+            meta.parent_session_id.as_deref(),
+            Some("claude-agent:lead:reviewer")
+        );
+        assert_eq!(meta.agent_type.as_deref(), Some("Explore"));
+        assert_eq!(meta.task.as_deref(), Some("Inspect imports"));
+        assert!(meta.read_only);
+        assert!(meta.resume_command.is_none());
+        assert_eq!(transcript_sidecar(&path), temp.path().join("lead"));
+        assert!(load_messages(&path)
+            .expect("read")
+            .iter()
+            .any(|message| message.content.contains("Found the parser")));
+        assert!(delete_session(temp.path(), &path, &meta.session_id)
+            .unwrap_err()
+            .contains("read-only"));
+        assert!(path.exists());
+    }
+
+    #[test]
+    fn compaction_agents_are_not_presented_as_delegated_conversations() {
+        let temp = tempdir().expect("tempdir");
+        let path = temp.path().join("agent-acompact-scout.jsonl");
+        std::fs::write(&path, "{\"sessionId\":\"lead\",\"type\":\"user\"}\n").expect("write");
+        assert!(scan_session_file(&path).expect("scan").is_none());
     }
 
     #[test]

@@ -52,6 +52,7 @@ import {
   formatClock,
   formatShortDateTime,
   isSessionAppId,
+  isReadOnlySession,
 } from "../utils";
 import { useReaderT } from "./i18n";
 import { PathChip } from "./PathChip";
@@ -110,7 +111,9 @@ export const SessionReaderHeader = memo(function SessionReaderHeader({
   const rt = useReaderT();
   const appId = isSessionAppId(session.providerId) ? session.providerId : null;
   const isCodex = session.providerId === "codex";
-  const command = session.resumeCommand;
+  const readOnly = isReadOnlySession(session);
+  const command =
+    readOnly || !session.sourcePath ? undefined : session.resumeCommand;
   const deletable = canDeleteSession(session);
 
   const launchLabel = launchTerminal
@@ -350,11 +353,15 @@ export const SessionReaderHeader = memo(function SessionReaderHeader({
         >
           {t("sessionManager.deleteEllipsis", { defaultValue: "删除…" })}
         </DropdownMenuItem>
-        {!deletable && session.providerId === "mcode" && (
+        {!deletable && (readOnly || session.providerId === "mcode") && (
           <p className="px-2.5 pb-1.5 text-caption text-fg-2">
-            {t("sessionManager.mcodeDeleteHint", {
-              defaultValue: "请在 MiniMax Code 中删除",
-            })}
+            {readOnly
+              ? t("sessionManager.subagents.readOnlyHint", {
+                  defaultValue: "子代理会话仅供阅读，请在主会话中继续操作",
+                })
+              : t("sessionManager.mcodeDeleteHint", {
+                  defaultValue: "请在 MiniMax Code 中删除",
+                })}
           </p>
         )}
       </DropdownMenuContent>
@@ -391,12 +398,21 @@ export const SessionReaderHeader = memo(function SessionReaderHeader({
         </span>
       }
       titleExtra={
-        <span className="sr-only">
-          {t("sessionManager.sessionOf", {
-            defaultValue: "{{app}} 的会话",
-            app: appName,
-          })}
-        </span>
+        <>
+          {readOnly && (
+            <span className="shrink-0 rounded-full border border-border px-1.5 text-badge text-fg-2">
+              {t("sessionManager.subagents.readOnly", {
+                defaultValue: "子代理 · 只读",
+              })}
+            </span>
+          )}
+          <span className="sr-only">
+            {t("sessionManager.sessionOf", {
+              defaultValue: "{{app}} 的会话",
+              app: appName,
+            })}
+          </span>
+        </>
       }
       actions={
         <>

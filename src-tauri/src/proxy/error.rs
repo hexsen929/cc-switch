@@ -3,7 +3,9 @@ use axum::{
     response::{IntoResponse, Response},
     Json,
 };
-use serde_json::json;
+use once_cell::sync::Lazy;
+use regex::Regex;
+use serde_json::{json, Value};
 use thiserror::Error;
 
 #[derive(Debug, Error)]
@@ -93,6 +95,127 @@ pub enum ProxyError {
     #[allow(dead_code)]
     #[error("内部错误: {0}")]
     Internal(String),
+}
+
+/// A model/input capacity rejection, never a rate or gateway byte limit.
+/// Counts are optional: absent metadata must not invent a model's capacity.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct InputContextLimit {
+    pub input_tokens: Option<u64>,
+    pub limit: Option<u64>,
+}
+
+pub(crate) fn input_context_limit(error: &ProxyError) -> Option<InputContextLimit> {
+    let ProxyError::UpstreamError {
+        status: 400 | 413 | 422,
+        body: Some(body),
+    } = error
+    else {
+        return None;
+    };
+    let parsed = serde_json::from_str::<Value>(body).ok();
+    let detail = parsed
+        .as_ref()
+        .and_then(|value| value.get("error"))
+        .or(parsed.as_ref());
+    let message = detail
+        .and_then(|value| value.get("message").and_then(Value::as_str))
+        .or_else(|| detail.and_then(Value::as_str))
+        .unwrap_or(body);
+    let code = detail
+        .and_then(|value| value.get("code").or_else(|| value.get("type")))
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    let words = format!("{code} {message}").to_lowercase();
+    // A reverse proxy's 413 is about bytes, and TPM is about pace. Neither is
+    // evidence that another model has a larger input window. Output allowance
+    // errors need an output setting change, rather than moving the conversation.
+    if [
+        "max_tokens",
+        "max_output_tokens",
+        "max_completion_tokens",
+        "output token",
+        "completion token",
+        "rate_limit",
+        "rate limit",
+        "rate-limit",
+        "tokens per",
+        "per minute",
+        "per hour",
+        "per day",
+        "please wait",
+        "try again later",
+        "throttl",
+        "<html",
+        "<!doctype",
+        "client_max_body_size",
+        "request body",
+        "payload too large",
+        "request entity too large",
+        "请求频率",
+        "每分钟",
+        "每小时",
+    ]
+    .iter()
+    .any(|word| words.contains(word))
+        || words
+            .split(|c: char| !c.is_ascii_alphanumeric())
+            .any(|word| matches!(word, "tpm" | "tpd"))
+    {
+        return None;
+    }
+    static TOO_LONG: Lazy<Regex> = Lazy::new(|| {
+        Regex::new(concat!(
+        r"context_length_exceeded|context_window_exceeded|model_context_window_exceeded",
+        r"|prompt (?:is )?too long|input (?:is )?too long|input tokens? (?:count )?(?:exceed|exceeds|exceeded)",
+        r"|input token count.*exceeds the maximum|prompt token count of [\d,]+ exceeds the limit",
+        r"|(?:exceeds?|exceeded|over|beyond)(?: the)?(?: model'?s?)?(?: maximum)? context",
+        r"|context (?:length|limit|window) (?:is )?exceeded|maximum context length",
+        r"|maximum allowed input length|longer than the model'?s context length",
+        r"|prompt exceeds max length|range of input length should be",
+        r"|上下文(?:长度)?(?:超|过长)|超(?:过|出)(?:了)?(?:模型)?(?:的)?(?:最大)?上下文"
+    )).expect("input context error regex")
+    });
+    if !TOO_LONG.is_match(&words) {
+        return None;
+    }
+    static INPUT_COUNT: Lazy<Regex> = Lazy::new(|| {
+        Regex::new(concat!(
+        r"(?:prompt (?:is )?too long\s*:\s*|prompt token count of\s*|input token count\s*(?:of|is|:)?\s*)([\d,]+)",
+        r"|(?:messages resulted in|requested|input has)\s+([\d,]+)\s+tokens"
+    )).expect("input token count regex")
+    });
+    static LIMIT_COUNT: Lazy<Regex> = Lazy::new(|| {
+        Regex::new(concat!(
+        r"(?:maximum context length(?: is)?|context (?:length|window|limit)(?: is|:)?|maximum allowed input length(?: is)?)\s*[:=]?\s*([\d,]+)",
+        r"|>\s*([\d,]+)\s*(?:maximum|tokens?|$)"
+    )).expect("input context limit regex")
+    });
+    let count = |regex: &Regex| {
+        regex
+            .captures(&words)
+            .and_then(|captures| captures.iter().skip(1).flatten().next())
+            .and_then(|number| number.as_str().replace(',', "").parse::<u64>().ok())
+            .filter(|number| *number > 0)
+    };
+    Some(InputContextLimit {
+        input_tokens: count(&INPUT_COUNT),
+        limit: count(&LIMIT_COUNT),
+    })
+}
+
+pub(crate) fn normalize_request_too_large(mut body: Value) -> Value {
+    if !body.get("error").is_some_and(Value::is_object) {
+        let message = body
+            .get("error")
+            .and_then(Value::as_str)
+            .or_else(|| body.get("message").and_then(Value::as_str))
+            .map(str::to_string)
+            .unwrap_or_else(|| body.to_string());
+        body = json!({"error": {"message": message}});
+    }
+    body["error"]["type"] = json!("request_too_large");
+    body
 }
 
 impl IntoResponse for ProxyError {
@@ -217,6 +340,11 @@ impl IntoResponse for ProxyError {
             }
         };
 
+        let body = if status == StatusCode::PAYLOAD_TOO_LARGE {
+            normalize_request_too_large(body)
+        } else {
+            body
+        };
         (status, Json(body)).into_response()
     }
 }
@@ -249,5 +377,110 @@ pub fn categorize_error(error: &reqwest::Error) -> ErrorCategory {
         }
     } else {
         ErrorCategory::Retryable
+    }
+}
+
+#[cfg(test)]
+mod input_limit_tests {
+    use super::*;
+
+    fn upstream(status: u16, message: &str) -> ProxyError {
+        ProxyError::UpstreamError {
+            status,
+            body: Some(
+                json!({
+                    "error": {"type": "invalid_request_error", "message": message}
+                })
+                .to_string(),
+            ),
+        }
+    }
+
+    #[test]
+    fn recognizes_explicit_input_caps_and_decodes_json_unicode() {
+        for message in [
+            "prompt is too long: 9,000 tokens > 8,192 maximum",
+            "Input token exceed the limit",
+            "input token count 9000 exceeds the maximum",
+            "输入内容超过模型最大上下文长度",
+        ] {
+            assert!(
+                input_context_limit(&upstream(400, message)).is_some(),
+                "{message}"
+            );
+        }
+        assert_eq!(
+            input_context_limit(&upstream(
+                413,
+                "prompt is too long: 9,000 tokens > 8,192 maximum"
+            )),
+            Some(InputContextLimit {
+                input_tokens: Some(9000),
+                limit: Some(8192)
+            })
+        );
+        let structured = ProxyError::UpstreamError {
+            status: 422,
+            body: Some(
+                r#"{"error":{"code":"context_length_exceeded","message":"Use less input"}}"#.into(),
+            ),
+        };
+        assert!(input_context_limit(&structured).is_some());
+        let escaped = ProxyError::UpstreamError {
+            status: 400,
+            body: Some(
+                r#"{"error":{"message":"\u8d85\u8fc7\u6700\u5927\u4e0a\u4e0b\u6587"}}"#.into(),
+            ),
+        };
+        assert!(input_context_limit(&escaped).is_some());
+    }
+
+    #[test]
+    fn byte_rate_output_and_generic_client_errors_are_not_input_caps() {
+        for message in [
+            "<html><h1>413 Request Entity Too Large</h1></html>",
+            "Payload too large",
+            "request body exceeds limit",
+            "context_length_exceeded: TPM limit",
+            "input is too long: tokens per minute",
+            "prompt is too long; rate_limit_exceeded",
+            "input too long, please wait",
+            "maximum context length exceeded: max_tokens is too large",
+            "maximum context length exceeded: max_output_tokens=300000",
+            "max_completion_tokens exceeds the maximum context length",
+            "output token limit exceeds the maximum context length",
+            "invalid JSON",
+            "token limit exceeded",
+            "Too many tokens, please wait",
+        ] {
+            for status in [400, 413, 422] {
+                assert!(
+                    input_context_limit(&upstream(status, message)).is_none(),
+                    "{status}: {message}"
+                );
+            }
+        }
+        for status in [200, 401, 403, 429, 500] {
+            assert!(input_context_limit(&upstream(status, "prompt is too long")).is_none());
+        }
+    }
+
+    #[tokio::test]
+    async fn every_upstream_413_has_the_standard_type_without_losing_details() {
+        for body in [None, Some("nginx rejected body".to_string()), Some(json!({
+            "error": {"message":"input cap", "code":"provider_code", "type":"invalid_request_error"},
+            "request_id":"req-test"
+        }).to_string())] {
+            let response = ProxyError::UpstreamError { status: 413, body }.into_response();
+            assert_eq!(response.status(), StatusCode::PAYLOAD_TOO_LARGE);
+            let bytes = axum::body::to_bytes(response.into_body(), 4096).await.unwrap();
+            let parsed: Value = serde_json::from_slice(&bytes).unwrap();
+            assert_eq!(parsed["error"]["type"], "request_too_large");
+            assert!(parsed["error"]["message"].is_string());
+            if parsed.get("request_id").is_some() {
+                assert_eq!(parsed["request_id"], "req-test");
+                assert_eq!(parsed["error"]["code"], "provider_code");
+            }
+        }
     }
 }

@@ -85,6 +85,10 @@ impl Default for AnthropicToResponsesState {
 }
 
 impl AnthropicToResponsesState {
+    fn final_answer_eligible(&self) -> bool {
+        sse::anthropic_final_answer_eligible(self.stop_reason.as_deref())
+    }
+
     fn with_tool_context(tool_context: CodexToolContext) -> Self {
         Self {
             tool_context,
@@ -710,7 +714,7 @@ pub(crate) fn responses_sse_events_from_anthropic_message(
         "delta": { "stop_reason": body.get("stop_reason").cloned().unwrap_or(Value::Null) }
     })));
     events.extend(state.finalize());
-    events
+    sse::with_message_phases(events, state.final_answer_eligible())
 }
 
 /// Convert the upstream Anthropic Messages SSE into the Responses SSE that Codex expects.
@@ -727,7 +731,7 @@ pub(crate) fn create_responses_sse_stream_from_anthropic_with_context<
     stream: impl Stream<Item = Result<Bytes, E>> + Send + 'static,
     tool_context: CodexToolContext,
 ) -> impl Stream<Item = Result<Bytes, std::io::Error>> + Send {
-    async_stream::stream! {
+    sse::stream_with_message_phases(async_stream::stream! {
         let mut buffer = String::new();
         let mut utf8_remainder: Vec<u8> = Vec::new();
         let mut state = AnthropicToResponsesState::with_tool_context(tool_context);
@@ -747,7 +751,7 @@ pub(crate) fn create_responses_sse_stream_from_anthropic_with_context<
                         while let Some(block) = take_sse_block(&mut buffer) {
                             let (events, failed) = process_anthropic_sse_block(&mut state, &block);
                             for event in events {
-                                yield Ok(event);
+                                yield Ok((event, state.final_answer_eligible()));
                             }
                             if failed {
                                 stream_failed = true;
@@ -765,7 +769,7 @@ pub(crate) fn create_responses_sse_stream_from_anthropic_with_context<
                         format!("Stream error: {e}"),
                         Some("stream_error".to_string()),
                     ) {
-                        yield Ok(event);
+                        yield Ok((event, false));
                     }
                     stream_failed = true;
                     break;
@@ -784,7 +788,7 @@ pub(crate) fn create_responses_sse_stream_from_anthropic_with_context<
                             &body,
                             state.tool_context.clone(),
                         ) {
-                            yield Ok(event);
+                            yield Ok((event, false));
                         }
                         state.completed = true;
                     }
@@ -793,7 +797,7 @@ pub(crate) fn create_responses_sse_stream_from_anthropic_with_context<
             if !state.completed {
                 let (events, failed) = process_anthropic_sse_block(&mut state, &buffer);
                 for event in events {
-                    yield Ok(event);
+                    yield Ok((event, state.final_answer_eligible()));
                 }
                 stream_failed = failed;
             }
@@ -804,7 +808,7 @@ pub(crate) fn create_responses_sse_stream_from_anthropic_with_context<
                 // message_delta (stop_reason + final usage) arrived but the stream ended
                 // before message_stop; the turn is semantically complete, finalize normally.
                 for event in state.finalize() {
-                    yield Ok(event);
+                    yield Ok((event, state.final_answer_eligible()));
                 }
             } else if state.has_substantive_output() {
                 // Upstream truncated mid-stream (e.g. a proxy closed the connection without
@@ -813,7 +817,7 @@ pub(crate) fn create_responses_sse_stream_from_anthropic_with_context<
                 state.stop_reason = Some("max_tokens".to_string());
                 state.stream_truncated = true;
                 for event in state.finalize() {
-                    yield Ok(event);
+                    yield Ok((event, false));
                 }
             } else {
                 // Stream ended before any terminal signal or output: surface a failure.
@@ -821,11 +825,11 @@ pub(crate) fn create_responses_sse_stream_from_anthropic_with_context<
                     "Upstream Anthropic stream ended before message_stop".to_string(),
                     Some("stream_truncated".to_string()),
                 ) {
-                    yield Ok(event);
+                    yield Ok((event, false));
                 }
             }
         }
-    }
+    })
 }
 
 #[cfg(test)]
@@ -862,6 +866,134 @@ mod tests {
             .into_iter()
             .map(|chunk| String::from_utf8_lossy(&chunk).to_string())
             .collect()
+    }
+
+    fn assert_anthropic_message_phases(output: &str, expected: &[Option<&str>]) {
+        let events: Vec<Value> = output
+            .split("\n\n")
+            .filter_map(|block| block.lines().find_map(|line| line.strip_prefix("data: ")))
+            .map(|data| serde_json::from_str(data).unwrap())
+            .collect();
+        let messages: Vec<&Value> = events
+            .iter()
+            .filter(|event| {
+                event["type"] == "response.output_item.done" && event["item"]["type"] == "message"
+            })
+            .map(|event| &event["item"])
+            .collect();
+        assert_eq!(
+            messages
+                .iter()
+                .map(|item| item["phase"].as_str())
+                .collect::<Vec<_>>(),
+            expected
+        );
+        let terminal = events
+            .iter()
+            .find(|event| {
+                matches!(
+                    event["type"].as_str(),
+                    Some("response.completed" | "response.failed")
+                )
+            })
+            .unwrap();
+        for message in messages {
+            let item = terminal["response"]["output"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|item| item["id"] == message["id"])
+                .unwrap();
+            assert_eq!(item, message);
+        }
+    }
+
+    #[tokio::test]
+    async fn anthropic_json_and_sse_message_phases_match_across_tools_and_reasoning() {
+        let message = json!({
+            "type": "message", "id": "phase", "stop_reason": "end_turn",
+            "content": [
+                {"type": "text", "text": "Checking"},
+                {"type": "thinking", "thinking": "Reasoning", "signature": "signed"},
+                {"type": "tool_use", "id": "call_phase", "name": "Read", "input": {}},
+                {"type": "text", "text": "Answer"},
+                {"type": "thinking", "thinking": "Tail", "signature": "signed_tail"}
+            ]
+        });
+        assert_anthropic_message_phases(
+            &render_message_events(&message),
+            &[Some("commentary"), Some("final_answer")],
+        );
+        // The HTTP-200 JSON fallback is wrapped once more by the live converter;
+        // its already assigned phases must remain exactly the same.
+        assert_anthropic_message_phases(
+            &run(&message.to_string()).await,
+            &[Some("commentary"), Some("final_answer")],
+        );
+        let mut wire = String::new();
+        for event in [
+            json!({"type": "message_start", "message": {"id": "phase"}}),
+            json!({"type": "content_block_start", "index": 0, "content_block": {"type": "text", "text": "Checking"}}),
+            json!({"type": "content_block_stop", "index": 0}),
+            json!({"type": "content_block_start", "index": 1, "content_block": {"type": "tool_use", "id": "call_phase", "name": "Read", "input": {}}}),
+            json!({"type": "content_block_stop", "index": 1}),
+            json!({"type": "message_delta", "delta": {"stop_reason": "tool_use"}}),
+            json!({"type": "message_stop"}),
+        ] {
+            wire.push_str(&format!("data: {event}\n\n"));
+        }
+        assert_anthropic_message_phases(&run(&wire).await, &[Some("commentary")]);
+    }
+
+    #[tokio::test]
+    async fn anthropic_partial_or_refused_text_has_no_inferred_final_answer() {
+        for reason in [
+            Some("max_tokens"),
+            Some("refusal"),
+            Some("pause_turn"),
+            None,
+        ] {
+            let message = json!({"type": "message", "content": [{"type": "text", "text": "Partial"}], "stop_reason": reason});
+            assert_anthropic_message_phases(&render_message_events(&message), &[None]);
+        }
+        let wire = concat!(
+            "data: {\"type\":\"message_start\",\"message\":{\"id\":\"phase\"}}\n\n",
+            "data: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"text\",\"text\":\"Partial\"}}\n\n",
+            "data: {\"type\":\"content_block_stop\",\"index\":0}\n\n"
+        );
+        assert_anthropic_message_phases(&run(wire).await, &[None]);
+        let failed =
+            format!("{wire}data: {{\"type\":\"error\",\"error\":{{\"message\":\"failed\"}}}}\n\n");
+        assert_anthropic_message_phases(&run(&failed).await, &[None]);
+    }
+
+    #[tokio::test]
+    async fn anthropic_reasoning_stays_live_after_text_stops_without_a_terminal_event() {
+        let wire = concat!(
+            "data: {\"type\":\"message_start\",\"message\":{\"id\":\"phase_live\"}}\n\n",
+            "data: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"text\",\"text\":\"Checking\"}}\n\n",
+            "data: {\"type\":\"content_block_stop\",\"index\":0}\n\n",
+            "data: {\"type\":\"content_block_start\",\"index\":1,\"content_block\":{\"type\":\"thinking\",\"thinking\":\"\"}}\n\n",
+            "data: {\"type\":\"content_block_delta\",\"index\":1,\"delta\":{\"type\":\"thinking_delta\",\"thinking\":\"Still thinking\"}}\n\n"
+        );
+        let source = stream::iter(vec![Ok::<_, std::io::Error>(Bytes::from_static(
+            wire.as_bytes(),
+        ))])
+        .chain(stream::pending());
+        let converted = create_responses_sse_stream_from_anthropic(source);
+        futures::pin_mut!(converted);
+        loop {
+            let chunk = tokio::time::timeout(std::time::Duration::from_secs(1), converted.next())
+                .await
+                .expect("active reasoning must reach the downstream before EOF")
+                .unwrap()
+                .unwrap();
+            let chunk = std::str::from_utf8(&chunk).unwrap();
+            if chunk.contains("response.reasoning_summary_text.delta") {
+                assert!(chunk.contains("Still thinking"));
+                break;
+            }
+        }
     }
 
     #[test]

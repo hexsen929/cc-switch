@@ -66,6 +66,7 @@ struct ChatToResponsesState {
     output_items: Vec<(u32, Value)>,
     latest_usage: Option<Value>,
     finish_reason: Option<String>,
+    saw_refusal: bool,
     tool_context: CodexToolContext,
     /// 本回合因缺少合法函数名而被丢弃的工具调用数（见 `finalize_tools`）。
     dropped_tool_calls: usize,
@@ -88,6 +89,7 @@ impl Default for ChatToResponsesState {
             output_items: Vec::new(),
             latest_usage: None,
             finish_reason: None,
+            saw_refusal: false,
             tool_context: CodexToolContext::default(),
             dropped_tool_calls: 0,
         }
@@ -95,6 +97,10 @@ impl Default for ChatToResponsesState {
 }
 
 impl ChatToResponsesState {
+    fn final_answer_eligible(&self) -> bool {
+        !self.saw_refusal && sse::chat_final_answer_eligible(self.finish_reason.as_deref())
+    }
+
     fn with_tool_context(tool_context: CodexToolContext) -> Self {
         Self {
             tool_context,
@@ -137,6 +143,7 @@ impl ChatToResponsesState {
         let Some(message) = choice.get("message") else {
             return events;
         };
+        self.saw_refusal |= chat_has_refusal(message);
 
         if let Some(reasoning) = chat_delta_reasoning_text(message) {
             events.extend(self.push_reasoning_delta(&reasoning));
@@ -196,6 +203,7 @@ impl ChatToResponsesState {
         };
 
         if let Some(delta) = choice.get("delta") {
+            self.saw_refusal |= chat_has_refusal(delta);
             if let Some(reasoning) = chat_delta_reasoning_text(delta) {
                 events.extend(self.push_reasoning_delta(&reasoning));
                 self.append_reasoning_to_active_tools(&reasoning);
@@ -796,6 +804,21 @@ fn chat_delta_reasoning_text(delta: &Value) -> Option<String> {
     extract_reasoning_field_text(delta)
 }
 
+fn chat_has_refusal(message: &Value) -> bool {
+    message
+        .get("refusal")
+        .and_then(Value::as_str)
+        .is_some_and(|text| !text.is_empty())
+        || message
+            .get("content")
+            .and_then(Value::as_array)
+            .is_some_and(|parts| {
+                parts
+                    .iter()
+                    .any(|part| part.get("type").and_then(Value::as_str) == Some("refusal"))
+            })
+}
+
 fn chat_message_content_text(message: &Value) -> Option<String> {
     if let Some(text) = message.get("content").and_then(|v| v.as_str()) {
         return Some(text.to_string());
@@ -830,7 +853,7 @@ pub fn create_responses_sse_stream_from_chat_with_context<E: std::error::Error +
     stream: impl Stream<Item = Result<Bytes, E>> + Send + 'static,
     tool_context: CodexToolContext,
 ) -> impl Stream<Item = Result<Bytes, std::io::Error>> + Send {
-    async_stream::stream! {
+    sse::stream_with_message_phases(async_stream::stream! {
         let mut buffer = String::new();
         let mut utf8_remainder: Vec<u8> = Vec::new();
         let mut state = ChatToResponsesState::with_tool_context(tool_context);
@@ -866,7 +889,7 @@ pub fn create_responses_sse_stream_from_chat_with_context<E: std::error::Error +
                         let data = data_parts.join("\n");
                         if data.trim() == "[DONE]" {
                             for event in state.finalize() {
-                                yield Ok(event);
+                                yield Ok((event, state.final_answer_eligible()));
                             }
                             // [DONE] is terminal, including failed/incomplete finalization.
                             return;
@@ -879,13 +902,14 @@ pub fn create_responses_sse_stream_from_chat_with_context<E: std::error::Error +
 
                         if event_name.as_deref() == Some("error") || chunk.get("error").is_some() {
                             let (message, error_type) = extract_chat_sse_error(&chunk);
-                            yield Ok(state.failed_event(message, error_type));
+                            let event = state.failed_event(message, error_type);
+                            yield Ok((event, false));
                             stream_failed = true;
                             break;
                         }
 
                         for event in state.handle_chat_chunk(&chunk) {
-                            yield Ok(event);
+                            yield Ok((event, state.final_answer_eligible()));
                         }
                     }
 
@@ -894,10 +918,11 @@ pub fn create_responses_sse_stream_from_chat_with_context<E: std::error::Error +
                     }
                 }
                 Err(e) => {
-                    yield Ok(state.failed_event(
+                    let event = state.failed_event(
                         format!("Stream error: {e}"),
                         Some("stream_error".to_string()),
-                    ));
+                    );
+                    yield Ok((event, false));
                     stream_failed = true;
                     break;
                 }
@@ -907,21 +932,22 @@ pub fn create_responses_sse_stream_from_chat_with_context<E: std::error::Error +
         if !stream_failed {
             if state.completed || state.finish_reason.is_some() {
                 for event in state.finalize() {
-                    yield Ok(event);
+                    yield Ok((event, state.final_answer_eligible()));
                 }
             } else if state.has_substantive_output() {
                 state.finish_reason = Some("length".to_string());
                 for event in state.finalize() {
-                    yield Ok(event);
+                    yield Ok((event, false));
                 }
             } else {
-                yield Ok(state.failed_event(
+                let event = state.failed_event(
                     "Upstream Chat Completions stream ended before sending finish_reason".to_string(),
                     Some("stream_truncated".to_string()),
-                ));
+                );
+                yield Ok((event, false));
             }
         }
-    }
+    })
 }
 
 fn extract_chat_sse_error(value: &Value) -> (String, Option<String>) {
@@ -959,10 +985,12 @@ pub(crate) fn build_responses_sse_from_chat_completion(
     let mut state = ChatToResponsesState::with_tool_context(tool_context.clone());
     let mut events = state.handle_chat_completion_value(body);
     events.extend(state.finalize());
-    Ok(events
-        .into_iter()
-        .flat_map(|bytes| bytes.to_vec())
-        .collect())
+    Ok(
+        sse::with_message_phases(events, state.final_answer_eligible())
+            .into_iter()
+            .flat_map(|bytes| bytes.to_vec())
+            .collect(),
+    )
 }
 
 #[cfg(test)]
@@ -993,6 +1021,95 @@ mod tests {
                 serde_json::from_str(data).ok()
             })
             .collect()
+    }
+
+    fn assert_message_phase_matches_output(output: &str, expected: Option<&str>) {
+        let events = parse_sse_events(output);
+        let done = events
+            .iter()
+            .find(|event| {
+                event["type"] == "response.output_item.done" && event["item"]["type"] == "message"
+            })
+            .expect("message done");
+        let terminal = events
+            .iter()
+            .find(|event| {
+                matches!(
+                    event["type"].as_str(),
+                    Some("response.completed" | "response.failed")
+                )
+            })
+            .expect("response terminal");
+        let item = terminal["response"]["output"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|item| item["id"] == done["item"]["id"])
+            .expect("message in final output");
+        assert_eq!(done["item"]["phase"].as_str(), expected);
+        assert_eq!(*item, done["item"]);
+    }
+
+    #[tokio::test]
+    async fn chat_stream_message_phase_distinguishes_progress_answer_and_unfinished_text() {
+        for (reason, expected) in [
+            (Some("stop"), Some("final_answer")),
+            (Some("length"), None),
+            (Some("content_filter"), None),
+            (Some("unknown"), None),
+            (None, None),
+        ] {
+            let chunk = format!(
+                "data: {}\n\n",
+                json!({
+                    "id": "phase", "choices": [{"delta": {"content": "Answer"}, "finish_reason": reason}]
+                })
+            );
+            let output = collect(vec![&chunk, "data: [DONE]\n\n"]).await;
+            assert_message_phase_matches_output(&output, expected);
+        }
+        let progress = format!(
+            "data: {}\n\n",
+            json!({
+                "choices": [{"delta": {"content": "Checking", "tool_calls": [{
+                    "index": 0, "id": "call_phase", "type": "function",
+                    "function": {"name": "Read", "arguments": "{}"}
+                }]}, "finish_reason": "tool_calls"}]
+            })
+        );
+        let output = collect(vec![&progress, "data: [DONE]\n\n"]).await;
+        assert_message_phase_matches_output(&output, Some("commentary"));
+
+        let refusal = format!(
+            "data: {}\n\n",
+            json!({
+                "choices": [{"delta": {"content": "Cannot answer", "refusal": "Refused"}, "finish_reason": "stop"}]
+            })
+        );
+        let output = collect(vec![&refusal, "data: [DONE]\n\n"]).await;
+        assert_message_phase_matches_output(&output, None);
+    }
+
+    #[test]
+    fn synthetic_chat_stream_has_the_same_message_phases_as_live_conversion() {
+        for (reason, tools, expected) in [
+            ("stop", json!([]), Some("final_answer")),
+            (
+                "tool_calls",
+                json!([{ "id": "call_phase", "type": "function", "function": { "name": "Read", "arguments": "{}" } }]),
+                Some("commentary"),
+            ),
+            ("length", json!([]), None),
+        ] {
+            let bytes = build_responses_sse_from_chat_completion(&json!({
+                "choices": [{"message": {"role": "assistant", "content": "Text", "tool_calls": tools}, "finish_reason": reason}]
+            }), &CodexToolContext::default()).unwrap();
+            assert_message_phase_matches_output(std::str::from_utf8(&bytes).unwrap(), expected);
+        }
+        let refusal = build_responses_sse_from_chat_completion(&json!({
+            "choices": [{"message": {"content": "Cannot answer", "refusal": "Refused"}, "finish_reason": "stop"}]
+        }), &CodexToolContext::default()).unwrap();
+        assert_message_phase_matches_output(std::str::from_utf8(&refusal).unwrap(), None);
     }
 
     #[tokio::test]

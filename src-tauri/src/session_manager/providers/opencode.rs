@@ -63,6 +63,44 @@ fn sqlite_table_exists(conn: &Connection, table: &str) -> bool {
     .unwrap_or(false)
 }
 
+fn sqlite_column_exists(conn: &Connection, table: &str, column: &str) -> bool {
+    let Ok(mut statement) = conn.prepare(&format!("PRAGMA table_info({table})")) else {
+        return false;
+    };
+    let Ok(columns) = statement.query_map([], |row| row.get::<_, String>(1)) else {
+        return false;
+    };
+    columns.flatten().any(|name| name == column)
+}
+
+fn sqlite_parent_expr(conn: &Connection, table: &str, prefix: &str) -> String {
+    if sqlite_column_exists(conn, table, "parent_id") {
+        format!("COALESCE({prefix}parent_id, '')")
+    } else {
+        "''".to_string()
+    }
+}
+
+fn sqlite_session_is_subagent(conn: &Connection, id: &str) -> Result<bool, String> {
+    for table in ["session_v2", "session"] {
+        if !sqlite_column_exists(conn, table, "parent_id") {
+            continue;
+        }
+        let mut statement = conn
+            .prepare(&format!(
+                "SELECT 1 FROM {table} WHERE id = ?1 AND COALESCE(parent_id, '') <> '' LIMIT 1"
+            ))
+            .map_err(|error| format!("Failed to check OpenCode session parent: {error}"))?;
+        if statement
+            .exists([id])
+            .map_err(|error| format!("Failed to check OpenCode session parent: {error}"))?
+        {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
 /// Read the V1→V2 migration marker timestamp (`migration.v1-v2`) from the `kv` table.
 fn get_v2_migration_marker_ts(conn: &Connection) -> Option<i64> {
     if !sqlite_table_exists(conn, "kv") {
@@ -170,13 +208,15 @@ fn parse_sqlite_session_row(
     let directory: String = row.get(2)?;
     let created: i64 = row.get(3)?;
     let updated: i64 = row.get(4)?;
+    let parent: String = row.get(5)?;
+    let agent_type: Option<String> = row.get(6)?;
 
     let display_title = if title.trim().is_empty() {
         path_basename(&directory)
     } else {
         Some(title)
     };
-    Ok(SessionMeta {
+    let mut meta = SessionMeta {
         provider_id: PROVIDER_ID.to_string(),
         session_id: session_id.clone(),
         title: display_title.clone(),
@@ -190,14 +230,24 @@ fn parse_sqlite_session_row(
         last_active_at: Some(updated),
         source_path: Some(format!("sqlite:{db_display}:{session_id}")),
         resume_command: Some(format!("opencode -s {session_id}")),
-    })
+        agent_type,
+        ..SessionMeta::default()
+    };
+    if !parent.trim().is_empty() {
+        meta.task = meta.title.clone();
+        meta.mark_subagent(Some(parent));
+    }
+    Ok(meta)
 }
 
 fn scan_sessions_sqlite_v1(conn: &Connection, db_display: &str) -> Vec<SessionMeta> {
-    let sql = "SELECT id, COALESCE(title, ''), directory, time_created, time_updated \
-               FROM session ORDER BY time_updated DESC";
+    let parent = sqlite_parent_expr(conn, "session", "");
+    let sql = format!(
+        "SELECT id, COALESCE(title, ''), directory, time_created, time_updated, {parent}, NULL \
+               FROM session ORDER BY time_updated DESC"
+    );
 
-    let mut stmt = match conn.prepare(sql) {
+    let mut stmt = match conn.prepare(&sql) {
         Ok(s) => s,
         Err(_) => return Vec::new(),
     };
@@ -211,17 +261,24 @@ fn scan_sessions_sqlite_v1(conn: &Connection, db_display: &str) -> Vec<SessionMe
 }
 
 fn scan_sessions_sqlite_v2(conn: &Connection, db_display: &str) -> Vec<SessionMeta> {
-    let sql = "SELECT s.id, \
+    let parent = sqlite_parent_expr(conn, "session_v2", "s.");
+    let agent = if sqlite_column_exists(conn, "session_v2", "agent") {
+        "s.agent"
+    } else {
+        "NULL"
+    };
+    let sql = format!("SELECT s.id, \
                       COALESCE(s.title, ''), \
                       s.directory, \
                       s.time_created, \
-                      MAX(s.time_updated, COALESCE(MAX(m.time_updated), s.time_updated)) AS last_active_at \
+                      MAX(s.time_updated, COALESCE(MAX(m.time_updated), s.time_updated)) AS last_active_at, \
+                      {parent}, {agent} \
                FROM session_v2 s \
                LEFT JOIN session_message m ON m.session_id = s.id \
                GROUP BY s.id \
-               ORDER BY last_active_at DESC";
+               ORDER BY last_active_at DESC");
 
-    let mut stmt = match conn.prepare(sql) {
+    let mut stmt = match conn.prepare(&sql) {
         Ok(s) => s,
         Err(_) => return Vec::new(),
     };
@@ -236,12 +293,13 @@ fn scan_sessions_sqlite_v2(conn: &Connection, db_display: &str) -> Vec<SessionMe
     // Include V1 sessions for mixed V1/V2 databases (e.g. user tested 2.x beta then continued on 1.x)
     if sqlite_table_exists(conn, "session") {
         if let Some(marker_ts) = get_v2_migration_marker_ts(conn) {
-            let v1_sql = "SELECT id, COALESCE(title, ''), directory, time_created, time_updated \
+            let parent = sqlite_parent_expr(conn, "session", "");
+            let v1_sql = format!("SELECT id, COALESCE(title, ''), directory, time_created, time_updated, {parent}, NULL \
                           FROM session \
                           WHERE NOT EXISTS (SELECT 1 FROM session_v2 WHERE session_v2.id = session.id) \
                             AND time_updated > ?1 \
-                          ORDER BY time_updated DESC";
-            if let Ok(mut v1_stmt) = conn.prepare(v1_sql) {
+                          ORDER BY time_updated DESC");
+            if let Ok(mut v1_stmt) = conn.prepare(&v1_sql) {
                 if let Ok(rows) =
                     v1_stmt.query_map([marker_ts], |row| parse_sqlite_session_row(row, db_display))
                 {
@@ -531,6 +589,8 @@ pub fn delete_session(storage: &Path, path: &Path, session_id: &str) -> Result<b
         ));
     }
 
+    let session_file = deletable_session_file(storage, session_id)?;
+
     let mut message_files = Vec::new();
     collect_json_files(path, &mut message_files);
 
@@ -576,14 +636,12 @@ pub fn delete_session(storage: &Path, path: &Path, session_id: &str) -> Result<b
         )
     })?;
 
-    if let Some(session_file) = find_session_file(storage, session_id) {
-        remove_file_if_exists(&session_file).map_err(|e| {
-            format!(
-                "Failed to delete OpenCode session file {}: {e}",
-                session_file.display()
-            )
-        })?;
-    }
+    remove_file_if_exists(&session_file).map_err(|e| {
+        format!(
+            "Failed to delete OpenCode session file {}: {e}",
+            session_file.display()
+        )
+    })?;
 
     Ok(true)
 }
@@ -612,6 +670,10 @@ pub fn delete_session_sqlite(session_id: &str, source: &str) -> Result<bool, Str
         Connection::open(&db_path).map_err(|e| format!("Failed to open OpenCode database: {e}"))?;
 
     let schema = detect_schema(&conn);
+
+    if sqlite_session_is_subagent(&conn, session_id)? {
+        return Err("Subagent conversations are read-only".to_string());
+    }
 
     let tx = conn
         .unchecked_transaction()
@@ -731,7 +793,7 @@ fn parse_session(storage: &Path, path: &Path) -> Option<SessionMeta> {
         get_first_user_summary(storage, &session_id)
     };
 
-    Some(SessionMeta {
+    let mut meta = SessionMeta {
         provider_id: PROVIDER_ID.to_string(),
         session_id: session_id.clone(),
         title: display_title,
@@ -741,7 +803,17 @@ fn parse_session(storage: &Path, path: &Path) -> Option<SessionMeta> {
         last_active_at: updated_at.or(created_at),
         source_path: Some(source_path),
         resume_command: Some(format!("opencode -s {session_id}")),
-    })
+        ..SessionMeta::default()
+    };
+    if let Some(parent) = value
+        .get("parentID")
+        .and_then(Value::as_str)
+        .filter(|id| !id.trim().is_empty())
+    {
+        meta.task = meta.title.clone();
+        meta.mark_subagent(Some(parent.to_string()));
+    }
+    Some(meta)
 }
 
 /// Read the first user message's first text part to use as summary.
@@ -863,15 +935,53 @@ fn collect_json_files(root: &Path, files: &mut Vec<PathBuf>) {
     }
 }
 
-fn find_session_file(storage: &Path, session_id: &str) -> Option<PathBuf> {
+fn deletable_session_file(storage: &Path, session_id: &str) -> Result<PathBuf, String> {
     let session_root = storage.join("session");
     let mut files = Vec::new();
-    collect_json_files(&session_root, &mut files);
+    collect_session_files_for_delete(&session_root, &mut files)?;
     let expected = format!("{session_id}.json");
-
-    files
+    let mut matching = files
         .into_iter()
-        .find(|path| path.file_name().and_then(|name| name.to_str()) == Some(expected.as_str()))
+        .filter(|path| path.file_name().and_then(|name| name.to_str()) == Some(expected.as_str()));
+    let file = matching
+        .next()
+        .ok_or("OpenCode session metadata is missing; refresh the list")?;
+    if matching.next().is_some() {
+        return Err("OpenCode session metadata is ambiguous; delete it in OpenCode".to_string());
+    }
+    let meta = parse_session(storage, &file)
+        .ok_or("OpenCode session metadata cannot be read; delete it in OpenCode")?;
+    if meta.session_id != session_id {
+        return Err("OpenCode session metadata ID mismatch".to_string());
+    }
+    if meta.read_only {
+        return Err("Subagent conversations are read-only".to_string());
+    }
+    Ok(file)
+}
+
+fn collect_session_files_for_delete(root: &Path, files: &mut Vec<PathBuf>) -> Result<(), String> {
+    let entries = std::fs::read_dir(root)
+        .map_err(|error| format!("Cannot verify OpenCode session metadata: {error}"))?;
+    for entry in entries {
+        let entry =
+            entry.map_err(|error| format!("Cannot verify OpenCode session metadata: {error}"))?;
+        let kind = entry
+            .file_type()
+            .map_err(|error| format!("Cannot verify OpenCode session metadata: {error}"))?;
+        if kind.is_symlink() {
+            return Err(
+                "Cannot verify linked OpenCode session metadata; delete it in OpenCode".to_string(),
+            );
+        }
+        let path = entry.path();
+        if kind.is_dir() {
+            collect_session_files_for_delete(&path, files)?;
+        } else if path.extension().and_then(|extension| extension.to_str()) == Some("json") {
+            files.push(path);
+        }
+    }
+    Ok(())
 }
 
 fn remove_file_if_exists(path: &Path) -> std::io::Result<()> {
@@ -932,6 +1042,168 @@ mod tests {
             ",
         )
         .expect("create sqlite schema");
+    }
+
+    #[test]
+    fn sqlite_subagents_are_nested_without_changing_legacy_main_session_commands() {
+        let conn = Connection::open_in_memory().unwrap();
+        create_sqlite_schema(&conn);
+        conn.execute_batch("ALTER TABLE session ADD COLUMN parent_id TEXT;
+            INSERT INTO session VALUES ('ses_main', 'Main', '/work', 1, 2, NULL);
+            INSERT INTO session VALUES ('ses_child', 'Inspect imports', '/work', 1, 3, 'ses_main');
+            INSERT INTO session VALUES ('ses_nested', 'Inspect tests', '/work', 1, 4, 'ses_child');").unwrap();
+        let sessions = scan_sessions_sqlite_v1(&conn, "/tmp/opencode.db");
+        let main = sessions
+            .iter()
+            .find(|session| session.session_id == "ses_main")
+            .unwrap();
+        assert!(!main.read_only);
+        assert_eq!(main.resume_command.as_deref(), Some("opencode -s ses_main"));
+        let child = sessions
+            .iter()
+            .find(|session| session.session_id == "ses_child")
+            .unwrap();
+        assert!(child.read_only);
+        assert!(child.resume_command.is_none());
+        assert_eq!(child.parent_session_id.as_deref(), Some("ses_main"));
+        assert_eq!(sessions[0].parent_session_id.as_deref(), Some("ses_child"));
+        assert!(sqlite_session_is_subagent(&conn, "ses_child").unwrap());
+        assert!(!sqlite_session_is_subagent(&conn, "ses_main").unwrap());
+    }
+
+    #[test]
+    fn json_subagent_can_be_read_but_not_deleted() {
+        let temp = tempdir().unwrap();
+        let storage = temp.path();
+        let session_file = storage.join("session/project/ses_child.json");
+        let message_dir = storage.join("message/ses_child");
+        std::fs::create_dir_all(session_file.parent().unwrap()).unwrap();
+        std::fs::create_dir_all(&message_dir).unwrap();
+        std::fs::create_dir_all(storage.join("part/msg_child")).unwrap();
+        std::fs::write(&session_file, r#"{"id":"ses_child","parentID":"ses_main","directory":"/work","title":"Inspect parser"}"#).unwrap();
+        std::fs::write(
+            message_dir.join("msg_child.json"),
+            r#"{"id":"msg_child","role":"assistant"}"#,
+        )
+        .unwrap();
+        std::fs::write(
+            storage.join("part/msg_child/prt_child.json"),
+            r#"{"id":"prt_child","type":"text","text":"Parser found"}"#,
+        )
+        .unwrap();
+        let meta = parse_session(storage, &session_file).unwrap();
+        assert_eq!(meta.parent_session_id.as_deref(), Some("ses_main"));
+        assert!(meta.read_only);
+        assert!(meta.resume_command.is_none());
+        assert!(load_messages(&message_dir)
+            .unwrap()
+            .iter()
+            .any(|message| message.content.contains("Parser found")));
+        assert!(delete_session(storage, &message_dir, "ses_child")
+            .unwrap_err()
+            .contains("read-only"));
+        assert!(session_file.exists());
+        assert!(message_dir.join("msg_child.json").exists());
+    }
+
+    #[test]
+    fn duplicate_json_metadata_cannot_hide_a_read_only_child_during_delete() {
+        let temp = tempdir().unwrap();
+        let storage = temp.path();
+        let main = storage.join("session/old/ses_child.json");
+        let child = storage.join("session/new/ses_child.json");
+        let messages = storage.join("message/ses_child");
+        for folder in [main.parent().unwrap(), child.parent().unwrap(), &messages] {
+            std::fs::create_dir_all(folder).unwrap();
+        }
+        std::fs::write(&main, r#"{"id":"ses_child","title":"Old main"}"#).unwrap();
+        std::fs::write(
+            &child,
+            r#"{"id":"ses_child","parentID":"ses_main","title":"Child"}"#,
+        )
+        .unwrap();
+        std::fs::write(messages.join("msg.json"), "untouched").unwrap();
+        assert!(delete_session(storage, &messages, "ses_child")
+            .unwrap_err()
+            .contains("ambiguous"));
+        assert_eq!(
+            std::fs::read_to_string(messages.join("msg.json")).unwrap(),
+            "untouched"
+        );
+        assert!(main.exists());
+        assert!(child.exists());
+    }
+
+    #[test]
+    fn corrupt_missing_or_mismatched_json_metadata_prevents_session_deletion() {
+        let temp = tempdir().unwrap();
+        let storage = temp.path();
+        let metadata = storage.join("session/project/ses_child.json");
+        let messages = storage.join("message/ses_child");
+        std::fs::create_dir_all(metadata.parent().unwrap()).unwrap();
+        std::fs::create_dir_all(&messages).unwrap();
+        std::fs::write(messages.join("msg.json"), "untouched").unwrap();
+        for content in [None, Some("corrupt"), Some(r#"{"id":"ses_other"}"#)] {
+            if let Some(content) = content {
+                std::fs::write(&metadata, content).unwrap();
+            }
+            assert!(delete_session(storage, &messages, "ses_child").is_err());
+            assert_eq!(
+                std::fs::read_to_string(messages.join("msg.json")).unwrap(),
+                "untouched"
+            );
+        }
+    }
+
+    #[test]
+    #[allow(deprecated)]
+    fn sqlite_subagent_is_rejected_by_delete_and_resume_apis() {
+        if crate::config::sqlite_unsupported_in_temp_dir() {
+            return;
+        }
+        let _guard = opencode_env_lock().lock().unwrap();
+        struct RestoreXdg(Option<std::ffi::OsString>);
+        impl Drop for RestoreXdg {
+            fn drop(&mut self) {
+                if let Some(value) = self.0.take() {
+                    std::env::set_var("XDG_DATA_HOME", value);
+                } else {
+                    std::env::remove_var("XDG_DATA_HOME");
+                }
+            }
+        }
+        let _restore = RestoreXdg(std::env::var_os("XDG_DATA_HOME"));
+        let temp = tempdir().unwrap();
+        std::env::set_var("XDG_DATA_HOME", temp.path());
+        let folder = temp.path().join("opencode");
+        std::fs::create_dir_all(&folder).unwrap();
+        let db = folder.join("opencode.db");
+        let conn = Connection::open(&db).unwrap();
+        create_sqlite_schema(&conn);
+        conn.execute_batch(
+            "ALTER TABLE session ADD COLUMN parent_id TEXT;
+            INSERT INTO session VALUES ('ses_main', 'Main', '/work', 1, 2, NULL);
+            INSERT INTO session VALUES ('ses_child', 'Task', '/work', 1, 3, 'ses_main');",
+        )
+        .unwrap();
+        let child_source = format!("sqlite:{}:ses_child", db.display());
+        assert!(crate::session_manager::resume_session_target(
+            "opencode",
+            "ses_child",
+            &child_source
+        )
+        .unwrap_err()
+        .contains("read-only"));
+        assert!(delete_session_sqlite("ses_child", &child_source)
+            .unwrap_err()
+            .contains("read-only"));
+        assert!(sqlite_session_is_subagent(&conn, "ses_child").unwrap());
+        let main_source = format!("sqlite:{}:ses_main", db.display());
+        let (command, directory) =
+            crate::session_manager::resume_session_target("opencode", "ses_main", &main_source)
+                .unwrap();
+        assert_eq!(command, "opencode -s ses_main");
+        assert_eq!(directory.as_deref(), Some("/work"));
     }
 
     #[test]
@@ -1303,6 +1575,26 @@ mod tests {
             ",
         )
         .expect("create v2 sqlite schema");
+    }
+
+    #[test]
+    fn sqlite_v2_subagents_keep_native_agent_and_parent_fields() {
+        let conn = Connection::open_in_memory().unwrap();
+        create_sqlite_schema_v2(&conn);
+        conn.execute_batch("ALTER TABLE session_v2 ADD COLUMN parent_id TEXT;
+            ALTER TABLE session_v2 ADD COLUMN agent TEXT;
+            INSERT INTO session_v2 VALUES ('ses_main', 'Main', '/work', 1, 2, NULL, NULL);
+            INSERT INTO session_v2 VALUES ('ses_child', 'Inspect tests', '/work', 1, 3, 'ses_main', 'explore');").unwrap();
+        let sessions = scan_sessions_sqlite_v2(&conn, "/tmp/opencode.db");
+        let child = sessions
+            .iter()
+            .find(|session| session.session_id == "ses_child")
+            .unwrap();
+        assert_eq!(child.parent_session_id.as_deref(), Some("ses_main"));
+        assert_eq!(child.agent_type.as_deref(), Some("explore"));
+        assert!(child.read_only);
+        assert!(child.resume_command.is_none());
+        assert!(sqlite_session_is_subagent(&conn, "ses_child").unwrap());
     }
 
     #[test]

@@ -68,7 +68,13 @@ impl ValidatedSource {
     /// 工具落盘输出所在目录：`<sourcePath 去扩展名>/`（Claude `<sessionId>/tool-results/`）
     fn sidecar_base(&self) -> Option<PathBuf> {
         match &self.location {
-            SourceLocation::Path { path, .. } if path.is_file() => Some(path.with_extension("")),
+            SourceLocation::Path { path, .. } if path.is_file() => {
+                if self.provider_id == "claude" {
+                    Some(super::providers::claude::transcript_sidecar(path))
+                } else {
+                    Some(path.with_extension(""))
+                }
+            }
             SourceLocation::Path { path, .. } => Some(path.clone()),
             SourceLocation::Sqlite { .. } => None,
         }

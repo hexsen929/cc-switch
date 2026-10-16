@@ -541,6 +541,14 @@ function KeyRow({
                 {APP_DISPLAY_NAME[app]}
               </Button>
             ))}
+            <Button
+              variant={apps.includes("web-search") ? "solid" : "neutral"}
+              size="sm"
+              onClick={() => toggleApp("web-search")}
+              disabled={disabled}
+            >
+              {t("proxy.lanGateway.webSearch", "联网搜索 MCP")}
+            </Button>
           </div>
           <Input
             value={providers}

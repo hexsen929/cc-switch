@@ -1035,6 +1035,36 @@
     },
     "data": {
       "location": "Konum"
+    },
+    "searchMcp": {
+      "saved": "Web arama ayarları kaydedildi",
+      "enabled": "Ortak web arama MCP sunucusunu etkinleştir",
+      "description": "İstemciler web_search ve web_fetch araçlarını paylaşır; kaynaklar aşağıdaki sırayla denenir. Varsayılan olarak kapalıdır, mevcut istemci aramasını değiştirmez.",
+      "endpoint": "Ortak MCP adresi",
+      "running": "Ağ geçidi çalışıyor",
+      "stopped": "Ağ geçidi durmuş",
+      "gatewayHint": "Etkinleştirmek, model yollarını değiştirmeden CC Switch ağ geçidini başlatır. Kullanım sırasında açık tutun. LAN erişimi web-search izni olan bir anahtar gerektirir. Sayfa okuma özel ağlara erişmez.",
+      "moveUp": "Önceliği artır",
+      "moveDown": "Önceliği azalt",
+      "instanceUrl": "SearXNG örneği URL adresi (gerekli)",
+      "baseUrl": "Özel API adresi (resmî adres için boş)",
+      "baseUrlLabel": "Arama kaynağı adresi",
+      "keys": "API anahtarları",
+      "keysPlaceholder": "{{count}} kayıtlı anahtar; korumak için boş bırakın, yenilerini virgülle ayırın",
+      "orderedKeys": "Anahtarları sırayla kullan (kapalıyken dönüşümlü)",
+      "clearKeys": "Kayıtlı anahtarları temizle",
+      "backoff": "Reddedilen veya sınırlanan anahtarları geçici olarak sona al",
+      "timeout": "Toplam zaman aşımı (5–120 saniye)",
+      "maxChars": "En fazla döndürülen karakter",
+      "dailyLimit": "Ağ geçidi anahtarı başına günlük çağrı sınırı, UTC (0 sınırsız)",
+      "clients": "Bu istemcilerin MCP listelerine ekle",
+      "install": "Kaydet ve MCP listesine ekle",
+      "readQuota": "Kayıtlı anahtar kotalarını sorgula",
+      "quotaHint": "Kota sorgulama şu anda Tavily için desteklenir. Diğer kaynaklar veya başarısız sorgular sıfır yerine bilinmiyor olarak gösterilir.",
+      "unlimited": "Sınırsız",
+      "unknown": "Bilinmiyor",
+      "keyNumber": "Anahtar {{number}}",
+      "installFailed": "Arama ayarları kaydedildi ancak istemcilere eklenemedi: {{error}}"
     }
   },
   "apps": {
@@ -1496,6 +1526,13 @@
       "rawMatch": "Kaynaktaki eşleşmeler",
       "expandContent": "İçeriğin tamamını göster",
       "collapseContent": "Daralt"
+    },
+    "subagents": {
+      "expand": "{{title}} için alt ajan oturumlarını genişlet",
+      "collapse": "{{title}} için alt ajan oturumlarını daralt",
+      "count": "Alt ajanlar: {{count}}",
+      "readOnly": "Alt ajan · Salt okunur",
+      "readOnlyHint": "Alt ajan oturumları salt okunurdur. Üst oturumda devam edin."
     }
   },
   "console": {
@@ -3729,7 +3766,10 @@
       "stopFailed": "Yönlendirme hizmeti durdurulamadı: {{detail}}"
     },
     "stoppedWithRestore": "Yönlendirme hizmeti durduruldu; tüm uygulamalar doğrudan bağlantılara geri döndü",
-    "stopWithRestoreFailed": "Durdurma başarısız oldu: {{detail}}"
+    "stopWithRestoreFailed": "Durdurma başarısız oldu: {{detail}}",
+    "lanGateway": {
+      "webSearch": "Web arama MCP"
+    }
   },
   "streamCheck": {
     "reachable": "{{providerName}}'ye ulaşılabilir ({{responseTimeMs}}ms)",
@@ -4757,6 +4797,28 @@
       "loading": "Kota kontrol ediliyor…",
       "refresh": "Kotayı yenile",
       "refreshAria": "{{login}} için kotayı yenileyin"
+    }
+  },
+  "requestDiagnostics": {
+    "title": "İstek tanılama",
+    "scope": "Yalnızca son 40 vekil isteği tutulur. Gövdeler varsayılan olarak kaydedilmez; etkinleştirilirse maskelenerek bellekte tutulur ve her biri 128 KiB ile sınırlanır. Kapatmak önizlemeleri temizler.",
+    "capture": "İstek ve yanıt gövdesi önizlemeleri",
+    "captureOn": "Etkin",
+    "captureOff": "Kapalı",
+    "loadFailed": "Tanılama yüklenemedi veya kaydedilemedi.",
+    "unavailable": "Bu istek için tanılama kalmadı veya toplanmadı. Geçmiş ve içe aktarılan oturumlar kaydedilmez.",
+    "truncated": "Önizleme toplama sınırında kesildi.",
+    "noBody": "Okunabilir önizleme kaydedilmedi.",
+    "canceled": "Yanıt tamamlanmadan okuma durdu.",
+    "attemptsTruncated": "Sınırı aşan denemeler bu önizlemede gösterilmedi.",
+    "upstream": "Bunlar, istemci protokolü dönüşümünden önceki son üst sunucu denemesini gösterir. Kimlik doğrulama başlıkları kaydedilmez.",
+    "request": "Üst sunucu isteği",
+    "response": "Üst sunucu yanıtı",
+    "phases": {
+      "prepare": "Yerel hazırlık",
+      "headers": "Üst sunucu başlıkları",
+      "content": "İlk içerik",
+      "receive": "Yanıt okuma"
     }
   }
 }

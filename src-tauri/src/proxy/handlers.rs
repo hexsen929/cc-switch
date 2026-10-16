@@ -503,6 +503,7 @@ fn validate_claude_desktop_gateway_auth(
 ///
 /// 支持 OpenAI Chat Completions 和 Responses API 两种格式的转换
 struct ClaudeUsageLog {
+    diagnostics: Option<super::diagnostics::DiagnosticHandle>,
     model: String,
     request_model: String,
     outbound_model: String,
@@ -534,6 +535,7 @@ fn prepare_claude_usage_log(
         .unwrap_or_else(|| ctx.request_model.clone());
 
     Some(ClaudeUsageLog {
+        diagnostics: ctx.diagnostics.clone(),
         model,
         request_model: ctx.request_model.clone(),
         outbound_model: ctx
@@ -566,6 +568,7 @@ async fn write_claude_usage_log(state: &ProxyState, log: ClaudeUsageLog) {
         log.status_code,
         Some(log.session_id),
         log.gateway_key_id,
+        log.diagnostics,
     )
     .await;
 }
@@ -685,6 +688,7 @@ async fn handle_claude_transform(
             let start_time = ctx.start_time;
             let session_id = ctx.session_id.clone();
             let gateway_key_id = ctx.gateway_key_id.clone();
+            let diagnostics = ctx.diagnostics.clone();
             // 用 ctx 的 app_type：Claude Desktop 网关也走此转换路径，硬编码
             // "claude" 会把 claude-desktop 的行错记到 claude 名下
             let app_type_str = ctx.app_type_str;
@@ -706,6 +710,7 @@ async fn handle_claude_transform(
                         let request_model = request_model.clone();
                         let outbound_model = fallback_model.clone();
                         let gateway_key_id = gateway_key_id.clone();
+                        let diagnostics = diagnostics.clone();
 
                         tokio::spawn(async move {
                             log_usage(
@@ -722,6 +727,7 @@ async fn handle_claude_transform(
                                 status_code,
                                 Some(session_id),
                                 gateway_key_id,
+                                diagnostics,
                             )
                             .await;
                         });
@@ -976,6 +982,7 @@ async fn handle_claude_virtual_tool_stream(
             let provider_id = ctx.provider.id.clone();
             let session_id = ctx.session_id.clone();
             let gateway_key_id = ctx.gateway_key_id.clone();
+            let diagnostics = ctx.diagnostics.clone();
             async move {
                 log_usage(
                     &state,
@@ -991,6 +998,7 @@ async fn handle_claude_virtual_tool_stream(
                     status.as_u16(),
                     Some(session_id),
                     gateway_key_id,
+                    diagnostics,
                 )
                 .await;
             }
@@ -1955,6 +1963,7 @@ async fn handle_codex_xai_native_responses_rewrite(
                     let session_id = ctx.session_id.clone();
                     let latency_ms = ctx.latency_ms();
                     let gateway_key_id = ctx.gateway_key_id.clone();
+                    let diagnostics = ctx.diagnostics.clone();
                     async move {
                         log_usage(
                             &state,
@@ -1970,6 +1979,7 @@ async fn handle_codex_xai_native_responses_rewrite(
                             status.as_u16(),
                             Some(session_id),
                             gateway_key_id,
+                            diagnostics,
                         )
                         .await;
                     }
@@ -2053,6 +2063,7 @@ async fn handle_codex_chat_to_responses_transform(
             let start_time = ctx.start_time;
             let session_id = ctx.session_id.clone();
             let gateway_key_id = ctx.gateway_key_id.clone();
+            let diagnostics = ctx.diagnostics.clone();
 
             Some(SseUsageCollector::new(
                 start_time,
@@ -2082,6 +2093,7 @@ async fn handle_codex_chat_to_responses_transform(
                     let outbound_model = fallback_model.clone();
                     let session_id = session_id.clone();
                     let gateway_key_id = gateway_key_id.clone();
+                    let diagnostics = diagnostics.clone();
 
                     tokio::spawn(async move {
                         log_usage(
@@ -2098,6 +2110,7 @@ async fn handle_codex_chat_to_responses_transform(
                             status.as_u16(),
                             Some(session_id),
                             gateway_key_id,
+                            diagnostics,
                         )
                         .await;
                     });
@@ -2213,6 +2226,7 @@ async fn handle_codex_chat_to_responses_transform(
             let session_id = ctx.session_id.clone();
             let latency_ms = ctx.latency_ms();
             let gateway_key_id = ctx.gateway_key_id.clone();
+            let diagnostics = ctx.diagnostics.clone();
             async move {
                 log_usage(
                     &state,
@@ -2228,6 +2242,7 @@ async fn handle_codex_chat_to_responses_transform(
                     status.as_u16(),
                     Some(session_id),
                     gateway_key_id,
+                    diagnostics,
                 )
                 .await;
             }
@@ -2316,6 +2331,7 @@ async fn handle_codex_virtual_tool_stream(
             let session_id = ctx.session_id.clone();
             let latency_ms = ctx.latency_ms();
             let gateway_key_id = ctx.gateway_key_id.clone();
+            let diagnostics = ctx.diagnostics.clone();
             async move {
                 log_usage(
                     &state,
@@ -2331,6 +2347,7 @@ async fn handle_codex_virtual_tool_stream(
                     status.as_u16(),
                     Some(session_id),
                     gateway_key_id,
+                    diagnostics,
                 )
                 .await;
             }
@@ -2482,6 +2499,7 @@ async fn handle_codex_anthropic_to_responses_transform(
             let session_id = ctx.session_id.clone();
             let latency_ms = ctx.latency_ms();
             let gateway_key_id = ctx.gateway_key_id.clone();
+            let diagnostics = ctx.diagnostics.clone();
             async move {
                 log_usage(
                     &state,
@@ -2497,6 +2515,7 @@ async fn handle_codex_anthropic_to_responses_transform(
                     status.as_u16(),
                     Some(session_id),
                     gateway_key_id,
+                    diagnostics,
                 )
                 .await;
             }
@@ -2548,6 +2567,7 @@ fn build_codex_anthropic_sse_response(
         let start_time = ctx.start_time;
         let session_id = ctx.session_id.clone();
         let gateway_key_id = ctx.gateway_key_id.clone();
+        let diagnostics = ctx.diagnostics.clone();
 
         Some(SseUsageCollector::new(
             start_time,
@@ -2571,6 +2591,7 @@ fn build_codex_anthropic_sse_response(
                 let outbound_model = fallback_model.clone();
                 let session_id = session_id.clone();
                 let gateway_key_id = gateway_key_id.clone();
+                let diagnostics = diagnostics.clone();
 
                 tokio::spawn(async move {
                     log_usage(
@@ -2587,6 +2608,7 @@ fn build_codex_anthropic_sse_response(
                         status.as_u16(),
                         Some(session_id),
                         gateway_key_id,
+                        diagnostics,
                     )
                     .await;
                 });
@@ -2826,7 +2848,15 @@ fn codex_proxy_error_json(
         return body;
     };
 
-    let message = if upstream_status == Some(413) {
+    let message = if super::error::input_context_limit(error).is_some() {
+        let cause = error_obj
+            .get("message")
+            .and_then(Value::as_str)
+            .unwrap_or_default();
+        format!(
+            "Upstream provider rejected the input because it exceeds this channel's context limit. Provider: {provider_name}; model: {request_model}; endpoint: {endpoint}; cause: {cause}. Run /compact, shorten the input, or select a provider with a larger input window."
+        )
+    } else if upstream_status == Some(413) {
         // 413 来自上游渠道商的网关（典型是 nginx 的 client_max_body_size），不是 CC
         // Switch 本地代理的限制（本地 DefaultBodyLimit 已放到 200MB）。上游响应体往往是
         // 一整段 nginx HTML，对用户毫无价值，这里替换成明确指向上游 + 可操作的指引，
@@ -2864,6 +2894,13 @@ fn codex_proxy_error_json(
         "message".to_string(),
         Value::String(compact_error_message(&message, 1800)),
     );
+
+    if upstream_status == Some(413) {
+        error_obj.insert(
+            "type".to_string(),
+            Value::String("request_too_large".to_string()),
+        );
+    }
 
     if error_obj
         .get("type")
@@ -3661,6 +3698,9 @@ async fn log_forward_error(
     let status_code = map_proxy_error_to_status(error);
     let error_message = get_error_message(error);
     let request_id = uuid::Uuid::new_v4().to_string();
+    if let Some(diagnostics) = &ctx.diagnostics {
+        diagnostics.bind(&request_id);
+    }
 
     // #7818：错误行的写入同样要拿 Database 的阻塞锁并做磁盘 IO，
     // 移到阻塞线程池执行，避免卡住 tokio worker。
@@ -3712,6 +3752,7 @@ async fn log_usage(
     status_code: u16,
     session_id: Option<String>,
     gateway_key_id: Option<String>,
+    diagnostics: Option<super::diagnostics::DiagnosticHandle>,
 ) {
     use super::usage::logger::UsageLogger;
 
@@ -3722,6 +3763,9 @@ async fn log_usage(
 
     let dedup_scope = super::usage::parser::dedup_scope_for_app(app_type, provider_id);
     let request_id = usage.dedup_request_id(dedup_scope);
+    if let Some(diagnostics) = diagnostics {
+        diagnostics.bind(&request_id);
+    }
 
     // #7818：使用量写入要拿 Database 的单把 std::sync::Mutex<Connection> 并做
     // 磁盘 IO，同步执行会卡住 tokio worker，移到阻塞线程池执行。计费模式
@@ -4691,9 +4735,29 @@ data: {\"type\":\"response.output_item.done\",\"item\":{\"type\":\"message\"}}\n
         assert!(!message.contains("nginx/1.29.6"));
         // 结构化字段仍然保留，便于程序化消费 / UI 呈现
         assert_eq!(body["error"]["upstream_status"], 413);
+        assert_eq!(body["error"]["type"], "request_too_large");
         assert_eq!(body["error"]["provider"], "HCAI");
         assert_eq!(body["error"]["model"], "gpt-5.5");
         assert_eq!(body["error"]["endpoint"], "/responses");
+    }
+
+    #[test]
+    fn codex_explicit_context_413_keeps_the_input_cause_and_standard_type() {
+        let error = ProxyError::UpstreamError {
+            status: 413,
+            body: Some(
+                json!({"error":{"message":"prompt is too long: 9000 tokens > 8192 maximum"}})
+                    .to_string(),
+            ),
+        };
+        let body = codex_proxy_error_json("small", "model", "/responses", &error);
+        let message = body["error"]["message"].as_str().unwrap();
+        assert!(message.contains("context limit"));
+        assert!(message.contains("9000"));
+        assert!(message.contains("/compact"));
+        assert!(!message.contains("gateway's size limit"));
+        assert_eq!(body["error"]["type"], "request_too_large");
+        assert_eq!(body["error"]["upstream_status"], 413);
     }
 }
 
