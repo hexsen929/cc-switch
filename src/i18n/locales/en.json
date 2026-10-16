@@ -1078,9 +1078,9 @@
       "enabled": "Enable shared web search MCP",
       "description": "Share web_search and web_fetch across clients, trying search sources in the order below. Off by default; existing client search stays available.",
       "endpoint": "Shared MCP address",
-      "running": "Gateway running",
-      "stopped": "Gateway stopped",
-      "gatewayHint": "Keep the CC Switch gateway running. Enabling search starts it without changing model routes. LAN callers need a gateway key allowing web-search. Page fetching excludes private networks.",
+      "running": "Shared local proxy running",
+      "stopped": "Shared local proxy stopped",
+      "gatewayHint": "Search MCP shares the local proxy with model routing. A running proxy does not mean search is enabled; disabling search keeps model routing running. Saving with search enabled starts the proxy. LAN access needs a gateway key permitting web-search; page fetching excludes private networks.",
       "moveUp": "Move up",
       "moveDown": "Move down",
       "instanceUrl": "SearXNG instance URL (required)",
@@ -1101,7 +1101,11 @@
       "unlimited": "Unlimited",
       "unknown": "Unknown",
       "keyNumber": "Key {{number}}",
-      "installFailed": "Search settings were saved, but adding to clients failed: {{error}}"
+      "installFailed": "Search settings were saved, but adding to clients failed: {{error}}",
+      "serviceDisabled": "Search MCP disabled",
+      "serviceEnabled": "Search MCP enabled",
+      "serviceUnavailable": "Search MCP enabled; proxy stopped",
+      "pendingEnabled": "The enable setting has unsaved changes. Save to apply."
     }
   },
   "apps": {

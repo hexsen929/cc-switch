@@ -116,6 +116,64 @@ describe("SearchMcpPanel", () => {
     ]);
   });
 
+  it.each([
+    [false, false, "搜索 MCP 未启用", "共享本地代理未运行"],
+    [false, true, "搜索 MCP 未启用", "共享本地代理运行中"],
+    [true, false, "搜索 MCP 已启用，代理未运行", "共享本地代理未运行"],
+    [true, true, "搜索 MCP 已启用", "共享本地代理运行中"],
+  ] as const)(
+    "distinguishes saved search enabled=%s from proxy running=%s",
+    async (enabled, running, searchLabel, proxyLabel) => {
+      serverView.config.enabled = enabled;
+      serverView.running = running;
+      await renderPanel();
+      const status = within(screen.getByRole("status"));
+      expect(status.getByText(searchLabel)).toBeInTheDocument();
+      expect(status.getByText(proxyLabel)).toBeInTheDocument();
+      expect(mocks.invoke.mock.calls.map(([command]) => command)).toEqual([
+        "get_search_mcp_config",
+      ]);
+    },
+  );
+
+  it("keeps the saved search status until a pending toggle is successfully saved", async () => {
+    serverView.running = true;
+    await renderPanel();
+    fireEvent.click(
+      screen.getByRole("switch", { name: "启用统一联网搜索 MCP" }),
+    );
+    expect(screen.getByText("搜索 MCP 未启用")).toBeInTheDocument();
+    expect(
+      screen.getByText("启用状态尚未保存，点击保存后生效。"),
+    ).toBeInTheDocument();
+
+    const baseInvoke = mocks.invoke.getMockImplementation()!;
+    mocks.invoke.mockImplementation(
+      async (command: string, payload?: { config?: Config }) => {
+        if (command === "set_search_mcp_config") {
+          throw new Error("save failed");
+        }
+        return baseInvoke(command, payload);
+      },
+    );
+    fireEvent.click(screen.getByRole("button", { name: "保存" }));
+    await waitFor(() => expect(mocks.error).toHaveBeenCalled());
+    expect(screen.getByText("搜索 MCP 未启用")).toBeInTheDocument();
+
+    mocks.invoke.mockImplementation(
+      async (command: string, payload?: { config?: Config }) => {
+        if (command === "set_search_mcp_config")
+          serverView.config = clone(payload!.config!);
+        return baseInvoke(command, payload);
+      },
+    );
+    await save(1);
+    expect(screen.getByText("搜索 MCP 已启用")).toBeInTheDocument();
+    expect(
+      screen.queryByText("启用状态尚未保存，点击保存后生效。"),
+    ).not.toBeInTheDocument();
+  });
+
   it("saves untouched redacted keys as preserve and never implicitly installs clients", async () => {
     await renderPanel();
     expect(keyInput()).toHaveValue("");
@@ -192,7 +250,8 @@ describe("SearchMcpPanel", () => {
     );
     fireEvent.click(screen.getByRole("button", { name: "保存并添加到 MCP" }));
 
-    expect(await screen.findByText("网关运行中")).toBeInTheDocument();
+    expect(await screen.findByText("共享本地代理运行中")).toBeInTheDocument();
+    expect(screen.getByText("搜索 MCP 已启用")).toBeInTheDocument();
     expect(screen.getByText(serverView.endpoint)).toBeInTheDocument();
     expect(keyInput()).toHaveValue("");
     expect(keyInput()).toHaveAttribute(

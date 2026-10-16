@@ -1041,9 +1041,9 @@
       "enabled": "Ortak web arama MCP sunucusunu etkinleştir",
       "description": "İstemciler web_search ve web_fetch araçlarını paylaşır; kaynaklar aşağıdaki sırayla denenir. Varsayılan olarak kapalıdır, mevcut istemci aramasını değiştirmez.",
       "endpoint": "Ortak MCP adresi",
-      "running": "Ağ geçidi çalışıyor",
-      "stopped": "Ağ geçidi durmuş",
-      "gatewayHint": "Etkinleştirmek, model yollarını değiştirmeden CC Switch ağ geçidini başlatır. Kullanım sırasında açık tutun. LAN erişimi web-search izni olan bir anahtar gerektirir. Sayfa okuma özel ağlara erişmez.",
+      "running": "Ortak yerel vekil çalışıyor",
+      "stopped": "Ortak yerel vekil durmuş",
+      "gatewayHint": "Arama MCP, model yönlendirmesiyle aynı yerel vekili kullanır. Vekilin çalışması aramanın etkin olduğu anlamına gelmez; aramayı kapatmak model yönlendirmesini durdurmaz. Aramayı etkinleştirip kaydetmek vekili başlatır. LAN erişimi web-search izni olan bir ağ geçidi anahtarı gerektirir; sayfa okuma özel ağlara erişmez.",
       "moveUp": "Önceliği artır",
       "moveDown": "Önceliği azalt",
       "instanceUrl": "SearXNG örneği URL adresi (gerekli)",
@@ -1064,7 +1064,11 @@
       "unlimited": "Sınırsız",
       "unknown": "Bilinmiyor",
       "keyNumber": "Anahtar {{number}}",
-      "installFailed": "Arama ayarları kaydedildi ancak istemcilere eklenemedi: {{error}}"
+      "installFailed": "Arama ayarları kaydedildi ancak istemcilere eklenemedi: {{error}}",
+      "serviceDisabled": "Arama MCP kapalı",
+      "serviceEnabled": "Arama MCP etkin",
+      "serviceUnavailable": "Arama MCP etkin; vekil durmuş",
+      "pendingEnabled": "Etkinleştirme ayarında kaydedilmemiş değişiklik var. Uygulamak için kaydedin."
     }
   },
   "apps": {

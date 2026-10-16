@@ -1078,9 +1078,9 @@
       "enabled": "共通ウェブ検索 MCP を有効にする",
       "description": "各クライアントで web_search と web_fetch を共有し、以下の順で検索元を試します。既定は無効で、既存の検索機能は維持されます。",
       "endpoint": "共通 MCP アドレス",
-      "running": "ゲートウェイ稼働中",
-      "stopped": "ゲートウェイ停止中",
-      "gatewayHint": "有効化するとモデルの経路を変えずに CC Switch ゲートウェイを起動します。利用中は起動したままにしてください。LAN 接続には web-search を許可するキーが必要です。ページ取得はプライベートネットワークに接続しません。",
+      "running": "共用ローカルプロキシ稼働中",
+      "stopped": "共用ローカルプロキシ停止中",
+      "gatewayHint": "検索 MCP はモデルルーティングとローカルプロキシを共有します。プロキシが稼働していても検索が有効とは限りません。検索を無効にしてもモデルルーティングは停止しません。有効にして保存するとプロキシが起動します。LAN 接続には web-search を許可するキーが必要です。ページ取得はプライベートネットワークに接続しません。",
       "moveUp": "優先度を上げる",
       "moveDown": "優先度を下げる",
       "instanceUrl": "SearXNG インスタンス URL（必須）",
@@ -1101,7 +1101,11 @@
       "unlimited": "無制限",
       "unknown": "不明",
       "keyNumber": "キー {{number}}",
-      "installFailed": "検索設定は保存されましたが、クライアントへの追加に失敗しました：{{error}}"
+      "installFailed": "検索設定は保存されましたが、クライアントへの追加に失敗しました：{{error}}",
+      "serviceDisabled": "検索 MCP は無効",
+      "serviceEnabled": "検索 MCP は有効",
+      "serviceUnavailable": "検索 MCP は有効、プロキシは停止中",
+      "pendingEnabled": "有効化設定に未保存の変更があります。保存すると適用されます。"
     }
   },
   "apps": {

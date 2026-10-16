@@ -1078,9 +1078,9 @@
       "enabled": "启用统一联网搜索 MCP",
       "description": "让各客户端共用 web_search 与 web_fetch，按下列顺序尝试搜索源。默认关闭，保留客户端原有联网功能。",
       "endpoint": "统一 MCP 地址",
-      "running": "网关运行中",
-      "stopped": "网关尚未运行",
-      "gatewayHint": "启用后会启动 CC Switch 网关，不改变模型路由。使用时需保持网关运行。局域网访问需要允许 web-search 的网关密钥；网页抓取不访问内网地址。",
+      "running": "共享本地代理运行中",
+      "stopped": "共享本地代理未运行",
+      "gatewayHint": "搜索 MCP 与模型路由共用本地代理。代理运行不代表搜索已启用；关闭搜索不会停止模型路由。保存启用后会启动代理。局域网访问须使用允许 web-search 的网关密钥；网页抓取不访问内网。",
       "moveUp": "提高优先级",
       "moveDown": "降低优先级",
       "instanceUrl": "SearXNG 实例地址（必填）",
@@ -1101,7 +1101,11 @@
       "unlimited": "不限",
       "unknown": "未知",
       "keyNumber": "密钥 {{number}}",
-      "installFailed": "联网搜索设置已保存，但添加到客户端失败：{{error}}"
+      "installFailed": "联网搜索设置已保存，但添加到客户端失败：{{error}}",
+      "serviceDisabled": "搜索 MCP 未启用",
+      "serviceEnabled": "搜索 MCP 已启用",
+      "serviceUnavailable": "搜索 MCP 已启用，代理未运行",
+      "pendingEnabled": "启用状态尚未保存，点击保存后生效。"
     }
   },
   "apps": {

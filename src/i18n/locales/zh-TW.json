@@ -1079,9 +1079,9 @@
       "enabled": "啟用統一網路搜尋 MCP",
       "description": "讓各用戶端共用 web_search 與 web_fetch，依下列順序嘗試搜尋來源。預設關閉，保留用戶端原有搜尋功能。",
       "endpoint": "統一 MCP 位址",
-      "running": "閘道執行中",
-      "stopped": "閘道尚未啟動",
-      "gatewayHint": "啟用後會啟動 CC Switch 閘道，不改變模型路由。使用時需保持閘道執行。區域網路存取需要允許 web-search 的閘道金鑰；網頁讀取不存取內網位址。",
+      "running": "共用本機代理執行中",
+      "stopped": "共用本機代理未執行",
+      "gatewayHint": "搜尋 MCP 與模型路由共用本機代理。代理執行不代表搜尋已啟用；關閉搜尋不會停止模型路由。儲存啟用設定後會啟動代理。區域網路存取須使用允許 web-search 的閘道金鑰；網頁讀取不存取內網。",
       "moveUp": "提高優先順序",
       "moveDown": "降低優先順序",
       "instanceUrl": "SearXNG 執行個體位址（必填）",
@@ -1102,7 +1102,11 @@
       "unlimited": "不限",
       "unknown": "未知",
       "keyNumber": "金鑰 {{number}}",
-      "installFailed": "網路搜尋設定已儲存，但新增到用戶端失敗：{{error}}"
+      "installFailed": "網路搜尋設定已儲存，但新增到用戶端失敗：{{error}}",
+      "serviceDisabled": "搜尋 MCP 未啟用",
+      "serviceEnabled": "搜尋 MCP 已啟用",
+      "serviceUnavailable": "搜尋 MCP 已啟用，代理未執行",
+      "pendingEnabled": "啟用狀態尚未儲存，按下儲存後生效。"
     }
   },
   "apps": {

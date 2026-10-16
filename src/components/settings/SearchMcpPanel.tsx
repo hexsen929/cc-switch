@@ -63,6 +63,7 @@ const CLIENTS = [
 export function SearchMcpPanel() {
   const { t } = useTranslation();
   const [view, setView] = useState<SearchMcpView | null>(null);
+  const [savedEnabled, setSavedEnabled] = useState(false);
   const [busy, setBusy] = useState(false);
   const [clients, setClients] = useState(["claude", "codex", "gemini"]);
   const [error, setError] = useState("");
@@ -72,6 +73,7 @@ export function SearchMcpPanel() {
   const load = async () => {
     const next = await invoke<SearchMcpView>("get_search_mcp_config");
     setView(next);
+    setSavedEnabled(next.config.enabled);
     setKeyDrafts({});
     setQuotas(null);
     setError("");
@@ -80,7 +82,10 @@ export function SearchMcpPanel() {
     let active = true;
     invoke<SearchMcpView>("get_search_mcp_config")
       .then((next) => {
-        if (active) setView(next);
+        if (active) {
+          setView(next);
+          setSavedEnabled(next.config.enabled);
+        }
       })
       .catch((reason) => {
         if (active) setError(String(reason));
@@ -120,6 +125,7 @@ export function SearchMcpPanel() {
     setBusy(true);
     try {
       await invoke("set_search_mcp_config", { config: view.config });
+      setSavedEnabled(view.config.enabled);
       try {
         if (install) await invoke("add_search_mcp_to_apps", { apps: clients });
       } catch (reason) {
@@ -178,20 +184,44 @@ export function SearchMcpPanel() {
       </div>
 
       <div className="rounded-lg border border-border-default p-3 space-y-2 text-xs">
-        <div className="flex items-center justify-between gap-2">
+        <div className="flex flex-wrap items-start justify-between gap-2">
           <span className="text-fg-2">
             {t("settings.searchMcp.endpoint", {
               defaultValue: "统一 MCP 地址",
             })}
           </span>
-          <span>
-            {view.running
-              ? t("settings.searchMcp.running", { defaultValue: "网关运行中" })
-              : t("settings.searchMcp.stopped", {
-                  defaultValue: "网关尚未运行",
-                })}
-          </span>
+          <div className="flex flex-col gap-1 text-end" role="status">
+            <span>
+              {!savedEnabled
+                ? t("settings.searchMcp.serviceDisabled", {
+                    defaultValue: "搜索 MCP 未启用",
+                  })
+                : view.running
+                  ? t("settings.searchMcp.serviceEnabled", {
+                      defaultValue: "搜索 MCP 已启用",
+                    })
+                  : t("settings.searchMcp.serviceUnavailable", {
+                      defaultValue: "搜索 MCP 已启用，代理未运行",
+                    })}
+            </span>
+            <span className="text-fg-2">
+              {view.running
+                ? t("settings.searchMcp.running", {
+                    defaultValue: "共享本地代理运行中",
+                  })
+                : t("settings.searchMcp.stopped", {
+                    defaultValue: "共享本地代理未运行",
+                  })}
+            </span>
+          </div>
         </div>
+        {config.enabled !== savedEnabled && (
+          <p className="text-fg-2">
+            {t("settings.searchMcp.pendingEnabled", {
+              defaultValue: "启用状态尚未保存，点击保存后生效。",
+            })}
+          </p>
+        )}
         <div className="flex items-center gap-2">
           <code className="break-all flex-1">{view.endpoint}</code>
           <Button
@@ -210,7 +240,7 @@ export function SearchMcpPanel() {
         <p className="text-fg-2">
           {t("settings.searchMcp.gatewayHint", {
             defaultValue:
-              "需要 CC Switch 网关保持运行；添加到客户端时会启动网关。局域网访问沿用网关密钥，并须允许 web-search。网页抓取不允许访问内网地址。",
+              "搜索 MCP 与模型路由共用本地代理。代理运行不代表搜索已启用；关闭搜索不会停止模型路由。保存启用后会启动代理。局域网访问须使用允许 web-search 的网关密钥；网页抓取不访问内网。",
           })}
         </p>
       </div>
