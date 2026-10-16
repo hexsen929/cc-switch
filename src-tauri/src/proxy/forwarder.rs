@@ -5775,14 +5775,17 @@ mod tests {
         drop(listener);
         let error = reqwest::Client::builder()
             .no_proxy()
-            .timeout(Duration::from_secs(2))
+            // Windows may retry a refused loopback connection for over two
+            // seconds. Let the OS report the connection cause before our
+            // request deadline turns it into a timeout instead.
+            .timeout(Duration::from_secs(15))
             .build()
             .unwrap()
             .get(format!("http://{address}/v1/responses?key=fixture-secret"))
             .send()
             .await
             .expect_err("closed local port should reject the connection");
-        assert!(error.is_connect());
+        assert!(error.is_connect(), "expected a connection error: {error:?}");
 
         let mapped = map_reqwest_send_error(error);
         let ProxyError::ForwardFailed(detail) = &mapped else {

@@ -331,6 +331,10 @@ jobs:
       - name: Report backend failure diagnostics
         if: failure()
         shell: bash
+        env:
+          # Windows Python defaults to cp1252; Rust diagnostics contain Chinese
+          # and Unicode symbols that must reach the Actions annotation intact.
+          PYTHONIOENCODING: utf-8
         run: |
           python - <<'PY'
           import os
