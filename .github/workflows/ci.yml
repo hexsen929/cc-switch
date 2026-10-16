@@ -156,7 +156,9 @@ jobs:
 
   codex-config-contract:
     name: Official Codex configuration contract (0.162.1)
-    runs-on: ubuntu-latest
+    # 22.04 allows the official CLI's user-namespace sandbox probe. Newer
+    # hosted images restrict that probe independently of configuration validity.
+    runs-on: ubuntu-22.04
     needs: changes
     if: needs.changes.outputs.frontend == 'true' || needs.changes.outputs.backend == 'true'
     permissions:
