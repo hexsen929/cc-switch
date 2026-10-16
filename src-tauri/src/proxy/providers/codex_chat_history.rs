@@ -1,4 +1,6 @@
-use super::codex_chat_common::{is_empty_value, response_item_call_id};
+use super::codex_chat_common::{
+    is_empty_value, merge_tool_call_extra_content, response_item_call_id, tool_call_extra_content,
+};
 use crate::proxy::sse::{append_utf8_safe, strip_sse_field, take_sse_block};
 use bytes::Bytes;
 use futures::{Stream, StreamExt};
@@ -489,6 +491,20 @@ fn enrich_call_item_from_cache(item: &mut Value, cached: &Value) -> bool {
             changed = true;
         }
     }
+    if let Some(cached_extra) = tool_call_extra_content(cached) {
+        let mut merged = cached_extra.clone();
+        if let Some(current) = tool_call_extra_content(item) {
+            // Client fields take precedence over cached fields, except that a
+            // cached real signature must replace a client's skip placeholder.
+            merge_tool_call_extra_content(&mut merged, current);
+        }
+        if item.get("extra_content") != Some(&merged) {
+            if let Some(object) = item.as_object_mut() {
+                object.insert("extra_content".to_string(), merged);
+                changed = true;
+            }
+        }
+    }
     changed
 }
 
@@ -682,6 +698,145 @@ mod tests {
         let input = request["input"].as_array().unwrap();
         assert_eq!(input[0]["reasoning_content"], "Need to inspect the file.");
         assert_eq!(input.len(), 2);
+    }
+
+    #[tokio::test]
+    async fn round_trips_gemini_thought_signature_extra_content() {
+        // Gemini OpenAI 兼容接口要求下一轮原样带回 tool call 的 thought signature（#8336）。
+        let signature = json!({"google": {"thought_signature": "sig-abc"}});
+        let response = super::super::transform_codex_chat::chat_completion_to_response(json!({
+            "id": "chatcmpl_gemini",
+            "model": "gemini-4-argon",
+            "choices": [{
+                "message": {
+                    "role": "assistant",
+                    "tool_calls": [{
+                        "id": "call_1",
+                        "type": "function",
+                        "function": {"name": "exec_command", "arguments": "{\"cmd\":\"ls\"}"},
+                        "extra_content": signature
+                    }]
+                },
+                "finish_reason": "tool_calls"
+            }]
+        }))
+        .unwrap();
+        let output = response["output"].as_array().unwrap();
+        let call = output
+            .iter()
+            .find(|item| item["type"] == "function_call")
+            .unwrap();
+        assert_eq!(call["extra_content"], signature);
+
+        let history = CodexChatHistoryStore::default();
+        history.record_response(&response).await;
+
+        // Codex 回传历史时不保留未知字段。
+        let mut request = json!({
+            "model": "gemini-4-argon",
+            "input": [
+                {"type": "message", "role": "user", "content": "list files"},
+                {
+                    "type": "function_call",
+                    "call_id": "call_1",
+                    "name": "exec_command",
+                    "arguments": "{\"cmd\":\"ls\"}"
+                },
+                {"type": "function_call_output", "call_id": "call_1", "output": "a.txt"}
+            ]
+        });
+        assert_eq!(history.enrich_request(&mut request).await, 1);
+
+        let chat =
+            super::super::transform_codex_chat::responses_to_chat_completions(request).unwrap();
+        let assistant = chat["messages"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|message| message["role"] == "assistant")
+            .unwrap();
+        assert_eq!(assistant["tool_calls"][0]["extra_content"], signature);
+    }
+
+    #[tokio::test]
+    async fn gemini_cache_enriches_partial_extensions_before_signature_fallback() {
+        let history = CodexChatHistoryStore::default();
+        history.record_response(&json!({
+            "id": "resp_partial_signature", "output": [{
+                "type": "function_call", "call_id": "call_partial_signature", "name": "exec_command", "arguments": "{}",
+                "extra_content": {"google": {"thought_signature": "cached-real", "cached_field": true}, "cached_vendor": {"kept": true}}
+            }]
+        })).await;
+        for (current, expected) in [
+            (
+                json!({"google": {}, "client_vendor": {"kept": true}}),
+                "cached-real",
+            ),
+            (
+                json!({"google": {"thought_signature": "skip_thought_signature_validator"}, "client_vendor": {"kept": true}}),
+                "cached-real",
+            ),
+            (
+                json!({"google": {"thought_signature": "client-real"}, "client_vendor": {"kept": true}}),
+                "client-real",
+            ),
+        ] {
+            let mut request = json!({
+                "model": "gemini-4-argon", "previous_response_id": "resp_partial_signature",
+                "input": [
+                    {"type": "message", "role": "user", "content": "run"},
+                    {"type": "function_call", "call_id": "call_partial_signature", "name": "exec_command", "arguments": "{}", "extra_content": current},
+                    {"type": "function_call_output", "call_id": "call_partial_signature", "output": "done"}
+                ]
+            });
+            assert_eq!(history.enrich_request(&mut request).await, 1);
+            let mut chat =
+                super::super::transform_codex_chat::responses_to_chat_completions(request).unwrap();
+            assert_eq!(
+                super::super::codex_chat_common::fill_gemini_thought_signature_fallback(&mut chat),
+                0
+            );
+            let assistant = chat["messages"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|message| message["role"] == "assistant")
+                .unwrap();
+            assert_eq!(
+                assistant["tool_calls"][0]["extra_content"],
+                json!({
+                    "google": {"thought_signature": expected, "cached_field": true},
+                    "cached_vendor": {"kept": true}, "client_vendor": {"kept": true}
+                })
+            );
+        }
+    }
+
+    #[test]
+    fn cached_extensions_fill_gaps_but_keep_current_unknown_field_types() {
+        let cached = json!({"extra_content": {
+            "google": {"thought_signature": "cached-real"},
+            "vendor": {"mode": "cached"}, "nested": {"shape": {"old": true}, "cached": true},
+            "vendor_google": {"google": {"thought_signature": "old"}},
+            "vendor_signature": {"google": {"thought_signature": "old"}}
+        }});
+        let mut item = json!({"extra_content": {
+            "google": {"thought_signature": "skip_thought_signature_validator"},
+            "vendor": "current", "nested": {"shape": ["current"], "client": true},
+            "vendor_google": {"google": "current"},
+            "vendor_signature": {"google": {"thought_signature": "skip_thought_signature_validator"}}
+        }});
+        assert!(enrich_call_item_from_cache(&mut item, &cached));
+        assert_eq!(
+            item["extra_content"],
+            json!({
+                "google": {"thought_signature": "cached-real"},
+                "vendor": "current", "nested": {"shape": ["current"], "cached": true, "client": true},
+                "vendor_google": {"google": "current"},
+                "vendor_signature": {"google": {"thought_signature": "skip_thought_signature_validator"}}
+            })
+        );
+        assert!(!enrich_call_item_from_cache(&mut item, &cached));
     }
 
     #[tokio::test]

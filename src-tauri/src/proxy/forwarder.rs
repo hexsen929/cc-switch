@@ -2456,6 +2456,15 @@ impl RequestForwarder {
                     mapped_body,
                     reasoning_config.as_ref(),
                 )?;
+            let signature_fallbacks =
+                super::providers::codex_chat_common::fill_gemini_thought_signature_fallback(
+                    &mut chat_body,
+                );
+            if signature_fallbacks > 0 {
+                log::debug!(
+                    "[Codex] Filled {signature_fallbacks} missing Gemini thought signature(s) with the skip placeholder"
+                );
+            }
             super::providers::inject_codex_chat_prompt_cache_key(
                 provider,
                 &mut chat_body,
@@ -5138,12 +5147,15 @@ fn should_force_identity_encoding(
 }
 
 fn map_reqwest_send_error(error: reqwest::Error) -> ProxyError {
-    if error.is_timeout() {
-        ProxyError::Timeout(format!("上游请求超时: {}", error.without_url()))
-    } else if error.is_connect() {
-        ProxyError::ForwardFailed(format!("上游连接失败: {}", error.without_url()))
+    let is_timeout = error.is_timeout();
+    let is_connect = error.is_connect();
+    let detail = super::error::describe_reqwest_error(error);
+    if is_timeout {
+        ProxyError::Timeout(format!("上游请求超时: {detail}"))
+    } else if is_connect {
+        ProxyError::ForwardFailed(format!("上游连接失败: {detail}"))
     } else {
-        ProxyError::ForwardFailed(format!("上游请求发送失败: {}", error.without_url()))
+        ProxyError::ForwardFailed(format!("上游请求发送失败: {detail}"))
     }
 }
 
@@ -5754,6 +5766,40 @@ mod tests {
             max_attempts: 1,
             stack_request: false,
         }
+    }
+
+    #[tokio::test]
+    async fn connection_error_mapping_keeps_cause_without_url_or_input_limit_failover() {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        drop(listener);
+        let error = reqwest::Client::builder()
+            .no_proxy()
+            .timeout(Duration::from_secs(2))
+            .build()
+            .unwrap()
+            .get(format!("http://{address}/v1/responses?key=fixture-secret"))
+            .send()
+            .await
+            .expect_err("closed local port should reject the connection");
+        assert!(error.is_connect());
+
+        let mapped = map_reqwest_send_error(error);
+        let ProxyError::ForwardFailed(detail) = &mapped else {
+            panic!("connection failure must keep its retryable error variant");
+        };
+        assert!(
+            detail.starts_with("上游连接失败: error sending request: "),
+            "{detail}"
+        );
+        assert!(!detail.contains("fixture-secret"), "{detail}");
+        assert!(!detail.contains("/v1/responses"), "{detail}");
+        assert!(input_context_limit(&mapped).is_none());
+        let forwarder = test_forwarder(Duration::from_secs(2), Duration::from_secs(2));
+        assert_eq!(
+            forwarder.categorize_proxy_error(&mapped, &test_provider_with_type(None)),
+            ErrorCategory::Retryable
+        );
     }
 
     #[tokio::test]

@@ -86,6 +86,7 @@ import {
 } from "@/components/providers/forms/helpers/opencodeFormUtils";
 import { EditProviderDialog } from "@/components/providers/EditProviderDialog";
 import { ConfirmDialog } from "@/components/ConfirmDialog";
+import { OpenTerminalDialog } from "@/components/providers/OpenTerminalDialog";
 import { discardUnsavedChanges, hasUnsavedChanges } from "@/lib/unsavedChanges";
 import { SettingsPage } from "@/components/settings/SettingsPage";
 import { AuthCenterPanel } from "@/components/settings/AuthCenterPanel";
@@ -271,6 +272,9 @@ function App() {
     provider: Provider;
     action: "remove" | "delete";
   } | null>(null);
+  const [terminalProvider, setTerminalProvider] = useState<Provider | null>(
+    null,
+  );
   const [envConflicts, setEnvConflicts] = useState<EnvConflict[]>([]);
   const [showEnvBanner, setShowEnvBanner] = useState(false);
 
@@ -1030,32 +1034,6 @@ function App() {
       : message;
   }, [activeApp, confirmAction, piCurrentState?.defaultProviderId, t]);
 
-  const handleOpenTerminal = async (provider: Provider) => {
-    try {
-      const selectedDir = await settingsApi.pickDirectory();
-      if (!selectedDir) {
-        return;
-      }
-
-      await providersApi.openTerminal(provider.id, activeApp, {
-        cwd: selectedDir,
-      });
-      toast.success(
-        t("provider.terminalOpened", {
-          defaultValue: "终端已打开",
-        }),
-      );
-    } catch (error) {
-      console.error("[App] Failed to open terminal", error);
-      const errorMessage = extractErrorMessage(error);
-      toast.error(
-        t("provider.terminalOpenFailed", {
-          defaultValue: "打开终端失败",
-        }) + (errorMessage ? `: ${errorMessage}` : ""),
-      );
-    }
-  };
-
   const handleImportSuccess = async () => {
     try {
       await queryClient.invalidateQueries({
@@ -1277,7 +1255,7 @@ function App() {
     onDuplicate: handleDuplicateProvider,
     onConfigureUsage: setUsageProvider,
     onOpenWebsite: handleOpenWebsite,
-    onOpenTerminal: activeApp === "claude" ? handleOpenTerminal : undefined,
+    onOpenTerminal: activeApp === "claude" ? setTerminalProvider : undefined,
     onCreate: () => openAddProvider(currentModeView),
     searchOpen: providerSearchOpen,
     onSearchOpenChange: setProviderSearchOpen,
@@ -1633,6 +1611,12 @@ function App() {
           }}
         />
       )}
+
+      <OpenTerminalDialog
+        provider={terminalProvider}
+        appId={activeApp}
+        onClose={() => setTerminalProvider(null)}
+      />
 
       <ConfirmDialog
         isOpen={Boolean(confirmAction)}

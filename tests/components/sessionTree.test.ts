@@ -117,6 +117,82 @@ describe("session trees", () => {
     expect(forest.nodes.get(getSessionKey(copiedParent))?.children).toEqual([]);
   });
 
+  it.each([
+    ["D:\\Projects\\Demo", "d:/projects/demo/"],
+    ["\\\\Server\\Share\\Demo", "\\\\server/share/demo/"],
+  ])(
+    "matches Windows parent paths within the same project: %s",
+    (parentDir, childDir) => {
+      const parent = { ...session("main"), projectDir: parentDir };
+      const child = { ...session("child", "main"), projectDir: childDir };
+      const foreignApp = {
+        ...session("other-app", "main", "claude"),
+        projectDir: childDir,
+      };
+      const otherProject = {
+        ...session("other-project", "main"),
+        projectDir: `${childDir}other`,
+      };
+      const forest = buildSessionForest([
+        parent,
+        child,
+        foreignApp,
+        otherProject,
+      ]);
+
+      expect(forest.nodes.get(getSessionKey(child))?.parent?.key).toBe(
+        getSessionKey(parent),
+      );
+      expect(
+        forest.nodes.get(getSessionKey(foreignApp))?.parent,
+      ).toBeUndefined();
+      expect(
+        forest.nodes.get(getSessionKey(otherProject))?.parent,
+      ).toBeUndefined();
+      expect(
+        flattenSessionTree(forest.roots).find(
+          (row) => row.key === getSessionKey(child),
+        )?.depth,
+      ).toBe(1);
+      expect(parent.projectDir).toBe(parentDir);
+      expect(child.projectDir).toBe(childDir);
+    },
+  );
+
+  it("normalizes POSIX trailing slashes while preserving case-sensitive parent isolation", () => {
+    const parent = { ...session("main"), projectDir: "/work/App" };
+    const child = { ...session("child", "main"), projectDir: "/work/App/" };
+    const differentCase = {
+      ...session("different-case", "main"),
+      projectDir: "/work/app",
+    };
+    const forest = buildSessionForest([parent, child, differentCase]);
+
+    expect(forest.nodes.get(getSessionKey(child))?.parent?.key).toBe(
+      getSessionKey(parent),
+    );
+    expect(
+      forest.nodes.get(getSessionKey(differentCase))?.parent,
+    ).toBeUndefined();
+  });
+
+  it("keeps duplicate Windows parent candidates ambiguous after path normalization", () => {
+    const parent = { ...session("main"), projectDir: "D:\\Projects\\Demo" };
+    const duplicate = {
+      ...parent,
+      projectDir: "d:/projects/demo/",
+      sourcePath: "/copied/main.jsonl",
+    };
+    const child = {
+      ...session("child", "main"),
+      projectDir: "D:/Projects/Demo",
+    };
+    const forest = buildSessionForest([parent, duplicate, child]);
+
+    expect(forest.nodes.get(getSessionKey(child))?.parent).toBeUndefined();
+    expect(forest.roots).toHaveLength(3);
+  });
+
   it("breaks cycles, self-parent links, ambiguous parents and excessive depth without losing sessions", () => {
     const broken = [
       session("a", "b"),

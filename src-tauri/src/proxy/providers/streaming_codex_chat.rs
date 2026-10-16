@@ -2,7 +2,9 @@
 
 use super::codex_responses_sse as sse;
 use super::{
-    codex_chat_common::extract_reasoning_field_text,
+    codex_chat_common::{
+        extract_reasoning_field_text, merge_tool_call_extra_content, tool_call_extra_content,
+    },
     codex_compaction,
     inline_think::InlineThinkSplitter,
     transform_codex_chat::{
@@ -46,6 +48,8 @@ struct ToolCallState {
     name: String,
     arguments: String,
     reasoning_content: String,
+    /// 上游 tool call 的 `extra_content`（Gemini thought signature），完成时原样挂回。
+    extra_content: Option<Value>,
     added: bool,
     done: bool,
 }
@@ -400,6 +404,12 @@ impl ChatToResponsesState {
             if !args_delta.is_empty() {
                 state.arguments.push_str(&args_delta);
             }
+            if let Some(extra) = tool_call_extra_content(tool_call) {
+                merge_tool_call_extra_content(
+                    state.extra_content.get_or_insert_with(|| json!({})),
+                    extra,
+                );
+            }
             if state.reasoning_content.is_empty() {
                 if let Some(reasoning) = reasoning.map(str::trim).filter(|value| !value.is_empty())
                 {
@@ -717,7 +727,7 @@ impl ChatToResponsesState {
             let output_index = state.output_index.unwrap_or(0);
             let arguments = canonicalize_tool_arguments_str(&state.arguments);
             let is_custom_tool = self.tool_context.is_custom_tool_chat_name(&state.name);
-            let item = response_tool_call_item_from_chat_name(
+            let mut item = response_tool_call_item_from_chat_name(
                 &state.item_id,
                 "completed",
                 &state.call_id,
@@ -726,6 +736,9 @@ impl ChatToResponsesState {
                 Some(&state.reasoning_content),
                 &self.tool_context,
             );
+            if let (Some(extra), Some(obj)) = (&state.extra_content, item.as_object_mut()) {
+                obj.insert("extra_content".to_string(), extra.clone());
+            }
             state.done = true;
             self.output_items.push((output_index, item.clone()));
 
@@ -1259,6 +1272,112 @@ mod tests {
         assert!(output.contains("event: response.function_call_arguments.done"));
         assert!(output.contains("\"type\":\"function_call\""));
         assert!(output.contains("\"call_id\":\"call_1\""));
+    }
+
+    #[tokio::test]
+    async fn keeps_gemini_tool_call_extra_content_on_done_item() {
+        let output = collect(vec![
+            "data: {\"id\":\"chatcmpl_gemini\",\"model\":\"gemini-4-argon\",\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"id\":\"call_1\",\"type\":\"function\",\"function\":{\"name\":\"exec_command\",\"arguments\":\"{\\\"cmd\\\":\\\"ls\\\"}\"},\"extra_content\":{\"google\":{\"thought_signature\":\"sig-abc\"}}}]},\"finish_reason\":\"tool_calls\"}]}\n\n",
+            "data: [DONE]\n\n",
+        ])
+        .await;
+
+        let events = parse_sse_events(&output);
+        let done = events
+            .iter()
+            .find(|event| {
+                event["type"] == "response.output_item.done"
+                    && event["item"]["type"] == "function_call"
+            })
+            .unwrap();
+        assert_eq!(
+            done["item"]["extra_content"]["google"]["thought_signature"],
+            "sig-abc"
+        );
+        let completed = events
+            .iter()
+            .find(|event| event["type"] == "response.completed")
+            .unwrap();
+        assert_eq!(
+            completed["response"]["output"][0]["extra_content"]["google"]["thought_signature"],
+            "sig-abc"
+        );
+    }
+
+    #[tokio::test]
+    async fn gemini_stream_merges_late_partial_extensions_and_keeps_phase_and_done_consistent() {
+        for first_signature in ["sig-real", "skip_thought_signature_validator"] {
+            let first = format!(
+                "data: {}\n\n",
+                json!({
+                    "id": "chatcmpl_gemini_partial", "model": "gemini-4-argon",
+                    "choices": [{"delta": {"content": "Checking", "tool_calls": [{
+                        "index": 0, "id": "call_partial", "type": "function",
+                        "function": {"name": "exec_command", "arguments": "{}"},
+                        "extra_content": {"google": {"thought_signature": first_signature, "earlier": true}, "other_vendor": {"kept": true}}
+                    }]}}]
+                })
+            );
+            let real = format!(
+                "data: {}\n\n",
+                json!({
+                    "choices": [{"delta": {"tool_calls": [{"index": 0,
+                        "extra_content": {"google": {"thought_signature": "sig-real", "later": true}}
+                    }]}}]
+                })
+            );
+            let metadata_only = format!(
+                "data: {}\n\n",
+                json!({
+                    "choices": [{"delta": {"tool_calls": [{"index": 0,
+                        "extra_content": {"google": {"other": 1}}
+                    }]}}]
+                })
+            );
+            let partial = format!(
+                "data: {}\n\n",
+                json!({
+                    "choices": [{"delta": {"tool_calls": [{"index": 0,
+                        "extra_content": {"google": {"thought_signature": "skip_thought_signature_validator", "last": true}}
+                    }]}, "finish_reason": "tool_calls"}]
+                })
+            );
+            let output = collect(vec![
+                &first,
+                &real,
+                &metadata_only,
+                &partial,
+                "data: [DONE]\n\n",
+            ])
+            .await;
+            assert_message_phase_matches_output(&output, Some("commentary"));
+            let events = parse_sse_events(&output);
+            let done = events
+                .iter()
+                .find(|event| {
+                    event["type"] == "response.output_item.done"
+                        && event["item"]["type"] == "function_call"
+                })
+                .unwrap();
+            assert_eq!(
+                done["item"]["extra_content"],
+                json!({
+                "google": {"thought_signature": "sig-real", "earlier": true, "later": true, "other": 1, "last": true},
+                    "other_vendor": {"kept": true}
+                })
+            );
+            let completed = events
+                .iter()
+                .find(|event| event["type"] == "response.completed")
+                .unwrap();
+            let call = completed["response"]["output"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|item| item["type"] == "function_call")
+                .unwrap();
+            assert_eq!(*call, done["item"]);
+        }
     }
 
     #[tokio::test]

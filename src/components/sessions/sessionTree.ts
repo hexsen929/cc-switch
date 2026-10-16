@@ -1,5 +1,5 @@
 import type { SessionMeta } from "@/types";
-import { getSessionKey } from "./utils";
+import { getProjectDirKey, getSessionKey } from "./utils";
 
 // Corrupt or adversarial metadata must not cause recursive rendering or an
 // unbounded parent walk. Overdeep branches become independent roots.
@@ -29,7 +29,7 @@ const identity = (session: SessionMeta, sessionId = session.sessionId) =>
   JSON.stringify([
     session.providerId,
     sessionId,
-    session.projectDir?.trim() || "",
+    getProjectDirKey(session.projectDir?.trim() || ""),
   ]);
 
 /** Preserve the supplied sort order; only unambiguous same-app parents attach. */
