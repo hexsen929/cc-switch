@@ -13,6 +13,9 @@ use crate::prompt_files::{
 };
 use crate::provider::{Provider, ProviderPromptOverrideMode};
 use crate::services::pi_prompt_files::PiAgentsFileGuard;
+use crate::shared_instructions::{
+    compose_prompt, lock_projection, matches_legacy_prompt, strip_managed_block,
+};
 use crate::store::AppState;
 
 /// 安全地获取当前 Unix 时间戳
@@ -31,6 +34,58 @@ fn read_optional_text_file(path: &Path) -> Result<Option<String>, AppError> {
     std::fs::read_to_string(path)
         .map(Some)
         .map_err(|e| AppError::io(path, e))
+}
+
+/// Also handles presets contaminated by pre-fix live-file backfill. Keep the
+/// database untouched on read (notably during restore); the next explicit save
+/// persists only ordinary content.
+fn saved_prompts(state: &AppState, app: &AppType) -> Result<IndexMap<String, Prompt>, AppError> {
+    let mut prompts = state.db.get_prompts(app.as_str())?;
+    for prompt in prompts.values_mut() {
+        prompt.content = strip_managed_block(&prompt.content)?;
+    }
+    Ok(prompts)
+}
+
+fn ordinary_from_saved(prompts: &IndexMap<String, Prompt>, raw: &str) -> Result<String, AppError> {
+    let plain = strip_managed_block(raw)?;
+    // v93 appended its block with generated padding. Recover that padding only
+    // when the entire old projection matches a known preset; never trim arbitrary
+    // native edits to make Pi appear active or claim ownership of Claude memory.
+    for prompt in prompts.values() {
+        if matches_legacy_prompt(raw, &prompt.content)? {
+            return Ok(prompt.content.clone());
+        }
+    }
+    Ok(plain)
+}
+
+pub(crate) fn legacy_plain_for_app(
+    state: &AppState,
+    app: &AppType,
+    raw: &str,
+) -> Result<Option<String>, AppError> {
+    for prompt in saved_prompts(state, app)?.values() {
+        if matches_legacy_prompt(raw, &prompt.content)? {
+            return Ok(Some(prompt.content.clone()));
+        }
+    }
+    Ok(None)
+}
+
+fn read_ordinary_live(
+    app: &AppType,
+    prompts: &IndexMap<String, Prompt>,
+) -> Result<Option<String>, AppError> {
+    let content = read_live_prompt_content(app)?;
+    if let Some(raw) = read_optional_text_file(&prompt_file_path(app)?)? {
+        for prompt in prompts.values() {
+            if matches_legacy_prompt(&raw, &prompt.content)? {
+                return Ok(Some(prompt.content.clone()));
+            }
+        }
+    }
+    Ok(content)
 }
 
 fn is_direct_prompt_owned_memory(
@@ -116,7 +171,7 @@ impl PromptService {
         state: &AppState,
         app: &AppType,
     ) -> Result<Option<Prompt>, AppError> {
-        let prompts = state.db.get_prompts(app.as_str())?;
+        let prompts = saved_prompts(state, app)?;
         let provider = Self::get_current_provider_for_app(state, app)?;
         Ok(Self::resolve_effective_prompt_from_map(
             &prompts,
@@ -142,8 +197,27 @@ impl PromptService {
             return Ok(());
         }
 
+        let _native_guard = if app == AppType::Mcode {
+            Some(
+                MCODE_PROMPT_LOCK
+                    .lock()
+                    .map_err(|error| AppError::Message(error.to_string()))?,
+            )
+        } else {
+            None
+        };
+        let _projection_guard = lock_projection()?;
+        Self::project_effective_prompt(state, app, provider)
+    }
+
+    // Caller holds the native lock (when applicable), then the projection lock.
+    fn project_effective_prompt(
+        state: &AppState,
+        app: AppType,
+        provider: Option<&Provider>,
+    ) -> Result<(), AppError> {
         let target_path = prompt_file_path(&app)?;
-        let prompts = state.db.get_prompts(app.as_str())?;
+        let prompts = saved_prompts(state, &app)?;
         let effective_prompt = Self::resolve_effective_prompt_from_map(&prompts, provider);
 
         let content = effective_prompt
@@ -160,15 +234,17 @@ impl PromptService {
                 .as_ref()
                 .expect("managed prompt checked above");
             let current_memory = read_optional_text_file(&target_path)?.unwrap_or_default();
+            let ordinary_memory = ordinary_from_saved(&prompts, &current_memory)?;
             let (mut updated_memory, previous_target) =
-                ensure_claude_managed_import(&current_memory, &prompt.id)?;
+                ensure_claude_managed_import(&ordinary_memory, &prompt.id)?;
             if previous_target.is_none()
-                && is_direct_prompt_owned_memory(&prompts, &current_memory, &content)
+                && is_direct_prompt_owned_memory(&prompts, &ordinary_memory, &content)
             {
                 // The previous direct mode owned the whole file. Move that
                 // content behind the import instead of applying it twice.
                 updated_memory = ensure_claude_managed_import("", &prompt.id)?.0;
             }
+            let updated_memory = compose_prompt(&app, &updated_memory)?;
             let managed_path = claude_managed_prompt_file_path(&prompt.id)?;
 
             // Publish the new target before updating the import block so the
@@ -191,11 +267,12 @@ impl PromptService {
             }
         } else {
             let current_memory = read_optional_text_file(&target_path)?.unwrap_or_default();
+            let ordinary_memory = ordinary_from_saved(&prompts, &current_memory)?;
             let (memory_without_managed_block, previous_target) = if matches!(app, AppType::Claude)
             {
-                remove_claude_managed_import(&current_memory)?
+                remove_claude_managed_import(&ordinary_memory)?
             } else {
-                (current_memory.clone(), None)
+                (ordinary_memory, None)
             };
 
             let next_memory = if effective_prompt.is_none() && previous_target.is_some() {
@@ -203,6 +280,7 @@ impl PromptService {
             } else {
                 content.clone()
             };
+            let next_memory = compose_prompt(&app, &next_memory)?;
             if (!next_memory.trim().is_empty() || target_path.exists())
                 && next_memory != current_memory
             {
@@ -235,13 +313,13 @@ impl PromptService {
         // A restore replaces the DB before projecting it to live files. Keep
         // backfill outside that window, including calls outside the UI command.
         let Ok(_sync_guard) = super::sync_protocol::sync_mutex().try_lock() else {
-            return state.db.get_prompts(app.as_str());
+            return saved_prompts(state, &app);
         };
-        let mut prompts = state.db.get_prompts(app.as_str())?;
+        let mut prompts = saved_prompts(state, &app)?;
         // External editors change the live file without updating the saved
         // selection. Refresh only that selection; inactive templates are separate.
         if let Some(prompt) = prompts.values_mut().find(|prompt| prompt.enabled) {
-            match Self::get_current_file_content(app.clone()) {
+            match read_ordinary_live(&app, &saved_prompts(state, &app)?) {
                 Ok(Some(content)) if !content.trim().is_empty() && prompt.content != content => {
                     prompt.content = content;
                     prompt.updated_at = Some(get_unix_timestamp()?);
@@ -261,8 +339,9 @@ impl PromptService {
         state: &AppState,
         app: AppType,
         id: &str,
-        prompt: Prompt,
+        mut prompt: Prompt,
     ) -> Result<(), AppError> {
+        prompt.content = strip_managed_block(&prompt.content)?;
         if matches!(app, AppType::Pi) {
             return upsert_pi_prompt(state, id, prompt);
         }
@@ -270,10 +349,12 @@ impl PromptService {
         if app == AppType::Mcode {
             return upsert_mcode_prompt(state, id, prompt, &prompt_file_path(&app)?);
         }
+        let _projection_guard = lock_projection()?;
         validate_prompt_content(&app, &prompt.content)?;
         let previous_effective_id = Self::resolve_effective_prompt(state, &app)?
             .map(|effective_prompt| effective_prompt.id);
         let saved_id = prompt.id.clone();
+        let previous = state.db.get_prompts(app.as_str())?.get(&saved_id).cloned();
         state.db.save_prompt(app.as_str(), &prompt)?;
 
         let current_effective_id = Self::resolve_effective_prompt(state, &app)?
@@ -284,7 +365,21 @@ impl PromptService {
 
         // Saving a disabled, non-effective preset must not rewrite the live prompt file.
         if effective_prompt_changed || saved_prompt_is_effective {
-            Self::sync_effective_prompt_to_file(state, app)?;
+            let provider = Self::get_current_provider_for_app(state, &app)?;
+            if let Err(error) =
+                Self::project_effective_prompt(state, app.clone(), provider.as_ref())
+            {
+                let rollback = match previous {
+                    Some(previous) => state.db.save_prompt(app.as_str(), &previous),
+                    None => state.db.delete_prompt(app.as_str(), &saved_id),
+                };
+                if let Err(rollback) = rollback {
+                    return Err(AppError::Message(format!(
+                        "Prompt projection failed ({error}); database rollback also failed: {rollback}"
+                    )));
+                }
+                return Err(error);
+            }
         }
 
         Ok(())
@@ -303,6 +398,7 @@ impl PromptService {
         } else {
             None
         };
+        let _projection_guard = lock_projection()?;
         let prompts = Self::get_prompts(state, app.clone())?;
 
         if let Some(prompt) = prompts.get(id) {
@@ -312,7 +408,17 @@ impl PromptService {
         }
 
         state.db.delete_prompt(app.as_str(), id)?;
-        Self::sync_effective_prompt_to_file(state, app)?;
+        let provider = Self::get_current_provider_for_app(state, &app)?;
+        if let Err(error) = Self::project_effective_prompt(state, app.clone(), provider.as_ref()) {
+            if let Some(previous) = prompts.get(id) {
+                state.db.save_prompt(app.as_str(), previous).map_err(|rollback| {
+                    AppError::Message(format!(
+                        "Prompt projection failed ({error}); database rollback also failed: {rollback}"
+                    ))
+                })?;
+            }
+            return Err(error);
+        }
         Ok(())
     }
 
@@ -323,15 +429,36 @@ impl PromptService {
         if app == AppType::Mcode {
             return enable_mcode_prompt(state, id, &prompt_file_path(&app)?);
         }
+        let _projection_guard = lock_projection()?;
+
+        // Validate the overlay before backfilling or changing selection in the
+        // DB. A missing/invalid shared source must not leave a failed activation
+        // recorded as enabled.
+        let mut prospective = saved_prompts(state, &app)?;
+        if !prospective.contains_key(id) {
+            return Err(AppError::InvalidInput(format!("提示词 {id} 不存在")));
+        }
+        for (key, prompt) in &mut prospective {
+            prompt.enabled = key == id;
+        }
+        let provider = Self::get_current_provider_for_app(state, &app)?;
+        let effective = Self::resolve_effective_prompt_from_map(&prospective, provider.as_ref());
+        compose_prompt(
+            &app,
+            effective
+                .as_ref()
+                .map(|prompt| prompt.content.as_str())
+                .unwrap_or_default(),
+        )?;
 
         // 回填当前 live 文件内容到实际生效的提示词，或创建备份。
-        let live_content = read_live_prompt_content(&app)?;
+        let live_content = read_ordinary_live(&app, &prospective)?;
         let has_live_content = live_content
             .as_deref()
             .is_some_and(|content| !content.trim().is_empty());
 
         if live_content.is_some() {
-            let mut prompts = state.db.get_prompts(app.as_str())?;
+            let mut prompts = saved_prompts(state, &app)?;
             let current_provider = Self::get_current_provider_for_app(state, &app)?;
             let effective_prompt_id =
                 Self::resolve_effective_prompt_from_map(&prompts, current_provider.as_ref())
@@ -389,7 +516,7 @@ impl PromptService {
         }
 
         // 启用目标提示词并写入文件
-        let mut prompts = state.db.get_prompts(app.as_str())?;
+        let mut prompts = saved_prompts(state, &app)?;
 
         for prompt in prompts.values_mut() {
             prompt.enabled = false;
@@ -408,20 +535,24 @@ impl PromptService {
             state.db.save_prompt(app.as_str(), prompt)?;
         }
 
-        Self::sync_effective_prompt_to_file(state, app)?;
+        Self::project_effective_prompt(state, app, provider.as_ref())?;
 
         Ok(())
     }
 
     pub fn import_from_file(state: &AppState, app: AppType) -> Result<String, AppError> {
+        let prompts = saved_prompts(state, &app)?;
         let content = if matches!(app, AppType::Pi) {
-            PiAgentsFileGuard::acquire()?
+            let raw = PiAgentsFileGuard::acquire()?
                 .read()?
                 .content
-                .ok_or_else(|| AppError::Message("提示词文件不存在".to_string()))?
+                .ok_or_else(|| AppError::Message("提示词文件不存在".to_string()))?;
+            ordinary_from_saved(&prompts, &raw)?
         } else {
-            read_live_prompt_content(&app)?.unwrap_or_default()
+            read_ordinary_live(&app, &prompts)?.unwrap_or_default()
         };
+        let content = strip_managed_block(&content)?;
+        validate_prompt_content(&app, &content)?;
         if content.trim().is_empty() {
             return Err(AppError::Message("提示词文件不存在".to_string()));
         }
@@ -449,7 +580,11 @@ impl PromptService {
 
     pub fn get_current_file_content(app: AppType) -> Result<Option<String>, AppError> {
         if matches!(app, AppType::Pi) {
-            return Ok(PiAgentsFileGuard::acquire()?.read()?.content);
+            return PiAgentsFileGuard::acquire()?
+                .read()?
+                .content
+                .map(|content| strip_managed_block(&content))
+                .transpose();
         }
         read_live_prompt_content(&app)
     }
@@ -465,16 +600,7 @@ impl PromptService {
             return Ok(());
         }
 
-        let _guard = if app == AppType::Mcode {
-            Some(
-                MCODE_PROMPT_LOCK
-                    .lock()
-                    .map_err(|error| AppError::Message(error.to_string()))?,
-            )
-        } else {
-            None
-        };
-        let prompts = state.db.get_prompts(app.as_str())?;
+        let prompts = saved_prompts(state, &app)?;
         let warning = duplicate_enabled_prompt_warning(&prompts);
         let provider = Self::get_current_provider_for_app(state, &app)?;
 
@@ -522,7 +648,7 @@ impl PromptService {
         app: AppType,
     ) -> Result<usize, AppError> {
         // 幂等性保护：该应用已有提示词则跳过
-        let existing = state.db.get_prompts(app.as_str())?;
+        let existing = saved_prompts(state, &app)?;
         if !existing.is_empty() {
             return Ok(0);
         }
@@ -545,6 +671,7 @@ impl PromptService {
             read_live_prompt_content(&app)?.unwrap_or_default()
         };
 
+        let content = strip_managed_block(&content)?;
         validate_prompt_content(&app, &content)?;
         // 检查内容是否为空
         if content.trim().is_empty() {
@@ -580,7 +707,7 @@ impl PromptService {
     }
 }
 
-static MCODE_PROMPT_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+pub(crate) static MCODE_PROMPT_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
 fn upsert_mcode_prompt(
     state: &AppState,
@@ -591,8 +718,9 @@ fn upsert_mcode_prompt(
     let _guard = MCODE_PROMPT_LOCK
         .lock()
         .map_err(|error| AppError::Message(error.to_string()))?;
+    let _projection_guard = lock_projection()?;
     validate_prompt_content(&AppType::Mcode, &prompt.content)?;
-    let prompts = state.db.get_prompts("mcode")?;
+    let prompts = saved_prompts(state, &AppType::Mcode)?;
     let clear_live = !prompt.enabled
         && prompts.get(id).is_some_and(|previous| previous.enabled)
         && !prompts
@@ -602,9 +730,16 @@ fn upsert_mcode_prompt(
     if !prompt.enabled && !clear_live {
         return state.db.save_prompt("mcode", &prompt);
     }
+    if let Some(existing) = read_optional_text_file(target_path)? {
+        strip_managed_block(&existing)?;
+    }
+    let content = compose_prompt(
+        &AppType::Mcode,
+        if clear_live { "" } else { &prompt.content },
+    )?;
     crate::mcode_config::write_and_commit(
         target_path,
-        || write_text_file(target_path, if clear_live { "" } else { &prompt.content }),
+        || write_text_file(target_path, &content),
         || state.db.save_prompt("mcode", &prompt),
     )
 }
@@ -613,7 +748,8 @@ fn enable_mcode_prompt(state: &AppState, id: &str, target_path: &Path) -> Result
     let _guard = MCODE_PROMPT_LOCK
         .lock()
         .map_err(|error| AppError::Message(error.to_string()))?;
-    let mut prompts = state.db.get_prompts("mcode")?;
+    let _projection_guard = lock_projection()?;
+    let mut prompts = saved_prompts(state, &AppType::Mcode)?;
     let target = prompts
         .get(id)
         .ok_or_else(|| AppError::InvalidInput(format!("提示词 {id} 不存在")))?;
@@ -624,6 +760,7 @@ fn enable_mcode_prompt(state: &AppState, id: &str, target_path: &Path) -> Result
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => String::new(),
         Err(error) => return Err(AppError::io(target_path, error)),
     };
+    let live_content = ordinary_from_saved(&prompts, &live_content)?;
     if !live_content.trim().is_empty() {
         let timestamp = get_unix_timestamp()?;
         if let Some(current) = prompts.values_mut().find(|prompt| prompt.enabled) {
@@ -655,11 +792,10 @@ fn enable_mcode_prompt(state: &AppState, id: &str, target_path: &Path) -> Result
     for (key, prompt) in &mut prompts {
         prompt.enabled = key == id;
     }
-    let content = &prompts[id].content;
-    validate_prompt_content(&AppType::Mcode, content)?;
+    let content = compose_prompt(&AppType::Mcode, &prompts[id].content)?;
     crate::mcode_config::write_and_commit(
         target_path,
-        || write_text_file(target_path, content),
+        || write_text_file(target_path, &content),
         || state.db.save_mcode_prompts(&prompts),
     )
 }
@@ -691,9 +827,14 @@ fn unique_pi_backup_id(prompts: &IndexMap<String, Prompt>, timestamp: i64) -> St
 
 fn get_pi_prompts(state: &AppState) -> Result<IndexMap<String, Prompt>, AppError> {
     let guard = PiAgentsFileGuard::acquire()?;
-    let mut prompts = state.db.get_prompts(AppType::Pi.as_str())?;
+    let mut prompts = saved_prompts(state, &AppType::Pi)?;
     let snapshot = guard.read()?;
-    let active_id = pi_active_prompt_id(&prompts, snapshot.content.as_deref());
+    let ordinary = snapshot
+        .content
+        .as_deref()
+        .map(|raw| ordinary_from_saved(&prompts, raw))
+        .transpose()?;
+    let active_id = pi_active_prompt_id(&prompts, ordinary.as_deref());
 
     for (id, prompt) in &mut prompts {
         prompt.enabled = active_id.as_ref() == Some(id);
@@ -709,10 +850,15 @@ fn upsert_pi_prompt(state: &AppState, id: &str, prompt: Prompt) -> Result<(), Ap
     }
 
     let guard = PiAgentsFileGuard::acquire()?;
-    let prompts = state.db.get_prompts(AppType::Pi.as_str())?;
+    let _projection_guard = lock_projection()?;
+    let prompts = saved_prompts(state, &AppType::Pi)?;
     let snapshot = guard.read()?;
-    let was_active =
-        pi_active_prompt_id(&prompts, snapshot.content.as_deref()).as_deref() == Some(id);
+    let ordinary = snapshot
+        .content
+        .as_deref()
+        .map(|raw| ordinary_from_saved(&prompts, raw))
+        .transpose()?;
+    let was_active = pi_active_prompt_id(&prompts, ordinary.as_deref()).as_deref() == Some(id);
     let previous = prompts.get(id).cloned();
     let requested_active = prompt.enabled;
     let mut stored = prompt;
@@ -724,11 +870,27 @@ fn upsert_pi_prompt(state: &AppState, id: &str, prompt: Prompt) -> Result<(), Ap
         ));
     }
 
+    // A native disable removes only the preset; shared instructions stay active.
+    let projected = if requested_active || was_active {
+        Some(compose_prompt(
+            &AppType::Pi,
+            if requested_active {
+                &stored.content
+            } else {
+                ""
+            },
+        )?)
+    } else {
+        None
+    };
+
     persist_pi_prompt_with_native_update(state, id, &stored, previous.as_ref(), || {
-        if requested_active {
-            guard.replace(&snapshot.revision, &stored.content)
-        } else if was_active {
+        if let Some(content) = projected.as_deref().filter(|content| !content.is_empty()) {
+            guard.replace(&snapshot.revision, content)
+        } else if was_active && !requested_active {
             guard.delete(&snapshot.revision)
+        } else if let Some(content) = projected.as_deref() {
+            guard.replace(&snapshot.revision, content)
         } else {
             Ok(())
         }
@@ -760,14 +922,21 @@ fn persist_pi_prompt_with_native_update(
 
 fn enable_pi_prompt(state: &AppState, id: &str) -> Result<(), AppError> {
     let guard = PiAgentsFileGuard::acquire()?;
-    let prompts = state.db.get_prompts(AppType::Pi.as_str())?;
+    let _projection_guard = lock_projection()?;
+    let prompts = saved_prompts(state, &AppType::Pi)?;
     let target = prompts
         .get(id)
         .cloned()
         .ok_or_else(|| AppError::InvalidInput(format!("提示词 {id} 不存在")))?;
     let snapshot = guard.read()?;
+    let ordinary = snapshot
+        .content
+        .as_deref()
+        .map(|raw| ordinary_from_saved(&prompts, raw))
+        .transpose()?;
+    let content = compose_prompt(&AppType::Pi, &target.content)?;
 
-    if let Some(content) = snapshot.content.as_ref() {
+    if let Some(content) = ordinary.as_ref() {
         let already_saved = prompts.values().any(|prompt| prompt.content == *content);
         if !content.trim().is_empty() && !already_saved {
             let timestamp = get_unix_timestamp()?;
@@ -788,19 +957,28 @@ fn enable_pi_prompt(state: &AppState, id: &str) -> Result<(), AppError> {
         }
     }
 
-    guard.replace(&snapshot.revision, &target.content)
+    guard.replace(&snapshot.revision, &content)
 }
 
 fn delete_pi_prompt(state: &AppState, id: &str) -> Result<(), AppError> {
     let guard = PiAgentsFileGuard::acquire()?;
-    let prompts = state.db.get_prompts(AppType::Pi.as_str())?;
+    let prompts = saved_prompts(state, &AppType::Pi)?;
     let snapshot = guard.read()?;
-    if pi_active_prompt_id(&prompts, snapshot.content.as_deref()).as_deref() == Some(id) {
+    let ordinary = snapshot
+        .content
+        .as_deref()
+        .map(|raw| ordinary_from_saved(&prompts, raw))
+        .transpose()?;
+    if pi_active_prompt_id(&prompts, ordinary.as_deref()).as_deref() == Some(id) {
         return Err(AppError::InvalidInput("无法删除已启用的提示词".to_string()));
     }
     state.db.delete_prompt(AppType::Pi.as_str(), id)?;
     Ok(())
 }
+
+#[cfg(test)]
+#[path = "prompt_shared_tests.rs"]
+mod shared_instruction_tests;
 
 #[cfg(test)]
 mod tests {

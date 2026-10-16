@@ -685,16 +685,16 @@ pub fn run() {
 
             let app_state = AppState::new(db);
 
-            if let Err(error) = crate::shared_instructions::sync_from_settings() {
-                log::warn!("启动时同步共享指令文件失败，保留现有 Agent 文件: {error}");
-            }
-
             // 设置 AppHandle 用于代理故障转移时的 UI 更新
             app_state.proxy_service.set_app_handle(app.handle().clone());
 
             // 补完上次崩溃时写到一半的客户端文件（写前意图在 ~/.cc-switch/live-state.json），
             // 要在任何写客户端文件的启动步骤之前。
             crate::mode::operation::recover_on_startup(&app_state.db);
+
+            if let Err(error) = crate::shared_instructions::sync_from_settings_for_state(&app_state) {
+                log::warn!("启动时同步共享指令文件失败，保留现有 Agent 文件: {error}");
+            }
 
             // ============================================================
             // 按表独立判断的导入逻辑（各类数据独立检查，互不影响）

@@ -26,6 +26,11 @@ pub(crate) fn validate_prompt_content(app: &AppType, content: &str) -> Result<()
             "MCode global instructions must not exceed 32 KiB".into(),
         ));
     }
+    if matches!(app, AppType::Pi) && content.len() > 1024 * 1024 {
+        return Err(AppError::InvalidInput(
+            "Pi AGENTS.md exceeds the 1 MiB limit".into(),
+        ));
+    }
     Ok(())
 }
 
@@ -285,6 +290,8 @@ pub fn read_live_prompt_content(app: &AppType) -> Result<Option<String>, AppErro
 
     let memory_content =
         std::fs::read_to_string(&memory_path).map_err(|error| AppError::io(&memory_path, error))?;
+    // The shared block is a separate source, never part of a saved preset.
+    let memory_content = crate::shared_instructions::strip_managed_block(&memory_content)?;
     if !matches!(app, AppType::Claude) {
         return Ok(Some(memory_content));
     }
@@ -300,8 +307,8 @@ pub fn read_live_prompt_content(app: &AppType) -> Result<Option<String>, AppErro
         )));
     }
     std::fs::read_to_string(&managed_path)
-        .map(Some)
         .map_err(|error| AppError::io(&managed_path, error))
+        .and_then(|content| crate::shared_instructions::strip_managed_block(&content).map(Some))
 }
 
 /// 把用户主目录前缀换成 `~`，给界面显示用（复制路径仍用完整路径）。

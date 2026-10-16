@@ -73,6 +73,18 @@ pub async fn save_settings(
     let unify_codex_enabled = merged.unify_codex_session_history;
     let shared_instruction_file_changed =
         merged.shared_instruction_file != existing.shared_instruction_file;
+    let instruction_dirs_changed = [
+        (&merged.claude_config_dir, &existing.claude_config_dir),
+        (&merged.codex_config_dir, &existing.codex_config_dir),
+        (&merged.gemini_config_dir, &existing.gemini_config_dir),
+        (&merged.grok_config_dir, &existing.grok_config_dir),
+        (&merged.opencode_config_dir, &existing.opencode_config_dir),
+        (&merged.openclaw_config_dir, &existing.openclaw_config_dir),
+        (&merged.hermes_config_dir, &existing.hermes_config_dir),
+        (&merged.pi_config_dir, &existing.pi_config_dir),
+    ]
+    .into_iter()
+    .any(|(next, previous)| next != previous);
     // 经典子 agent 开关、聚合子 agent 模型/强度和聚合自动审批模型都只影响 Stack 模式下
     // 写给 Codex 的内容。
     let stack_settings_changed = merged.codex_stack_classic_tools
@@ -81,14 +93,33 @@ pub async fn save_settings(
         || merged.codex_stack_subagent_reasoning_effort
             != existing.codex_stack_subagent_reasoning_effort
         || merged.codex_stack_auto_review_model != existing.codex_stack_auto_review_model;
-    crate::settings::update_settings(merged).map_err(|e| e.to_string())?;
-
-    if shared_instruction_file_changed {
-        if let Err(error) = crate::shared_instructions::sync_from_settings() {
-            log::warn!("同步共享指令文件失败，回滚设置: {error}");
-            crate::settings::update_settings(existing).map_err(|rollback| rollback.to_string())?;
+    // Ordinarily publish settings only after all target writes, so a settings
+    // failure rolls files back too. A combined directory/source change retains
+    // the existing directory-first ordering to resolve the new native paths.
+    // Unrelated settings must remain editable if a configured source disappears.
+    if shared_instruction_file_changed && instruction_dirs_changed {
+        let source = merged.shared_instruction_file.clone();
+        crate::settings::update_settings(merged).map_err(|e| e.to_string())?;
+        if let Err(error) = crate::shared_instructions::sync_with_source_for_state(
+            state.inner(),
+            source.as_deref(),
+            || Ok(()),
+        ) {
+            crate::settings::update_settings(existing.clone()).map_err(|rollback| {
+                format!("共享指令同步失败 ({error}); 设置回滚也失败: {rollback}")
+            })?;
             return Err(error.to_string());
         }
+    } else if shared_instruction_file_changed {
+        let source = merged.shared_instruction_file.clone();
+        crate::shared_instructions::sync_with_source_for_state(
+            state.inner(),
+            source.as_deref(),
+            || crate::settings::update_settings(merged),
+        )
+        .map_err(|error| error.to_string())?;
+    } else {
+        crate::settings::update_settings(merged).map_err(|e| e.to_string())?;
     }
 
     // 立即重写，失败时回滚设置，免得界面显示已改好、客户端还是旧的。
@@ -122,7 +153,12 @@ pub async fn save_settings(
             crate::services::provider::reapply_current_codex_official_live(state.inner())
         {
             log::warn!("统一 Codex 会话历史开关变更后重写 live 配置失败，回滚设置: {err}");
-            if let Err(rollback_err) = crate::settings::update_settings(existing) {
+            // Shared files and Stack settings may already have committed above.
+            // Roll back only this toggle instead of desynchronizing those files.
+            let mut rollback = crate::settings::get_settings();
+            rollback.unify_codex_session_history = existing.unify_codex_session_history;
+            rollback.unify_codex_migrate_existing = existing.unify_codex_migrate_existing;
+            if let Err(rollback_err) = crate::settings::update_settings(rollback) {
                 log::error!("回滚统一会话开关设置失败: {rollback_err}");
             }
             return Err(format!(

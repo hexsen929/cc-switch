@@ -73,14 +73,14 @@ fn get_shell_targets() -> Result<(ShellTargets, String), String> {
         } else {
             powershell
         };
-        return Ok((
+        Ok((
             ShellTargets {
                 primary,
                 additional: Vec::new(),
                 legacy: Vec::new(),
             },
             "PowerShell".to_string(),
-        ));
+        ))
     }
 
     #[cfg(not(target_os = "windows"))]
