@@ -176,6 +176,11 @@ jobs:
         with:
           python-version: "3.13"
 
+      - name: Install Codex sandbox prerequisites
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends bubblewrap
+
       - name: Setup pnpm
         env:
           COREPACK_ENABLE_DOWNLOAD_PROMPT: "0"
@@ -333,7 +338,8 @@ jobs:
           for path in sorted(pathlib.Path(os.environ["RUNNER_TEMP"]).glob("backend-*.log")):
               text = path.read_text(encoding="utf-8", errors="replace")
               text = re.sub(r"\x1b\[[0-9;]*m", "", text)
-              tail = "\n".join(text.splitlines()[-120:])[-12000:]
+              lines = [line for line in text.splitlines() if not re.match(r"\s*(?:PASS|SKIP)\s+\[", line)]
+              tail = "\n".join(lines[-100:])[-3500:]
               escaped = tail.replace("%", "%25").replace("\r", "%0D").replace("\n", "%0A")
               print(f"::error title={path.stem}::{escaped}")
           PY
