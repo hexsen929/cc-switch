@@ -147,6 +147,9 @@ pub struct ProviderService;
 #[serde(rename_all = "camelCase")]
 pub struct SwitchResult {
     pub warnings: Vec<String>,
+    /// Present only when this operation selected a local proxy target.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub route: Option<crate::mode::controller::RouteSwitchResult>,
 }
 
 #[cfg(test)]
@@ -3593,6 +3596,12 @@ requires_openai_auth = true
         crate::settings::reload_settings().expect("reload settings");
 
         let db = Arc::new(Database::memory().expect("init db"));
+        db.update_proxy_config(ProxyConfig {
+            listen_port: 0,
+            ..Default::default()
+        })
+        .await
+        .expect("ephemeral proxy port");
         let state = AppState::new(db.clone());
 
         let mut original = Provider::with_id(
@@ -3634,7 +3643,7 @@ requires_openai_auth = true
                 .expect("use ephemeral proxy port");
         }
 
-        let proxy_info = state
+        state
             .proxy_service
             .start()
             .await
@@ -3648,6 +3657,8 @@ requires_openai_auth = true
         )
         .await
         .expect("enter desktop route mode");
+        let gateway_url = crate::claude_desktop_config::proxy_gateway_base_url_from_db(&db)
+            .expect("running Desktop gateway");
 
         let mut updated = Provider::with_id(
             "p1".into(),
@@ -3688,10 +3699,7 @@ requires_openai_auth = true
         let profile: Value = read_json_file(&profile_path).expect("read desktop profile");
         assert_eq!(
             profile["inferenceGatewayBaseUrl"],
-            json!(format!(
-                "http://127.0.0.1:{}/claude-desktop",
-                proxy_info.port
-            )),
+            json!(gateway_url),
             "desktop profile should stay pointed at the local gateway during takeover"
         );
         assert_eq!(profile["inferenceGatewayAuthScheme"], json!("bearer"));
@@ -3700,6 +3708,11 @@ requires_openai_auth = true
             json!([{ "name": "claude-sonnet-4-6", "labelOverride": "DeepSeek V4 Flash Updated", "supports1m": true, "prefer1m": true }]),
             "provider edits should propagate into the Claude Desktop 3P profile during takeover"
         );
+        state
+            .proxy_service
+            .stop()
+            .await
+            .expect("stop proxy service");
     }
 
     #[test]
@@ -7927,12 +7940,15 @@ impl ProviderService {
                     .unwrap_or("（无）"),
                 id
             );
-            futures::executor::block_on(crate::mode::controller::switch_route_locked(
+            let route = futures::executor::block_on(crate::mode::controller::switch_route_locked(
                 state, &app_type, _provider,
             ))
             .map_err(|e| AppError::Message(format!("切换路由失败: {e}")))?;
             // 路由切换的资源覆盖由 controller 在新路由提交后同步。
-            return Ok(SwitchResult::default());
+            return Ok(SwitchResult {
+                route: Some(route),
+                ..Default::default()
+            });
         }
 
         // Normal mode: full switch with Live config write
