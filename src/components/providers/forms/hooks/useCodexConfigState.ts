@@ -262,8 +262,8 @@ export function useCodexConfigState({ initialData }: UseCodexConfigStateProps) {
       );
       const hasLegacyReviewer = Boolean(
         modelCatalog &&
-        typeof modelCatalog === "object" &&
-        Object.prototype.hasOwnProperty.call(modelCatalog, "autoReviewModel"),
+          typeof modelCatalog === "object" &&
+          Object.prototype.hasOwnProperty.call(modelCatalog, "autoReviewModel"),
       );
       setHasStoredCodexAutoReviewModel(
         hasIndependentReviewer || hasLegacyReviewer,
