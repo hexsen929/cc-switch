@@ -784,6 +784,7 @@ function ProviderFormFull({
     codexModelInstructionsFile,
     codexModelInstructionsFiles,
     codexAutoReviewModel,
+    shouldSaveCodexAutoReviewModel,
     codexAuthError,
     setCodexAuth,
     setCodexConfig,
@@ -1786,6 +1787,7 @@ function ProviderFormFull({
         } as {
           auth: unknown;
           config: string;
+          autoReviewModel?: string;
           modelInstructionsFiles?: string[];
           modelAliases?: Record<string, string>;
           modelCatalog?: {
@@ -1795,16 +1797,12 @@ function ProviderFormFull({
         };
         if (normalizedCatalogModels.length > 0) {
           configObj.modelCatalog = { models: normalizedCatalogModels };
-          // 自动审批模型只能是列表里的（列表里删掉了就不再存，后端也只认列表里的）
-          const autoReviewModel = codexAutoReviewModel.trim();
-          if (
-            autoReviewModel &&
-            normalizedCatalogModels.some(
-              (model) => model.model === autoReviewModel,
-            )
-          ) {
-            configObj.modelCatalog.autoReviewModel = autoReviewModel;
-          }
+        }
+        if (category !== "official" && shouldSaveCodexAutoReviewModel) {
+          // Independent of the picker catalog. An explicit empty value resets
+          // a legacy selection to Codex's codex-auto-review default. Untouched
+          // alias-only cards retain their original single-step alias mapping.
+          configObj.autoReviewModel = codexAutoReviewModel.trim();
         }
         if (normalizedModelInstructionsFiles.length > 0) {
           configObj.modelInstructionsFiles = normalizedModelInstructionsFiles;

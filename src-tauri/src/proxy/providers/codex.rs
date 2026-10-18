@@ -521,6 +521,43 @@ fn codex_provider_alias_target_ids(provider: &Provider) -> HashSet<String> {
         .unwrap_or_default()
 }
 
+/// Card reviewer settings apply only on the Codex classic routing path. An
+/// explicit empty value selects Codex's reviewer id rather than a main-model
+/// fallback. Unconfigured cards retain their existing exact-alias behavior.
+pub(crate) fn codex_card_review_request_model<'a>(
+    provider: &'a Provider,
+    requested: &str,
+) -> Option<&'a str> {
+    let settings = &provider.settings_config;
+    settings.get("autoReviewModel").or_else(|| {
+        settings
+            .get("modelCatalog")
+            .and_then(|catalog| catalog.get("autoReviewModel"))
+    })?;
+    let reviewer = crate::codex_config::codex_card_auto_review_model(settings);
+    if requested != "codex-auto-review" && requested != reviewer {
+        return None;
+    }
+    if reviewer == "codex-auto-review" {
+        return Some(reviewer);
+    }
+    // The chosen reviewer may also be the conversation model. Preserve its
+    // explicit exact alias rather than swallowing that user-owned mapping.
+    let stripped_reviewer = crate::proxy::model_mapper::strip_one_m_suffix_for_upstream(reviewer);
+    settings
+        .get("modelAliases")
+        .and_then(JsonValue::as_object)
+        .and_then(|aliases| {
+            aliases.iter().find_map(|(source, target)| {
+                let target = target.as_str()?.trim();
+                ((source.trim() == reviewer || source.trim() == stripped_reviewer)
+                    && !target.is_empty())
+                .then_some(target)
+            })
+        })
+        .or(Some(reviewer))
+}
+
 /// For Codex Chat providers, ensure the request uses the configured upstream
 /// model before converting the request to Chat Completions.
 pub fn apply_codex_chat_upstream_model(
@@ -545,7 +582,12 @@ pub fn apply_codex_upstream_model(provider: &Provider, body: &mut JsonValue) -> 
         .map(str::trim)
         .filter(|model| !model.is_empty())
     {
-        if catalog_model_ids.contains(request_model) || alias_target_ids.contains(request_model) {
+        if request_model == "codex-auto-review"
+            || request_model
+                == crate::codex_config::codex_card_auto_review_model(&provider.settings_config)
+            || catalog_model_ids.contains(request_model)
+            || alias_target_ids.contains(request_model)
+        {
             return Some(request_model.to_string());
         }
     }
@@ -1927,6 +1969,76 @@ wire_api = "anthropic"
             body.get("model").and_then(|v| v.as_str()),
             Some("claude-opus-4-1[1m]")
         );
+    }
+
+    #[test]
+    fn independent_reviewer_survives_upstream_model_fallback() {
+        for reviewer in ["review-outside-list", "", "  "] {
+            let provider = create_provider(json!({
+                "config": "model = \"main-model\"\n",
+                "autoReviewModel": reviewer,
+                "modelCatalog": {"models": [{"model":"main-model"}], "autoReviewModel":"old-reviewer"}
+            }));
+            let expected = if reviewer.trim().is_empty() {
+                "codex-auto-review"
+            } else {
+                reviewer
+            };
+            assert_eq!(
+                codex_card_review_request_model(&provider, "codex-auto-review"),
+                Some(expected)
+            );
+            let mut body = json!({"model":expected});
+            assert_eq!(
+                apply_codex_upstream_model(&provider, &mut body).as_deref(),
+                Some(expected)
+            );
+            assert_eq!(body["model"], expected);
+            assert!(codex_card_review_request_model(&provider, "main-model").is_none());
+        }
+        let unconfigured = create_provider(json!({"config":"model = \"main-model\"\n"}));
+        assert!(codex_card_review_request_model(&unconfigured, "codex-auto-review").is_none());
+
+        let aliased_main = create_provider(json!({
+            "autoReviewModel":"main-model",
+            "modelAliases":{"main-model":"vendor-model"}
+        }));
+        for requested in ["main-model", "codex-auto-review"] {
+            assert_eq!(
+                codex_card_review_request_model(&aliased_main, requested),
+                Some("vendor-model")
+            );
+        }
+        let marked_main = create_provider(json!({
+            "autoReviewModel": "main-model[1m]",
+            "modelAliases": {"main-model": "vendor-model"}
+        }));
+        for requested in ["main-model[1m]", "codex-auto-review"] {
+            assert_eq!(
+                codex_card_review_request_model(&marked_main, requested),
+                Some("vendor-model")
+            );
+        }
+    }
+
+    #[test]
+    fn malformed_card_reviewer_does_not_revive_legacy_or_exact_alias_selection() {
+        for invalid in [JsonValue::Null, json!(17), json!({"unexpected":true})] {
+            let provider = create_provider(json!({
+                "autoReviewModel": invalid,
+                "modelCatalog": {"autoReviewModel": "legacy-review"},
+                "modelAliases": {"codex-auto-review": "old-aliased-review"}
+            }));
+            assert_eq!(
+                crate::codex_config::codex_card_auto_review_model(&provider.settings_config),
+                "codex-auto-review"
+            );
+            assert_eq!(
+                codex_card_review_request_model(&provider, "codex-auto-review"),
+                Some("codex-auto-review")
+            );
+            assert!(codex_card_review_request_model(&provider, "legacy-review").is_none());
+        }
     }
 
     #[test]

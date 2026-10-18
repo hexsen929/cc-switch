@@ -2019,6 +2019,17 @@ impl RequestForwarder {
         // Claude Desktop proxy 模式必须先把 Desktop 可见的 claude-* route
         // 映射成真实上游模型名，并且未知 route 要直接报错，不能使用默认模型兜底。
         // 聚合模型的请求已经解出了上游名，不再查映射表（查不到会报错，按档位回落会发错模型）。
+        let card_review_model =
+            if matches!(app_type, AppType::Codex) && !self.keeps_resolved_model() {
+                body.get("model")
+                    .and_then(Value::as_str)
+                    .and_then(|model| {
+                        super::providers::codex_card_review_request_model(provider, model)
+                    })
+                    .filter(|_| !crate::mode::stack::stack_mode_now(app_type))
+            } else {
+                None
+            };
         let mapped_body = if matches!(app_type, AppType::ClaudeDesktop) {
             if self.keeps_resolved_model() {
                 crate::claude_desktop_config::normalize_upstream_request(body.clone(), provider)
@@ -2028,6 +2039,10 @@ impl RequestForwarder {
             }
         } else if self.keeps_resolved_model() {
             body.clone()
+        } else if let Some(reviewer) = card_review_model {
+            let mut mapped = body.clone();
+            mapped["model"] = Value::String(reviewer.to_string());
+            mapped
         } else {
             let (mapped_body, _original_model, _mapped_model) =
                 super::model_mapper::apply_model_mapping(body.clone(), provider);
@@ -2082,7 +2097,8 @@ impl RequestForwarder {
                 obj.insert("model".to_string(), Value::String(model.clone()));
             }
         }
-        let explicit_model = self.intent_model.is_some()
+        let explicit_model = card_review_model.is_some()
+            || self.intent_model.is_some()
             || before_rewrite_model.as_ref() != mapped_body.get("model");
 
         // The OpenCode gateway wants a stable per-conversation session id (see the
@@ -8175,6 +8191,124 @@ mod tests {
                 .map_err(|error| error.error)
                 .expect("forward");
             upstream.seen.lock().await.pop().expect("upstream request")
+        }
+
+        #[tokio::test]
+        #[serial_test::serial]
+        async fn card_review_routes_without_a_handwritten_model_catalog() {
+            struct RestoreHome(Option<std::ffi::OsString>);
+            impl Drop for RestoreHome {
+                fn drop(&mut self) {
+                    match self.0.take() {
+                        Some(value) => std::env::set_var("CC_SWITCH_TEST_HOME", value),
+                        None => std::env::remove_var("CC_SWITCH_TEST_HOME"),
+                    }
+                }
+            }
+            let home = tempfile::tempdir().unwrap();
+            let _restore = RestoreHome(std::env::var_os("CC_SWITCH_TEST_HOME"));
+            std::env::set_var("CC_SWITCH_TEST_HOME", home.path());
+            let upstream = upstream().await;
+            for format in ["openai_responses", "openai_chat", "anthropic"] {
+                for reviewer in ["review-only", ""] {
+                    let mut configured = provider(&upstream, format);
+                    configured
+                        .settings_config
+                        .as_object_mut()
+                        .unwrap()
+                        .remove("modelCatalog");
+                    configured.settings_config["autoReviewModel"] = json!(reviewer);
+                    // A stale exact alias must not revive the old selection after clearing.
+                    configured.settings_config["modelAliases"] =
+                        json!({"codex-auto-review":"old-reviewer"});
+                    configured.settings_config["env"] = json!({"ANTHROPIC_MODEL":"row-model"});
+                    let expected = if reviewer.is_empty() {
+                        "codex-auto-review"
+                    } else {
+                        reviewer
+                    };
+                    for requested in ["codex-auto-review", expected] {
+                        let seen = send(
+                            &forwarder(false),
+                            &upstream,
+                            configured.clone(),
+                            "/responses",
+                            body(requested, json!([])),
+                        )
+                        .await;
+                        assert_eq!(seen.body["model"], expected, "{format}: {reviewer:?}");
+                    }
+                    let seen = send(
+                        &forwarder(false),
+                        &upstream,
+                        configured,
+                        "/responses",
+                        body("row-model", json!([])),
+                    )
+                    .await;
+                    assert_eq!(seen.body["model"], "row-model");
+                }
+                let mut aliased_main = provider(&upstream, format);
+                aliased_main.settings_config["autoReviewModel"] = json!("row-model");
+                aliased_main.settings_config["modelAliases"] = json!({"row-model":"vendor-model"});
+                for requested in ["row-model", "codex-auto-review"] {
+                    let seen = send(
+                        &forwarder(false),
+                        &upstream,
+                        aliased_main.clone(),
+                        "/responses",
+                        body(requested, json!([])),
+                    )
+                    .await;
+                    assert_eq!(seen.body["model"], "vendor-model");
+                }
+            }
+            // xAI's later native-Responses sanitizer must keep an explicit card reviewer
+            // even when it is not a Grok SKU and is not in the handwritten catalog.
+            // The local fixture URL includes the detector's xAI marker in its path;
+            // all traffic still terminates at the in-process test upstream.
+            for reviewer in ["review-only", ""] {
+                let mut configured = provider(&upstream, "openai_responses");
+                let mut config = configured.settings_config["config"]
+                    .as_str()
+                    .unwrap()
+                    .parse::<toml_edit::DocumentMut>()
+                    .unwrap();
+                config["model"] = toml_edit::value("grok-4.6");
+                config["model_providers"]["custom"]["base_url"] =
+                    toml_edit::value(format!("{}/v1/api.x.ai", upstream.base_url));
+                configured.settings_config["config"] = json!(config.to_string());
+                configured
+                    .settings_config
+                    .as_object_mut()
+                    .unwrap()
+                    .remove("modelCatalog");
+                configured.settings_config["autoReviewModel"] = json!(reviewer);
+                assert!(
+                    crate::proxy::providers::provider_needs_responses_namespace_flatten(
+                        &configured
+                    )
+                );
+                let expected = if reviewer.is_empty() {
+                    "codex-auto-review"
+                } else {
+                    reviewer
+                };
+                for requested in ["codex-auto-review", expected] {
+                    let mut request = body(requested, json!([]));
+                    request["safety_identifier"] = json!("test-sanitizer-remains-active");
+                    let seen = send(
+                        &forwarder(false),
+                        &upstream,
+                        configured.clone(),
+                        "/responses",
+                        request,
+                    )
+                    .await;
+                    assert_eq!(seen.body["model"], expected, "xAI: {reviewer:?}");
+                    assert!(seen.body.get("safety_identifier").is_none());
+                }
+            }
         }
 
         #[tokio::test]

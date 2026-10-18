@@ -205,41 +205,72 @@ describe("CodexFormFields help tips", () => {
   });
 });
 
-const autoReviewSelect = () =>
-  document.getElementById("codexAutoReviewModel") as HTMLButtonElement | null;
+const autoReviewInput = () =>
+  document.getElementById("codexAutoReviewModel") as HTMLInputElement | null;
 
 describe("CodexFormFields Auto Review model", () => {
-  it("offers the card's own models and writes the pick through the handler", async () => {
+  it("accepts a free model ID without requiring a catalog and clears to codex-auto-review", () => {
+    const props = codexFormProps({
+      catalogModels: [],
+      onCatalogModelsChange: vi.fn(),
+      onAutoReviewModelChange: vi.fn(),
+    });
+    const { rerender } = render(
+      <FormShell>
+        <CodexFormFields {...props} />
+      </FormShell>,
+    );
+    const input = autoReviewInput()!;
+    expect(input).toBeEnabled();
+    expect(input).toHaveValue("");
+    expect(input).toHaveAttribute("placeholder", "留空使用 codex-auto-review");
+    fireEvent.change(input, { target: { value: "reviewer-not-in-list" } });
+    expect(props.onAutoReviewModelChange).toHaveBeenCalledWith(
+      "reviewer-not-in-list",
+    );
+    rerender(
+      <FormShell>
+        <CodexFormFields {...props} autoReviewModel="reviewer-not-in-list" />
+      </FormShell>,
+    );
+    fireEvent.change(autoReviewInput()!, { target: { value: "" } });
+    expect(props.onAutoReviewModelChange).toHaveBeenLastCalledWith("");
+    expect(props.onCatalogModelsChange).not.toHaveBeenCalled();
+    expect(props.onModelChange).not.toHaveBeenCalled();
+    expect(
+      screen.getByText(
+        "无需添加到模型列表；保存供应商后应用，修改后重启 Codex。",
+      ),
+    ).toBeVisible();
+    expect(screen.queryByText(/主模型自己审批/)).toBeNull();
+  });
+
+  it("offers catalog models without changing the catalog or main model", async () => {
     Element.prototype.scrollIntoView = vi.fn();
     const user = userEvent.setup();
-    const onAutoReviewModelChange = vi.fn();
-    renderCodexForm({
+    const props = renderCodexForm({
       catalogModels: [
         { model: "deepseek-v4-pro" },
         { model: "deepseek-v4-flash", displayName: "DeepSeek V4 Flash" },
       ],
       onCatalogModelsChange: vi.fn(),
-      onAutoReviewModelChange,
+      onAutoReviewModelChange: vi.fn(),
     });
-    const trigger = autoReviewSelect()!;
-    // 列表里没有 codex-auto-review：默认由主模型自己审批
-    expect(trigger.textContent).toBe("主模型自己审批（默认）");
-    expect(trigger).not.toBeDisabled();
-
-    await user.click(trigger);
-    const options = await screen.findAllByRole("option");
-    expect(options.map((option) => option.textContent)).toEqual([
-      "主模型自己审批（默认）",
-      "deepseek-v4-pro",
-      "DeepSeek V4 Flash",
-    ]);
-    await user.click(screen.getByRole("option", { name: "DeepSeek V4 Flash" }));
-    expect(onAutoReviewModelChange).toHaveBeenCalledWith("deepseek-v4-flash");
+    await user.click(screen.getByRole("button", { name: "选择审批模型" }));
+    expect(
+      (await screen.findAllByRole("option")).map(
+        (option) => option.textContent,
+      ),
+    ).toEqual(["deepseek-v4-pro", "deepseek-v4-flash"]);
+    await user.click(screen.getByRole("option", { name: "deepseek-v4-flash" }));
+    expect(props.onAutoReviewModelChange).toHaveBeenCalledWith(
+      "deepseek-v4-flash",
+    );
+    expect(props.onCatalogModelsChange).not.toHaveBeenCalled();
+    expect(props.onModelChange).not.toHaveBeenCalled();
   });
 
-  it("keeps a saved pick when the list and the value arrive together inside a form", () => {
-    // 编辑页：表单先空着渲染，读到卡之后列表和已存的值在同一次渲染里到达。Radix 在 <form>
-    // 里带一个隐藏的原生 select，值先到、选项后注册时它会回报一次空串，不能当成「改回默认」。
+  it("keeps a saved free-form value when data arrives or catalog models change", () => {
     const onAutoReviewModelChange = vi.fn();
     const props = codexFormProps({
       catalogModels: [],
@@ -256,48 +287,29 @@ describe("CodexFormFields Auto Review model", () => {
     const { rerender } = render(inForm({}));
     rerender(
       inForm({
-        catalogModels: [
-          { model: "deepseek-v4-pro" },
-          { model: "deepseek-flash" },
-        ],
-        autoReviewModel: "deepseek-flash",
+        catalogModels: [{ model: "main-model" }],
+        autoReviewModel: "reviewer-not-in-list",
       }),
     );
-    expect(autoReviewSelect()!.textContent).toBe("deepseek-flash");
+    expect(autoReviewInput()).toHaveValue("reviewer-not-in-list");
+    rerender(
+      inForm({
+        catalogModels: [],
+        autoReviewModel: "reviewer-not-in-list",
+      }),
+    );
+    expect(autoReviewInput()).toHaveValue("reviewer-not-in-list");
     expect(onAutoReviewModelChange).not.toHaveBeenCalled();
   });
 
-  it("shows a pick that left the list as the default", () => {
-    renderCodexForm({
-      catalogModels: [{ model: "deepseek-v4-pro" }],
-      onCatalogModelsChange: vi.fn(),
-      autoReviewModel: "deepseek-v4-flash",
-      onAutoReviewModelChange: vi.fn(),
-    });
-    expect(autoReviewSelect()!.textContent).toBe("主模型自己审批（默认）");
-  });
-
-  it("is disabled with Codex's default and an explanation when the card has no list", () => {
-    renderCodexForm({
-      catalogModels: [],
-      onCatalogModelsChange: vi.fn(),
-      onAutoReviewModelChange: vi.fn(),
-    });
-    const trigger = autoReviewSelect()!;
-    expect(trigger).toBeDisabled();
-    expect(trigger.textContent).toBe("Codex 默认（codex-auto-review）");
-    expect(
-      screen.getByText(
-        /这张卡没有模型列表：Codex 会用官方的 codex-auto-review 审批/,
-      ),
-    ).toBeTruthy();
-  });
-
   it("is hidden for the official card", () => {
-    renderCodexForm({
-      category: "official",
-      onAutoReviewModelChange: vi.fn(),
-    });
-    expect(autoReviewSelect()).toBeNull();
+    renderCodexForm({ category: "official", onAutoReviewModelChange: vi.fn() });
+    expect(autoReviewInput()).toBeNull();
+  });
+
+  it("uses aggregation settings rather than this field in Stack layout", () => {
+    renderCodexForm({ variant: "stack", onAutoReviewModelChange: vi.fn() });
+    expect(autoReviewInput()).toBeNull();
+    expect(screen.queryByRole("button", { name: "拉取模型" })).toBeNull();
   });
 });

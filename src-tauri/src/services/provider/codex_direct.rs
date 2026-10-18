@@ -546,7 +546,7 @@ pub(crate) fn plan(
     let provider = target_provider(target);
     let projection = provider.map(project).transpose()?;
 
-    let (top, mut nested, mut exclusive) = match (&projection, provider) {
+    let (mut top, mut nested, mut exclusive) = match (&projection, provider) {
         (Some(projection), Some(provider)) => (
             projection.top.clone(),
             projection.nested.clone(),
@@ -678,12 +678,17 @@ pub(crate) fn plan(
             Some(catalog)
         }
         (None, Some(provider), Some(projection)) => {
-            plan_codex_model_catalog(
+            let planned = plan_codex_model_catalog(
                 &provider.settings_config,
                 &projection.catalog_input_text(),
                 crate::proxy::providers::resolve_codex_catalog_tool_profile(provider),
-            )?
-            .catalog
+                !official && stack.is_empty(),
+            )?;
+            if planned.replaces_foreign_pointer {
+                // 原目录只读复制；只替换这次运行投影的指针，不改数据库中的原文件路径。
+                top.retain(|(key, _)| key != crate::live::project::codex::MODEL_CATALOG_JSON);
+            }
+            planned.catalog
         }
         _ => None,
     };
@@ -1372,6 +1377,78 @@ pub(crate) fn preflight(db: &Database, provider: &Provider) -> Result<(), AppErr
 mod tests {
     use super::{is_proxy_base_url, stack_subagent_nested};
     use serde_json::json;
+
+    #[test]
+    fn auto_review_catalog_uses_a_copy_and_preserves_provider_catalog_pointer() {
+        use super::{plan, Owner, Prepared, Target};
+        use crate::database::Database;
+        use crate::live::project::codex::{CATALOG_FILENAME, MODEL_CATALOG_JSON};
+        use crate::provider::Provider;
+        use serde_json::Value;
+        use toml_edit::{DocumentMut, Item};
+
+        let dir = tempfile::tempdir().unwrap();
+        let source = dir.path().join("user-models.json");
+        let mut row: Value =
+            serde_json::from_str(include_str!("../../resources/gpt5_5_template.json")).unwrap();
+        row["slug"] = json!("primary");
+        let mut additional = row.clone();
+        additional["slug"] = json!("additional-source-model");
+        let original = json!({"models": [row, additional]}).to_string();
+        std::fs::write(&source, &original).unwrap();
+        let mut config: DocumentMut = r#"model = "primary"
+model_provider = "custom"
+[model_providers.custom]
+name = "Relay"
+base_url = "https://relay.example/v1"
+wire_api = "responses"
+requires_openai_auth = true
+"#
+        .parse()
+        .unwrap();
+        config[MODEL_CATALOG_JSON] = toml_edit::value(source.to_string_lossy().as_ref());
+        let settings = json!({
+            "auth": {"OPENAI_API_KEY": "test-key"},
+            "config": config.to_string(),
+            "autoReviewModel": "review-only",
+            "modelCatalog": {"models": [{"model": "manual-only"}]}
+        });
+        let provider = Provider::with_id("p".to_string(), "Relay".to_string(), settings, None);
+        let before = provider.settings_config.clone();
+        let db = Database::memory().unwrap();
+
+        for target in [
+            Target::Direct(Some(&provider)),
+            Target::Proxy {
+                route: &provider,
+                base_url: "http://127.0.0.1:15721/v1",
+                stack: &[],
+            },
+        ] {
+            let planned = plan(&db, &Owner::None, &target, &Prepared::default()).unwrap();
+            let mut effective = config.clone();
+            planned
+                .config
+                .apply_to(&dir.path().join("config.toml"), &mut effective)
+                .unwrap();
+            assert_eq!(
+                effective.get(MODEL_CATALOG_JSON).and_then(Item::as_str),
+                Some(CATALOG_FILENAME)
+            );
+            let catalog: Value = serde_json::from_slice(planned.catalog.as_ref().unwrap()).unwrap();
+            assert_eq!(
+                catalog["models"][0]["auto_review_model_override"],
+                json!("review-only")
+            );
+            assert_eq!(catalog["models"].as_array().unwrap().len(), 2);
+            assert_eq!(
+                catalog["models"][1]["slug"],
+                json!("additional-source-model")
+            );
+            assert_eq!(std::fs::read_to_string(&source).unwrap(), original);
+            assert_eq!(provider.settings_config, before);
+        }
+    }
 
     /// 子代理设置按合并目录校验：不在目录里、或者父 agent 用新版工具时会拒收的
     /// （`multi_agent_version = "disabled"`）都不写；强度不在档位里只写模型。

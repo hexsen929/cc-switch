@@ -5,6 +5,113 @@ import { useCodexConfigState } from "@/components/providers/forms/hooks/useCodex
 import { serializeModelAliases } from "@/utils/modelAliases";
 
 describe("useCodexConfigState", () => {
+  it.each(["review-without-list", ""])(
+    "hydrates independent reviewer %s ahead of the legacy catalog selection",
+    (reviewer) => {
+      const { result } = renderHook(() =>
+        useCodexConfigState({
+          initialData: {
+            settingsConfig: {
+              auth: {},
+              config: 'model = "main-model"\n',
+              autoReviewModel: reviewer,
+              modelCatalog: { models: [], autoReviewModel: "old-reviewer" },
+            },
+          },
+        }),
+      );
+      expect(result.current.codexAutoReviewModel).toBe(reviewer);
+      expect(result.current.codexCatalogModels).toEqual([]);
+    },
+  );
+
+  it("shows an alias-only reviewer without scheduling migration or following an alias chain", () => {
+    const aliases = {
+      "codex-auto-review": "review-model",
+      "review-model": "other-model",
+    };
+    const initialData = {
+      settingsConfig: {
+        auth: {},
+        config: 'model = "main-model"\n',
+        modelAliases: aliases,
+      },
+    };
+    const { result } = renderHook(() => useCodexConfigState({ initialData }));
+    expect(result.current.codexAutoReviewModel).toBe("review-model");
+    expect(result.current.shouldSaveCodexAutoReviewModel).toBe(false);
+    expect(serializeModelAliases(result.current.codexModelAliases)).toEqual(
+      aliases,
+    );
+    act(() => result.current.handleCodexModelChange("another-main-model"));
+    expect(result.current.codexAutoReviewModel).toBe("review-model");
+    expect(result.current.shouldSaveCodexAutoReviewModel).toBe(false);
+    act(() => result.current.setCodexAutoReviewModel(""));
+    expect(result.current.codexAutoReviewModel).toBe("");
+    expect(result.current.shouldSaveCodexAutoReviewModel).toBe(true);
+    expect(serializeModelAliases(result.current.codexModelAliases)).toEqual(
+      aliases,
+    );
+  });
+
+  it.each(["independent", "legacy"])(
+    "keeps an explicit empty %s reviewer ahead of legacy aliases",
+    (source) => {
+      const initialData = {
+        settingsConfig: {
+          auth: {},
+          config: 'model = "main-model"\n',
+          modelAliases: { "codex-auto-review": "old-alias-target" },
+          ...(source === "independent"
+            ? {
+                autoReviewModel: "  ",
+                modelCatalog: { autoReviewModel: "old-catalog-reviewer" },
+              }
+            : { modelCatalog: { autoReviewModel: "  " } }),
+        },
+      };
+      const { result } = renderHook(() => useCodexConfigState({ initialData }));
+      expect(result.current.codexAutoReviewModel).toBe("");
+      expect(result.current.shouldSaveCodexAutoReviewModel).toBe(true);
+    },
+  );
+
+  it("clears reviewer origin and edit state on preset reset, preserving alias-only preset semantics", () => {
+    const initialData = {
+      settingsConfig: {
+        auth: {},
+        config: 'model = "main-model"\n',
+        autoReviewModel: "stored-reviewer",
+      },
+    };
+    const { result } = renderHook(() => useCodexConfigState({ initialData }));
+    act(() => result.current.setCodexAutoReviewModel("edited-reviewer"));
+    expect(result.current.shouldSaveCodexAutoReviewModel).toBe(true);
+    const presetAliases = {
+      "codex-auto-review": "preset-reviewer",
+      "preset-reviewer": "not-the-reviewer",
+    };
+    act(() =>
+      result.current.resetCodexConfig(
+        {},
+        'model = "preset-main"\n',
+        [],
+        [],
+        presetAliases,
+      ),
+    );
+    expect(result.current.codexAutoReviewModel).toBe("preset-reviewer");
+    expect(result.current.shouldSaveCodexAutoReviewModel).toBe(false);
+    expect(serializeModelAliases(result.current.codexModelAliases)).toEqual(
+      presetAliases,
+    );
+    act(() => result.current.resetCodexConfig({}, 'model = "plain-main"\n'));
+    expect(result.current.codexAutoReviewModel).toBe("");
+    expect(result.current.shouldSaveCodexAutoReviewModel).toBe(false);
+    act(() => result.current.setCodexAutoReviewModel(""));
+    expect(result.current.shouldSaveCodexAutoReviewModel).toBe(true);
+  });
+
   it("hydrates auto-review model alongside aliases and instruction files", () => {
     const initialData = {
       settingsConfig: {

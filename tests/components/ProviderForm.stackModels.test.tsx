@@ -89,6 +89,7 @@ function renderForm(
     category?: ProviderCategory;
     codexCatalog?: Array<{ model: string; displayName?: string }>;
     codexAutoReviewModel?: string;
+    codexLegacyAutoReviewModel?: string;
     codexInstructionsFiles?: string[];
     codexActiveInstructionsFile?: string;
     modeView?: AppMode;
@@ -100,6 +101,9 @@ function renderForm(
       ? { env: CLAUDE_ENV, modelAliases: options.modelAliases }
       : {
           modelAliases: options.modelAliases,
+          ...(options.codexAutoReviewModel !== undefined
+            ? { autoReviewModel: options.codexAutoReviewModel }
+            : {}),
           auth: {},
           config: options.codexActiveInstructionsFile
             ? `model_instructions_file = ${JSON.stringify(options.codexActiveInstructionsFile)}\n${CODEX_CONFIG}`
@@ -109,7 +113,9 @@ function renderForm(
             ? {
                 modelCatalog: {
                   models: options.codexCatalog,
-                  autoReviewModel: options.codexAutoReviewModel,
+                  ...(options.codexLegacyAutoReviewModel !== undefined
+                    ? { autoReviewModel: options.codexLegacyAutoReviewModel }
+                    : {}),
                 },
               }
             : {}),
@@ -341,9 +347,88 @@ describe("ProviderForm Stack layout (Codex)", () => {
         { model: "m-1" },
         { model: "m-2" },
       ]);
-      expect(settings.modelCatalog.autoReviewModel).toBe(
-        autoReviewModel === "m-2" ? "m-2" : undefined,
+      expect(settings.autoReviewModel).toBe(autoReviewModel);
+      expect(settings.modelCatalog.autoReviewModel).toBeUndefined();
+    },
+  );
+
+  it.each(["review-outside-list", ""])(
+    "saves an independent reviewer %s without creating a model list",
+    async (autoReviewModel) => {
+      const onSubmit = vi.fn();
+      renderForm("codex", onSubmit, {
+        modeView: "direct",
+        codexAutoReviewModel: autoReviewModel,
+        codexCatalog: [],
+      });
+      const { settings } = await save(onSubmit);
+      expect(settings.autoReviewModel).toBe(autoReviewModel);
+      expect(settings.modelCatalog).toBeUndefined();
+    },
+  );
+
+  it.each([false, true])(
+    "keeps an untouched alias-only reviewer unchanged on ordinary save (alias chain: %s)",
+    async (withChain) => {
+      const onSubmit = vi.fn();
+      const aliases = {
+        "codex-auto-review": "review-model",
+        ...(withChain ? { "review-model": "second-hop" } : {}),
+      };
+      renderForm("codex", onSubmit, {
+        modeView: "direct",
+        modelAliases: aliases,
+      });
+      expect(document.getElementById("codexAutoReviewModel")).toHaveValue(
+        "review-model",
       );
+      const { settings } = await save(onSubmit);
+      expect(settings).not.toHaveProperty("autoReviewModel");
+      expect(settings.modelCatalog).toBeUndefined();
+      expect(settings.modelAliases).toEqual(aliases);
+    },
+  );
+
+  it("persists an explicit reviewer reset while retaining the alias table", async () => {
+    const onSubmit = vi.fn();
+    const aliases = {
+      "codex-auto-review": "review-model",
+      "review-model": "second-hop",
+    };
+    renderForm("codex", onSubmit, {
+      modeView: "direct",
+      modelAliases: aliases,
+    });
+    fireEvent.change(document.getElementById("codexAutoReviewModel")!, {
+      target: { value: "" },
+    });
+    const { settings } = await save(onSubmit);
+    expect(settings.autoReviewModel).toBe("");
+    expect(settings.modelAliases).toEqual(aliases);
+    expect(settings.modelCatalog).toBeUndefined();
+  });
+
+  it.each(["independent", "legacy"])(
+    "preserves an existing empty %s reviewer instead of reviving an alias",
+    async (source) => {
+      const onSubmit = vi.fn();
+      const aliases = { "codex-auto-review": "old-reviewer" };
+      renderForm("codex", onSubmit, {
+        modeView: "direct",
+        modelAliases: aliases,
+        codexCatalog: [{ model: "m-1" }],
+        ...(source === "independent"
+          ? {
+              codexAutoReviewModel: "",
+              codexLegacyAutoReviewModel: "older-reviewer",
+            }
+          : { codexLegacyAutoReviewModel: "" }),
+      });
+      expect(document.getElementById("codexAutoReviewModel")).toHaveValue("");
+      const { settings } = await save(onSubmit);
+      expect(settings.autoReviewModel).toBe("");
+      expect(settings.modelCatalog.autoReviewModel).toBeUndefined();
+      expect(settings.modelAliases).toEqual(aliases);
     },
   );
 

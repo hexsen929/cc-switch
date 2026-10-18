@@ -2310,31 +2310,46 @@ fn codex_model_catalog_from_settings(
         return Ok(None);
     }
     let mut catalog = codex_catalog_from_specs_for_row(&specs, config_text, profile)?;
-    if let Some(model) = codex_card_auto_review_model(settings) {
-        apply_codex_auto_review_model(&mut catalog, model);
-    }
+    apply_codex_card_auto_review_model(&mut catalog, codex_card_auto_review_model(settings));
     Ok(Some(catalog))
 }
 
-/// 卡上选的自动审批模型（`modelCatalog.autoReviewModel`），空串当作没选。只在直连、路由
-/// 下生效：聚合下用聚合设置里的（`settings::codex_stack_auto_review_model`）。
-fn codex_card_auto_review_model(settings: &Value) -> Option<&str> {
-    settings
-        .get("modelCatalog")
-        .and_then(|catalog| catalog.get("autoReviewModel"))
-        .and_then(Value::as_str)
-        .map(str::trim)
+/// 卡上的独立审批模型。新版顶层字段（包括显式空串）优先于旧版目录内的字段；
+/// 留空始终使用 Codex 的审批模型名，不把主模型当成应用层的默认值。
+pub(crate) fn codex_card_auto_review_model(settings: &Value) -> &str {
+    codex_card_auto_review_setting(settings)
         .filter(|model| !model.is_empty())
+        .unwrap_or("codex-auto-review")
 }
 
-/// Codex 自动审批（Auto Review）用的模型：写进目录每一行的 `auto_review_model_override`。
-/// Codex 按主模型那一行的这个字段选审批模型（codex-rs `ext/guardian-reviewer/src/model.rs`），
-/// 主模型可以是目录里任何一行，所以每行都写。审批请求和主对话走同一家：直连、路由下只能
-/// 选这一家目录里的模型，聚合下可以选别家发布的 `ccs-*` 模型。
-///
-/// 不写时 Codex 用供应商默认的 `codex-auto-review`，目录里没有它（第三方的目录）就由主模型
-/// 自己审批。`model` 不在目录里时不写：Codex 照样会拿这个名字发请求，上游多半不认。
-/// 返回是否写了。
+fn codex_card_auto_review_setting(settings: &Value) -> Option<&str> {
+    settings
+        .get("autoReviewModel")
+        .or_else(|| {
+            settings
+                .get("modelCatalog")
+                .and_then(|catalog| catalog.get("autoReviewModel"))
+        })
+        .and_then(Value::as_str)
+        .map(str::trim)
+}
+
+/// 显式 override 不要求审批模型也出现在选择器里。Codex 的 select_review_model
+/// 在目录中找不到 override 时仍使用其名称，而非退回主模型。只用于供应商卡，
+/// 不改变聚合设置的成员校验。
+fn apply_codex_card_auto_review_model(catalog: &mut Value, model: &str) {
+    if let Some(entries) = catalog.get_mut("models").and_then(Value::as_array_mut) {
+        for entry in entries {
+            if let Some(obj) = entry.as_object_mut() {
+                obj.insert("auto_review_model_override".to_string(), json!(model));
+            }
+        }
+    }
+}
+
+/// 聚合设置的自动审批模型：必须属于当前合并目录，否则可能指向已移除的供应商。
+/// 验证通过后给每个主模型行写 `auto_review_model_override`。供应商卡使用上面的
+/// 独立 helper，不受这个聚合成员校验限制。返回是否写了。
 pub(crate) fn apply_codex_auto_review_model(catalog: &mut Value, model: &str) -> bool {
     let Some(entries) = catalog.get_mut("models").and_then(Value::as_array_mut) else {
         return false;
@@ -2534,10 +2549,12 @@ fn codex_catalog_from_specs_for_row(
     Ok(json!({ "models": entries }))
 }
 
-/// 一个供应商的模型目录：没有配置模型时为 `None`，不生成、也不指向目录文件。
+/// 一个供应商的模型目录：手工目录或仅为独立审批保留完整原生候选的副本。
 /// `web_search` 由 [`codex_disables_web_search`] 另算（切走时要按上一家算，不必生成目录）。
 pub(crate) struct CodexCatalogPlan {
     pub catalog: Option<Value>,
+    /// 为自动审批复制了用户目录；仅有效投影切换指针，原文件和数据库配置不变。
+    pub replaces_foreign_pointer: bool,
 }
 
 /// 要不要关掉 web_search：Responses→Anthropic 的转换会丢掉这个内置工具，Copilot 也不
@@ -2565,10 +2582,145 @@ pub(crate) fn plan_codex_model_catalog(
     settings: &Value,
     config_text: &str,
     profile: CodexCatalogToolProfile,
+    allow_auto_review_only: bool,
 ) -> Result<CodexCatalogPlan, AppError> {
+    let doc = config_text.parse::<DocumentMut>().map_err(|error| {
+        AppError::Config(format!(
+            "Codex model catalog config cannot be parsed: {error}"
+        ))
+    })?;
+    let foreign_pointer =
+        crate::live::project::codex::foreign_catalog(&doc).and_then(toml_edit::Value::as_str);
+    // 用户明确保存独立审批字段时，以 Codex 真正使用的外部目录为完整基础，
+    // 不能让旁边的手工列表子集遮住它，也不能让外部指针把审批修改静默忽略。
+    // 仅旧版 legacy 字段的记录沿用原优先级，不在读取/迁移时扩大写入范围。
+    let prefer_foreign_copy = allow_auto_review_only
+        && settings
+            .get("autoReviewModel")
+            .is_some_and(Value::is_string)
+        && foreign_pointer.is_some();
+    if !prefer_foreign_copy {
+        if let Some(mut catalog) =
+            codex_model_catalog_from_settings(settings, config_text, profile)?
+        {
+            if settings
+                .get("autoReviewModel")
+                .is_some_and(Value::is_string)
+            {
+                // 默认模型也可手填为列表外的模型。缺少它的元数据时，CLI 无法看到
+                // override；只对新版明确保存审批设置的卡补主模型，不扩写旧记录。
+                ensure_codex_catalog_main_model(&mut catalog, config_text, profile)?;
+                apply_codex_card_auto_review_model(
+                    &mut catalog,
+                    codex_card_auto_review_model(settings),
+                );
+            }
+            return Ok(CodexCatalogPlan {
+                catalog: Some(catalog),
+                replaces_foreign_pointer: false,
+            });
+        }
+    }
+    let configured = codex_card_auto_review_setting(settings);
+    // 没有手工目录、没有自定义审批时，保留 Codex 的完整原生目录；不为了默认值冻结它。
+    // 用户自备目录没有默认 reviewer 时会触发 CLI 主模型回退，显式保存空值也应覆盖它。
+    let needs_copy = configured.is_some_and(|model| !model.is_empty())
+        || (configured.is_some() && foreign_pointer.is_some());
+    if !allow_auto_review_only || !needs_copy {
+        return Ok(CodexCatalogPlan {
+            catalog: None,
+            replaces_foreign_pointer: false,
+        });
+    }
+
+    let mut catalog = match foreign_pointer {
+        Some(pointer) => {
+            let path = Path::new(pointer);
+            let path = if path.is_absolute() {
+                path.to_path_buf()
+            } else {
+                get_codex_config_dir().join(path)
+            };
+            let text = read_codex_model_catalog_text(&path)?;
+            serde_json::from_str::<Value>(&text).map_err(|error| {
+                AppError::Config(format!(
+                    "Codex model catalog {} cannot be parsed: {error}",
+                    path.display()
+                ))
+            })?
+        }
+        None => json!({ "models": load_codex_auto_review_base_models()? }),
+    };
+    let rows = catalog
+        .get("models")
+        .and_then(Value::as_array)
+        .cloned()
+        .and_then(normalize_codex_native_rows)
+        .ok_or_else(|| {
+            AppError::Config(
+                "Codex auto review requires a complete, valid model catalog".to_string(),
+            )
+        })?;
+    catalog["models"] = json!(rows);
+    ensure_codex_catalog_main_model(&mut catalog, config_text, profile)?;
+    apply_codex_card_auto_review_model(&mut catalog, codex_card_auto_review_model(settings));
+    catalog["cc_switch_auto_review_only"] = Value::Bool(true);
     Ok(CodexCatalogPlan {
-        catalog: codex_model_catalog_from_settings(settings, config_text, profile)?,
+        catalog: Some(catalog),
+        replaces_foreign_pointer: foreign_pointer.is_some(),
     })
+}
+
+/// 不使用只含 gpt-5.5 的静态 fallback：写成外部目录后，Codex 只看文件中的行。
+#[cfg(not(test))]
+fn load_codex_auto_review_base_models() -> Result<Vec<Value>, AppError> {
+    static ROWS: OnceCell<Vec<Value>> = OnceCell::new();
+    ROWS.get_or_try_init(|| {
+        load_codex_bundled_models()
+            .map_err(|error| AppError::Config(format!("Codex model catalog unavailable: {error}")))
+            .and_then(|rows| {
+                normalize_codex_native_rows(rows).ok_or_else(|| {
+                    AppError::Config("Codex bundled model catalog is invalid".to_string())
+                })
+            })
+    })
+    .cloned()
+}
+
+#[cfg(test)]
+fn load_codex_auto_review_base_models() -> Result<Vec<Value>, AppError> {
+    CODEX_OPENAI_OFFICIAL_MODELS_OVERRIDE
+        .with(|rows| rows.borrow().clone())
+        .and_then(normalize_codex_native_rows)
+        .ok_or_else(|| AppError::Config("No complete test Codex model catalog".to_string()))
+}
+
+fn ensure_codex_catalog_main_model(
+    catalog: &mut Value,
+    config_text: &str,
+    profile: CodexCatalogToolProfile,
+) -> Result<(), AppError> {
+    let Some(model) = codex_top_level_model(config_text) else {
+        return Ok(());
+    };
+    if catalog["models"].as_array().is_some_and(|rows| {
+        rows.iter()
+            .any(|row| row.get("slug").and_then(Value::as_str) == Some(model.as_str()))
+    }) {
+        return Ok(());
+    }
+    let spec = CodexCatalogModelSpec {
+        model,
+        ..CodexCatalogModelSpec::default()
+    };
+    let extra = codex_catalog_from_specs_for_row(&[spec], config_text, profile)?;
+    if let (Some(rows), Some(extra)) = (
+        catalog.get_mut("models").and_then(Value::as_array_mut),
+        extra.get("models").and_then(Value::as_array),
+    ) {
+        rows.extend(extra.iter().cloned());
+    }
+    Ok(())
 }
 
 /// 一家第三方供应商发布的模型：行里的模型目录；没有配置目录时只有行的 `model`。
@@ -2947,6 +3099,13 @@ fn build_simplified_catalog_from_texts(config_text: &str, catalog_text: &str) ->
     let catalog: Value = serde_json::from_str(catalog_text).ok()?;
     let models = catalog.get("models").and_then(|m| m.as_array())?;
 
+    // 为审批复制的完整目录不是用户手工维护的列表。反解析只恢复独立审批设置，
+    // 避免下一次保存把所有 Codex 原生模型意外变成供应商的手工模型列表。
+    if catalog.get("cc_switch_auto_review_only") == Some(&Value::Bool(true)) {
+        let model = codex_catalog_card_auto_review_model(models)?;
+        return Some(json!({ "models": [], "autoReviewModel": model }));
+    }
+
     let default_context_window =
         extract_codex_top_level_u64(config_text, "model_context_window").unwrap_or(128_000);
 
@@ -3032,8 +3191,15 @@ fn build_simplified_catalog_from_texts(config_text: &str, catalog_text: &str) ->
         return None;
     }
 
-    // 卡上选的自动审批模型写在每一行上（见 `apply_codex_auto_review_model`）：这张卡的行都写着
-    // 同一个、而且是这张卡自己的模型时才还原。聚合设置写的 `ccs-*` 不属于这张卡。
+    let mut simplified = json!({ "models": entries });
+    if let Some(model) = codex_catalog_card_auto_review_model(models) {
+        simplified["autoReviewModel"] = json!(model);
+    }
+    Some(simplified)
+}
+
+/// 同一个普通审批模型应用于所有普通主模型行时恢复它；聚合的 ccs-* 设置独立管理。
+fn codex_catalog_card_auto_review_model(models: &[Value]) -> Option<&str> {
     let mut overrides = models.iter().filter_map(|entry| {
         let slug = entry.get("slug").and_then(Value::as_str)?.trim();
         matches!(
@@ -3046,18 +3212,14 @@ fn build_simplified_catalog_from_texts(config_text: &str, catalog_text: &str) ->
                 .and_then(Value::as_str)
         })
     });
-    let auto_review = overrides.next().flatten().filter(|model| {
+    overrides.next().flatten().filter(|model| {
         overrides.all(|other| other == Some(*model))
-            && entries
-                .iter()
-                .any(|entry| entry.get("model").and_then(Value::as_str) == Some(*model))
-    });
-
-    let mut simplified = json!({ "models": entries });
-    if let Some(model) = auto_review {
-        simplified["autoReviewModel"] = json!(model);
-    }
-    Some(simplified)
+            && !model.trim().is_empty()
+            && matches!(
+                crate::mode::stack::decode(&crate::app_config::AppType::Codex, model),
+                crate::mode::stack::Decoded::Plain
+            )
+    })
 }
 
 /// Extract a provider-scoped `experimental_bearer_token` from Codex `config.toml`.
@@ -5336,7 +5498,7 @@ wire_api = "responses"
                     "{profile:?}, catalog={has_catalog}"
                 );
                 if !has_catalog {
-                    assert!(plan_codex_model_catalog(&settings, config, profile)
+                    assert!(plan_codex_model_catalog(&settings, config, profile, true)
                         .unwrap()
                         .catalog
                         .is_none());
@@ -5571,8 +5733,7 @@ wire_api = "responses"
             .collect()
     }
 
-    /// 卡上选的自动审批模型写进这张卡目录的每一行（主模型可以是任何一行）；不在模型列表里
-    /// 就不写，用 Codex 的默认。
+    /// 审批独立于手工模型列表，显式 override 避免 Codex 因列表缺项退回主模型。
     #[test]
     fn card_auto_review_model_is_written_to_every_catalog_row() {
         let config = "model = \"deepseek-v4-pro\"\n";
@@ -5598,17 +5759,303 @@ wire_api = "responses"
             vec![Some("deepseek-v4-flash"); 2]
         );
 
-        for not_written in ["", "codex-auto-review"] {
-            let catalog =
-                codex_model_catalog_from_settings(&settings(not_written), config, profile)
-                    .unwrap()
-                    .expect("catalog");
+        for reviewer in ["", "codex-auto-review", "review-only-model"] {
+            let catalog = codex_model_catalog_from_settings(&settings(reviewer), config, profile)
+                .unwrap()
+                .expect("catalog");
             assert_eq!(
                 auto_review_overrides(&catalog),
-                vec![None; 2],
-                "{not_written:?}"
+                vec![
+                    Some(if reviewer.is_empty() {
+                        "codex-auto-review"
+                    } else {
+                        reviewer
+                    });
+                    2
+                ],
+                "{reviewer:?}"
             );
+            assert_eq!(catalog["models"].as_array().unwrap().len(), 2);
         }
+    }
+
+    #[test]
+    fn card_auto_review_setting_is_independent_and_empty_means_codex_default() {
+        for settings in [json!({}), json!({"autoReviewModel": "  "})] {
+            assert_eq!(codex_card_auto_review_model(&settings), "codex-auto-review");
+        }
+        assert_eq!(
+            codex_card_auto_review_model(&json!({
+                "modelCatalog": {"autoReviewModel": " legacy-review "}
+            })),
+            "legacy-review"
+        );
+        assert_eq!(
+            codex_card_auto_review_model(&json!({
+                "autoReviewModel": " free-review ",
+                "modelCatalog": {"autoReviewModel": "legacy-review"}
+            })),
+            "free-review"
+        );
+        assert_eq!(
+            codex_card_auto_review_model(&json!({
+                "autoReviewModel": "",
+                "modelCatalog": {"autoReviewModel": "legacy-review"}
+            })),
+            "codex-auto-review"
+        );
+    }
+
+    #[test]
+    fn card_default_override_does_not_relax_stack_membership() {
+        let settings = json!({"modelCatalog": {"models": [{"model": "primary"}]}});
+        let catalog = codex_model_catalog_from_settings(
+            &settings,
+            "model = \"primary\"\n",
+            CodexCatalogToolProfile::NativeResponses,
+        )
+        .unwrap()
+        .unwrap();
+        assert_eq!(
+            auto_review_overrides(&catalog),
+            vec![Some("codex-auto-review")]
+        );
+        let mut stack = json!({"models": [{"slug": "ccs-p/main"}]});
+        let original = stack.clone();
+        assert!(!apply_codex_auto_review_model(
+            &mut stack,
+            "review-not-published"
+        ));
+        assert_eq!(stack, original);
+        assert!(apply_codex_auto_review_model(&mut stack, "ccs-p/main"));
+        assert_eq!(auto_review_overrides(&stack), vec![Some("ccs-p/main")]);
+    }
+
+    #[test]
+    fn manual_card_review_covers_a_main_model_outside_the_catalog() {
+        let config = "model = \"unlisted-main\"\n";
+        for (reviewer, expected) in [("review-only", "review-only"), ("", "codex-auto-review")] {
+            let settings = json!({
+                "autoReviewModel": reviewer,
+                "modelCatalog": {"models": [{"model": "listed"}]}
+            });
+            for profile in [
+                CodexCatalogToolProfile::NativeResponses,
+                CodexCatalogToolProfile::ProxyChat,
+                CodexCatalogToolProfile::Anthropic,
+            ] {
+                let catalog = plan_codex_model_catalog(&settings, config, profile, true)
+                    .unwrap()
+                    .catalog
+                    .unwrap();
+                let rows = catalog["models"].as_array().unwrap();
+                assert_eq!(rows.len(), 2);
+                assert_eq!(rows[0]["slug"], json!("listed"));
+                assert_eq!(rows[1]["slug"], json!("unlisted-main"));
+                assert_eq!(auto_review_overrides(&catalog), vec![Some(expected); 2]);
+                if profile != CodexCatalogToolProfile::ProxyChat {
+                    assert!(rows[1].get("apply_patch_tool_type").is_none());
+                }
+            }
+        }
+
+        let legacy = json!({
+            "modelCatalog": {
+                "models": [{"model": "listed"}],
+                "autoReviewModel": "legacy-review"
+            }
+        });
+        let catalog = plan_codex_model_catalog(
+            &legacy,
+            config,
+            CodexCatalogToolProfile::NativeResponses,
+            true,
+        )
+        .unwrap()
+        .catalog
+        .unwrap();
+        assert_eq!(catalog["models"].as_array().unwrap().len(), 1);
+    }
+
+    fn auto_review_test_rows() -> Vec<Value> {
+        ["primary", "another-model", "hidden-model"]
+            .into_iter()
+            .map(|slug| {
+                let mut row = load_codex_classic_tool_template();
+                row["slug"] = json!(slug);
+                row["unknown_future_capability"] = json!({"keep": slug});
+                row
+            })
+            .collect()
+    }
+
+    #[test]
+    fn auto_review_only_catalog_keeps_all_rows_and_does_not_rebuild_manual_list() {
+        let rows = auto_review_test_rows();
+        with_official_models(rows.clone(), || {
+            let settings = json!({"autoReviewModel": "review-only"});
+            let planned = plan_codex_model_catalog(
+                &settings,
+                "model = \"primary\"\n",
+                CodexCatalogToolProfile::NativeResponses,
+                true,
+            )
+            .unwrap();
+            assert!(!planned.replaces_foreign_pointer);
+            let catalog = planned.catalog.unwrap();
+            assert_eq!(catalog["models"].as_array().unwrap().len(), rows.len());
+            for (actual, original) in catalog["models"].as_array().unwrap().iter().zip(&rows) {
+                let mut expected = original.clone();
+                expected["auto_review_model_override"] = json!("review-only");
+                assert_eq!(
+                    actual, &expected,
+                    "all original model metadata must survive"
+                );
+            }
+            let simplified = build_simplified_catalog_from_texts("", &catalog.to_string()).unwrap();
+            assert_eq!(
+                simplified,
+                json!({"models": [], "autoReviewModel": "review-only"})
+            );
+
+            // Clearing removes the generated pointer instead of freezing Codex's default list.
+            let cleared = plan_codex_model_catalog(
+                &json!({"autoReviewModel": ""}),
+                "model = \"primary\"\n",
+                CodexCatalogToolProfile::NativeResponses,
+                true,
+            )
+            .unwrap();
+            assert!(cleared.catalog.is_none());
+        });
+    }
+
+    #[test]
+    fn auto_review_only_catalog_adds_missing_main_model_with_protocol_profile() {
+        with_official_models(auto_review_test_rows(), || {
+            let catalog = plan_codex_model_catalog(
+                &json!({"autoReviewModel": "review-only"}),
+                "model = \"vendor-model\"\n",
+                CodexCatalogToolProfile::Anthropic,
+                true,
+            )
+            .unwrap()
+            .catalog
+            .unwrap();
+            let rows = catalog["models"].as_array().unwrap();
+            assert_eq!(rows.len(), 4);
+            assert_eq!(rows[3]["slug"], json!("vendor-model"));
+            assert_eq!(rows[3]["auto_review_model_override"], json!("review-only"));
+            assert_ne!(
+                rows[3].get("apply_patch_tool_type"),
+                Some(&json!("freeform"))
+            );
+        });
+    }
+
+    #[test]
+    fn auto_review_only_catalog_never_uses_partial_static_fallback_or_changes_official_stack() {
+        let settings = json!({"autoReviewModel": "review-only"});
+        with_official_models(Vec::new(), || {
+            assert!(plan_codex_model_catalog(
+                &settings,
+                "model = \"primary\"\n",
+                CodexCatalogToolProfile::NativeResponses,
+                true,
+            )
+            .is_err());
+            // Official native and Stack callers opt out rather than fetching/freezing new rows.
+            assert!(plan_codex_model_catalog(
+                &settings,
+                "model = \"primary\"\n",
+                CodexCatalogToolProfile::NativeResponses,
+                false,
+            )
+            .unwrap()
+            .catalog
+            .is_none());
+        });
+    }
+
+    #[test]
+    fn auto_review_only_copies_foreign_catalog_without_modifying_its_bytes() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("user-models.json");
+        let original = json!({
+            "models": auto_review_test_rows(),
+            "user_metadata": {"preserve": true}
+        })
+        .to_string();
+        fs::write(&path, &original).unwrap();
+        let mut doc = DocumentMut::new();
+        doc["model"] = toml_edit::value("primary");
+        doc["model_catalog_json"] = toml_edit::value(path.to_string_lossy().as_ref());
+        let config = doc.to_string();
+        for (settings, reviewer) in [
+            (json!({"autoReviewModel": "review-only"}), "review-only"),
+            (json!({"autoReviewModel": ""}), "codex-auto-review"),
+            (
+                json!({
+                    "autoReviewModel": "review-only",
+                    "modelCatalog": {"models": [{"model": "manual-only"}]}
+                }),
+                "review-only",
+            ),
+            (
+                json!({
+                    "autoReviewModel": "",
+                    "modelCatalog": {
+                        "models": [{"model": "manual-only"}],
+                        "autoReviewModel": "old-review"
+                    }
+                }),
+                "codex-auto-review",
+            ),
+        ] {
+            let before_settings = settings.clone();
+            let planned = plan_codex_model_catalog(
+                &settings,
+                &config,
+                CodexCatalogToolProfile::NativeResponses,
+                true,
+            )
+            .unwrap();
+            assert!(planned.replaces_foreign_pointer);
+            let catalog = planned.catalog.unwrap();
+            assert_eq!(catalog["user_metadata"], json!({"preserve": true}));
+            assert_eq!(auto_review_overrides(&catalog), vec![Some(reviewer); 3]);
+            let models: Vec<_> = catalog["models"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|row| row["slug"].as_str().unwrap())
+                .collect();
+            assert_eq!(models, vec!["primary", "another-model", "hidden-model"]);
+            assert_eq!(fs::read_to_string(&path).unwrap(), original);
+            assert_eq!(doc.to_string(), config);
+            assert_eq!(settings, before_settings);
+        }
+    }
+
+    #[test]
+    fn legacy_card_with_manual_and_foreign_catalog_keeps_the_previous_pointer_priority() {
+        let settings = json!({
+            "modelCatalog": {
+                "models": [{"model": "manual-only"}],
+                "autoReviewModel": "legacy-review"
+            }
+        });
+        let plan = plan_codex_model_catalog(
+            &settings,
+            "model = \"primary\"\nmodel_catalog_json = \"user-models.json\"\n",
+            CodexCatalogToolProfile::NativeResponses,
+            true,
+        )
+        .unwrap();
+        assert!(!plan.replaces_foreign_pointer);
+        let catalog = plan.catalog.unwrap();
+        assert_eq!(catalog["models"].as_array().unwrap().len(), 1);
+        assert_eq!(catalog["models"][0]["slug"], json!("manual-only"));
     }
 
     /// 读回 live 目录时还原卡上选的审批模型；聚合设置写的 `ccs-*`、各行不一致的都不还原。
@@ -5633,6 +6080,14 @@ wire_api = "responses"
             Some("deepseek-v4-flash")
         );
         assert_eq!(restored(["ccs-kimi/k3", "ccs-kimi/k3"]), None);
+        assert_eq!(
+            restored(["review-only", "review-only"]).as_deref(),
+            Some("review-only")
+        );
+        assert_eq!(
+            restored(["codex-auto-review", "codex-auto-review"]).as_deref(),
+            Some("codex-auto-review")
+        );
         assert_eq!(restored(["deepseek-v4-flash", "deepseek-v4-pro"]), None);
 
         let plain = r#"{ "models": [{ "slug": "deepseek-v4-pro" }] }"#;

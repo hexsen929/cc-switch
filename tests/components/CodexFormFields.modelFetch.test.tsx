@@ -19,6 +19,7 @@ import {
 import {
   fetchModelsForConfig,
   fetchXaiOauthModels,
+  modelFetchRequestHeaders,
   showFetchModelsError,
   type FetchedModel,
 } from "@/lib/api/model-fetch";
@@ -540,4 +541,228 @@ describe("Codex model-fetch lifecycle", () => {
     );
     expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
   });
+});
+
+const reviewerFetchButton = () =>
+  screen.getByRole("button", { name: "拉取模型", hidden: true });
+
+describe("Codex approval reviewer model fetching", () => {
+  beforeEach(() => {
+    vi.resetAllMocks();
+    Element.prototype.scrollIntoView = vi.fn();
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+  });
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it.each(providerKinds)(
+    "fetches %s reviewer choices without opening the catalog picker or changing catalog/main model",
+    async (kind) => {
+      fetchMockFor(kind).mockResolvedValue([advertisedModel("reviewer-1")]);
+      const props = {
+        ...makeProps(kind),
+        onAutoReviewModelChange: vi.fn(),
+        catalogModels: [{ model: "main-model", contextWindow: 200_000 }],
+      };
+      render(<Harness {...props} />);
+      fireEvent.click(reviewerFetchButton());
+      const reviewer = await screen.findByRole("option", {
+        name: "reviewer-1",
+      });
+      expect(screen.getByRole("option", { name: "main-model" })).toBeVisible();
+      expect(screen.queryByRole("checkbox")).not.toBeInTheDocument();
+      expect(
+        screen.queryByText("providerForm.modelPicker.apply"),
+      ).not.toBeInTheDocument();
+      expect(props.onCatalogModelsChange).not.toHaveBeenCalled();
+      expect(props.onModelChange).not.toHaveBeenCalled();
+      expect(props.onAutoReviewModelChange).not.toHaveBeenCalled();
+      fireEvent.click(reviewer);
+      expect(props.onAutoReviewModelChange).toHaveBeenCalledWith("reviewer-1");
+      expect(props.onCatalogModelsChange).not.toHaveBeenCalled();
+      expect(props.onModelChange).not.toHaveBeenCalled();
+    },
+  );
+
+  it("uses the same URL, API key, full-URL option, UA and request headers as catalog fetching", async () => {
+    vi.mocked(fetchModelsForConfig).mockResolvedValue([
+      advertisedModel("reviewer-1"),
+    ]);
+    vi.mocked(modelFetchRequestHeaders).mockReturnValue({
+      "X-Model-Scope": "reviewer",
+    });
+    const props = {
+      ...makeProps("config"),
+      codexBaseUrl: "https://example.com/custom/responses",
+      isFullUrl: true,
+      customUserAgent: "reviewer-client",
+      localProxyHeadersOverride: '{"X-Model-Scope":"reviewer"}',
+      onAutoReviewModelChange: vi.fn(),
+    };
+    render(<Harness {...props} />);
+    fireEvent.click(reviewerFetchButton());
+    await screen.findByRole("option", { name: "reviewer-1" });
+    expect(modelFetchRequestHeaders).toHaveBeenCalledWith(
+      props.localProxyHeadersOverride,
+    );
+    expect(fetchModelsForConfig).toHaveBeenCalledWith(
+      props.codexBaseUrl,
+      props.codexApiKey,
+      true,
+      undefined,
+      "reviewer-client",
+      { requestHeaders: { "X-Model-Scope": "reviewer" } },
+    );
+  });
+
+  it.each(providerKinds)(
+    "keeps a newer %s reviewer request loading when an old identity response finishes",
+    async (kind) => {
+      const oldRequest = pendingModels();
+      const newRequest = pendingModels();
+      fetchMockFor(kind)
+        .mockReturnValueOnce(oldRequest.promise)
+        .mockReturnValueOnce(newRequest.promise);
+      const props = { ...makeProps(kind), onAutoReviewModelChange: vi.fn() };
+      const { rerender } = render(<Harness {...props} />);
+      fireEvent.click(reviewerFetchButton());
+      rerender(
+        <Harness
+          {...props}
+          codexApiKey="other-key"
+          selectedGitHubAccountId="other-github-account"
+          selectedXaiAccountId="other-xai-account"
+        />,
+      );
+      expect(reviewerFetchButton()).toBeEnabled();
+      fireEvent.click(reviewerFetchButton());
+      await act(async () =>
+        oldRequest.resolve([advertisedModel("stale-reviewer")]),
+      );
+      expect(reviewerFetchButton()).toBeDisabled();
+      expect(
+        screen.queryByRole("option", { name: "stale-reviewer" }),
+      ).not.toBeInTheDocument();
+      await act(async () =>
+        newRequest.resolve([advertisedModel("new-reviewer")]),
+      );
+      expect(
+        await screen.findByRole("option", { name: "new-reviewer" }),
+      ).toBeVisible();
+      expect(
+        screen.queryByRole("option", { name: "stale-reviewer" }),
+      ).not.toBeInTheDocument();
+      expect(props.onCatalogModelsChange).not.toHaveBeenCalled();
+      expect(props.onModelChange).not.toHaveBeenCalled();
+      expect(props.onAutoReviewModelChange).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each(providerKinds)(
+    "ignores stale %s reviewer failures after credentials change",
+    async (kind) => {
+      const pending = pendingModels();
+      fetchMockFor(kind).mockReturnValueOnce(pending.promise);
+      const props = { ...makeProps(kind), onAutoReviewModelChange: vi.fn() };
+      const { rerender } = render(<Harness {...props} />);
+      fireEvent.click(reviewerFetchButton());
+      rerender(
+        <Harness
+          {...props}
+          codexApiKey="other-key"
+          selectedGitHubAccountId="other-github-account"
+          selectedXaiAccountId="other-xai-account"
+        />,
+      );
+      await act(async () =>
+        pending.reject(new Error("stale unauthorized response")),
+      );
+      expect(reviewerFetchButton()).toBeEnabled();
+      expect(showFetchModelsError).not.toHaveBeenCalled();
+      expect(console.warn).not.toHaveBeenCalled();
+      expect(screen.queryByRole("option")).not.toBeInTheDocument();
+    },
+  );
+
+  it.each(providerKinds)(
+    "preserves %s reviewer fetch preflight validation",
+    (kind) => {
+      const props = {
+        ...makeProps(kind),
+        isCopilotAuthenticated: false,
+        isXaiOauthAuthenticated: false,
+        codexApiKey: "",
+        codexBaseUrl: "",
+        onAutoReviewModelChange: vi.fn(),
+      };
+      render(<Harness {...props} />);
+      fireEvent.click(reviewerFetchButton());
+      expect(fetchMockFor(kind)).not.toHaveBeenCalled();
+      expect(reviewerFetchButton()).toBeEnabled();
+      expect(props.onAutoReviewModelChange).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each(["official", "stack"] as const)(
+    "discards pending reviewer results after switching to %s and back",
+    async (mode) => {
+      const pending = pendingModels();
+      vi.mocked(fetchModelsForConfig).mockReturnValueOnce(pending.promise);
+      const props = {
+        ...makeProps("config"),
+        onAutoReviewModelChange: vi.fn(),
+      };
+      const { rerender } = render(<Harness {...props} />);
+      fireEvent.click(reviewerFetchButton());
+      const hiddenMode: Partial<Props> =
+        mode === "official" ? { category: "official" } : { variant: "stack" };
+      rerender(<Harness {...props} {...hiddenMode} />);
+      expect(
+        document.getElementById("codexAutoReviewModel"),
+      ).not.toBeInTheDocument();
+      rerender(<Harness {...props} />);
+      expect(reviewerFetchButton()).toBeEnabled();
+      await act(async () =>
+        pending.resolve([advertisedModel("stale-reviewer")]),
+      );
+      expect(screen.queryByRole("option")).not.toBeInTheDocument();
+      expect(
+        screen.queryByRole("button", { name: "选择审批模型" }),
+      ).not.toBeInTheDocument();
+      expect(props.onCatalogModelsChange).not.toHaveBeenCalled();
+      expect(props.onModelChange).not.toHaveBeenCalled();
+      expect(props.onAutoReviewModelChange).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each(["official", "stack"] as const)(
+    "closes and clears fetched reviewer choices after switching to %s and back",
+    async (mode) => {
+      vi.mocked(fetchModelsForConfig).mockResolvedValueOnce([
+        advertisedModel("stale-reviewer"),
+      ]);
+      const props = {
+        ...makeProps("config"),
+        onAutoReviewModelChange: vi.fn(),
+      };
+      const { rerender } = render(<Harness {...props} />);
+      fireEvent.click(reviewerFetchButton());
+      expect(
+        await screen.findByRole("option", { name: "stale-reviewer" }),
+      ).toBeVisible();
+      const hiddenMode: Partial<Props> =
+        mode === "official" ? { category: "official" } : { variant: "stack" };
+      rerender(<Harness {...props} {...hiddenMode} />);
+      rerender(<Harness {...props} />);
+      expect(reviewerFetchButton()).toBeEnabled();
+      expect(screen.queryByRole("option")).not.toBeInTheDocument();
+      expect(
+        screen.queryByRole("button", { name: "选择审批模型" }),
+      ).not.toBeInTheDocument();
+      expect(props.onCatalogModelsChange).not.toHaveBeenCalled();
+      expect(props.onModelChange).not.toHaveBeenCalled();
+      expect(props.onAutoReviewModelChange).not.toHaveBeenCalled();
+    },
+  );
 });

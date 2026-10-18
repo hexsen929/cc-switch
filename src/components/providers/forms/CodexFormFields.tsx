@@ -223,8 +223,8 @@ interface CodexFormFieldsProps {
   // Model Catalog
   catalogModels?: CodexCatalogModel[];
   onCatalogModelsChange?: (models: CodexCatalogModel[]) => void;
-  // Auto Review (approval reviewer) model: `modelCatalog.autoReviewModel`, one of
-  // the catalog rows. Codex only; the Stack layout omits it (aggregation settings apply).
+  // Approval reviewer model is independent of catalog rows; empty means
+  // codex-auto-review. The Stack layout uses aggregation settings instead.
   autoReviewModel?: string;
   onAutoReviewModelChange?: (model: string) => void;
 
@@ -337,10 +337,6 @@ const CODEX_REASONING_LEVELS = [
 // Select value standing for "don't write the effort key" (Radix Select items
 // can't use an empty string). Shared by the main and subagent effort pickers.
 const EFFORT_INHERIT = "__inherit__";
-// 自动审批模型下拉的「不写覆盖、用 Codex 的默认」（Radix Select 不收空值）。
-const AUTO_REVIEW_DEFAULT = "__codex_default__";
-// Codex 不写覆盖时用的审批模型（codex-rs `DEFAULT_APPROVAL_REVIEW_PREFERRED_MODEL`）。
-const CODEX_AUTO_REVIEW_MODEL = "codex-auto-review";
 
 // Trigger label for the picked levels, kept narrow for the catalog cell. Each
 // run of three or more adjacent canonical levels collapses to "first → last"
@@ -635,15 +631,23 @@ export function CodexFormFields({
 
   const [fetchedModels, setFetchedModels] = useState<FetchedModel[]>([]);
   const [isFetchingModels, setIsFetchingModels] = useState(false);
+  const [autoReviewPickerOpen, setAutoReviewPickerOpen] = useState(false);
   // 拉取请求序号：请求身份（Base URL / 完整地址开关 / API Key / 自定义 UA /
-  // Header 覆盖）一变即自增，清空旧列表并作废在途响应——/models 结果可能按
+  // Header 覆盖）或卡片类别/布局一变即自增，清空旧列表并作废在途响应——/models 结果可能按
   // Key 的模型授权或请求头身份返回，换号/换 Header 后残留旧列表会误导选择
   const fetchModelsSeqRef = useRef(0);
 
   useEffect(() => {
     fetchModelsSeqRef.current += 1;
     setFetchedModels((prev) => (prev.length === 0 ? prev : []));
+    setIsFetchingModels(false);
+    setAutoReviewPickerOpen(false);
+    return () => {
+      fetchModelsSeqRef.current += 1;
+    };
   }, [
+    category,
+    variant,
     codexBaseUrl,
     isFullUrl,
     codexApiKey,
@@ -829,142 +833,158 @@ export function CodexFormFields({
           console.warn(errorLogMessage, err);
           showFetchModelsError(err, t);
         })
-        .finally(() => setIsFetchingModels(false));
+        .finally(() => {
+          if (seq === fetchModelsSeqRef.current) setIsFetchingModels(false);
+        });
     },
     [canEditCatalog, t],
   );
 
-  const handleFetchModels = useCallback(() => {
-    if (isCopilotPreset) {
-      if (!isCopilotAuthenticated) {
-        toast.error(
-          t("copilot.loginRequired", {
-            defaultValue: "请先登录 GitHub Copilot",
-          }),
+  const handleFetchModels = useCallback(
+    (target: "catalog" | "auto-review" = "catalog") => {
+      const receiveModels = (models: FetchedModel[]) => {
+        const count = receiveFetchedModels(models);
+        if (target === "auto-review" && count > 0)
+          setAutoReviewPickerOpen(true);
+        return count;
+      };
+      if (isCopilotPreset) {
+        if (!isCopilotAuthenticated) {
+          toast.error(
+            t("copilot.loginRequired", {
+              defaultValue: "请先登录 GitHub Copilot",
+            }),
+          );
+          return;
+        }
+        runModelFetch(
+          () =>
+            selectedGitHubAccountId
+              ? copilotGetModelsForAccount(selectedGitHubAccountId)
+              : copilotGetModels(),
+          (models) => {
+            const usableModels = models.filter((model) =>
+              isCopilotModelSupportedByCodex(model, copilotApiFormat),
+            );
+            const fetched = usableModels.map((model) => ({
+              id: model.id,
+              ownedBy: model.vendor || null,
+            }));
+            receiveModels(fetched);
+
+            // 审批模型拉取只提供单选候选，不重建目录或替换主模型。
+            if (target === "auto-review") return usableModels.length;
+
+            if (onCatalogModelsChange) {
+              const existing = new Map(
+                catalogModels.map((model) => [model.model, model]),
+              );
+              onCatalogModelsChange(
+                usableModels.map((model) => ({
+                  ...(existing.get(model.id) ?? {}),
+                  model: model.id,
+                  displayName: model.name || model.id,
+                  contextWindow: resolveCopilotReportedPromptLimit(
+                    existing.get(model.id)?.contextWindow,
+                    model.context_window,
+                  ),
+                  supportsParallelToolCalls:
+                    model.supports_parallel_tool_calls ??
+                    existing.get(model.id)?.supportsParallelToolCalls ??
+                    false,
+                  inputModalities: existing.get(model.id)?.inputModalities ?? [
+                    "text",
+                  ],
+                  ...(model.reasoning_effort !== undefined
+                    ? { reasoningLevels: model.reasoning_effort }
+                    : {}),
+                })),
+              );
+            }
+            if (
+              usableModels.length > 0 &&
+              onModelChange &&
+              !usableModels.some((model) => model.id === codexModel)
+            ) {
+              const defaultModel =
+                usableModels.find((model) =>
+                  model.id.toLowerCase().startsWith("gpt-"),
+                ) ?? usableModels[0];
+              onModelChange(defaultModel.id);
+            }
+            return usableModels.length;
+          },
+          "[Copilot] Failed to fetch models:",
         );
+        return;
+      }
+
+      // xAI OAuth 托管预设：不走 base_url + key 的 /models 探测，
+      // 直接用托管账号 token 拉取（与 Claude 表单同一后端命令）
+      if (isXaiOauthPreset) {
+        if (!isXaiOauthAuthenticated) {
+          toast.error(
+            t("xaiOauth.loginRequired", {
+              defaultValue: "请先登录 xAI 账号",
+            }),
+          );
+          return;
+        }
+        runModelFetch(
+          () => fetchXaiOauthModels(selectedXaiAccountId ?? null),
+          receiveModels,
+          "[XaiOAuth] Failed to fetch models:",
+        );
+        return;
+      }
+
+      if (!codexBaseUrl || !codexApiKey) {
+        showFetchModelsError(null, t, {
+          hasApiKey: !!codexApiKey,
+          hasBaseUrl: !!codexBaseUrl,
+        });
         return;
       }
       runModelFetch(
         () =>
-          selectedGitHubAccountId
-            ? copilotGetModelsForAccount(selectedGitHubAccountId)
-            : copilotGetModels(),
-        (models) => {
-          const usableModels = models.filter((model) =>
-            isCopilotModelSupportedByCodex(model, copilotApiFormat),
-          );
-          const fetched = usableModels.map((model) => ({
-            id: model.id,
-            ownedBy: model.vendor || null,
-          }));
-          setFetchedModels(fetched);
-
-          if (onCatalogModelsChange) {
-            const existing = new Map(
-              catalogModels.map((model) => [model.model, model]),
-            );
-            onCatalogModelsChange(
-              usableModels.map((model) => ({
-                ...(existing.get(model.id) ?? {}),
-                model: model.id,
-                displayName: model.name || model.id,
-                contextWindow: resolveCopilotReportedPromptLimit(
-                  existing.get(model.id)?.contextWindow,
-                  model.context_window,
-                ),
-                supportsParallelToolCalls:
-                  model.supports_parallel_tool_calls ??
-                  existing.get(model.id)?.supportsParallelToolCalls ??
-                  false,
-                inputModalities: existing.get(model.id)?.inputModalities ?? [
-                  "text",
-                ],
-                ...(model.reasoning_effort !== undefined
-                  ? { reasoningLevels: model.reasoning_effort }
-                  : {}),
-              })),
-            );
-          }
-          if (
-            usableModels.length > 0 &&
-            onModelChange &&
-            !usableModels.some((model) => model.id === codexModel)
-          ) {
-            const defaultModel =
-              usableModels.find((model) =>
-                model.id.toLowerCase().startsWith("gpt-"),
-              ) ?? usableModels[0];
-            onModelChange(defaultModel.id);
-          }
-          return usableModels.length;
-        },
-        "[Copilot] Failed to fetch models:",
+          fetchModelsForConfig(
+            codexBaseUrl,
+            codexApiKey,
+            isFullUrl,
+            undefined,
+            customUserAgent,
+            {
+              requestHeaders: modelFetchRequestHeaders(
+                localProxyHeadersOverride,
+              ),
+            },
+          ),
+        receiveModels,
+        "[ModelFetch] Failed:",
       );
-      return;
-    }
-
-    // xAI OAuth 托管预设：不走 base_url + key 的 /models 探测，
-    // 直接用托管账号 token 拉取（与 Claude 表单同一后端命令）
-    if (isXaiOauthPreset) {
-      if (!isXaiOauthAuthenticated) {
-        toast.error(
-          t("xaiOauth.loginRequired", {
-            defaultValue: "请先登录 xAI 账号",
-          }),
-        );
-        return;
-      }
-      runModelFetch(
-        () => fetchXaiOauthModels(selectedXaiAccountId ?? null),
-        receiveFetchedModels,
-        "[XaiOAuth] Failed to fetch models:",
-      );
-      return;
-    }
-
-    if (!codexBaseUrl || !codexApiKey) {
-      showFetchModelsError(null, t, {
-        hasApiKey: !!codexApiKey,
-        hasBaseUrl: !!codexBaseUrl,
-      });
-      return;
-    }
-    runModelFetch(
-      () =>
-        fetchModelsForConfig(
-          codexBaseUrl,
-          codexApiKey,
-          isFullUrl,
-          undefined,
-          customUserAgent,
-          {
-            requestHeaders: modelFetchRequestHeaders(localProxyHeadersOverride),
-          },
-        ),
+    },
+    [
+      runModelFetch,
       receiveFetchedModels,
-      "[ModelFetch] Failed:",
-    );
-  }, [
-    runModelFetch,
-    receiveFetchedModels,
-    codexBaseUrl,
-    codexApiKey,
-    codexModel,
-    catalogModels,
-    isFullUrl,
-    customUserAgent,
-    isCopilotPreset,
-    copilotApiFormat,
-    isCopilotAuthenticated,
-    selectedGitHubAccountId,
-    onCatalogModelsChange,
-    onModelChange,
-    localProxyHeadersOverride,
-    isXaiOauthPreset,
-    isXaiOauthAuthenticated,
-    selectedXaiAccountId,
-    t,
-  ]);
+      codexBaseUrl,
+      codexApiKey,
+      codexModel,
+      catalogModels,
+      isFullUrl,
+      customUserAgent,
+      isCopilotPreset,
+      copilotApiFormat,
+      isCopilotAuthenticated,
+      selectedGitHubAccountId,
+      onCatalogModelsChange,
+      onModelChange,
+      localProxyHeadersOverride,
+      isXaiOauthPreset,
+      isXaiOauthAuthenticated,
+      selectedXaiAccountId,
+      t,
+    ],
+  );
 
   const fillModelMetadata = useModelMetadataFill({
     baseUrl: codexBaseUrl,
@@ -1190,32 +1210,6 @@ export function CodexFormFields({
     trimmedDefaultModel,
   ]);
 
-  // 自动审批模型只能选列表里的：审批请求和主对话发给同一家，后端也只写目录里有的模型。
-  const autoReviewChoices = useMemo(() => {
-    const seen = new Set<string>();
-    const choices: { model: string; label: string }[] = [];
-    for (const row of catalogRows) {
-      const model = row.model.trim();
-      if (!model || seen.has(model)) continue;
-      seen.add(model);
-      choices.push({ model, label: row.displayName?.trim() || model });
-    }
-    return choices;
-  }, [catalogRows]);
-  const trimmedAutoReviewModel = autoReviewModel.trim();
-  const autoReviewSelectValue = autoReviewChoices.some(
-    (choice) => choice.model === trimmedAutoReviewModel,
-  )
-    ? trimmedAutoReviewModel
-    : AUTO_REVIEW_DEFAULT;
-  // 不写覆盖时 Codex 先找目录里的 codex-auto-review：没有列表（用 Codex 自带的列表）或列表里
-  // 就有它时用它，否则由主模型自己审批。
-  const autoReviewDefaultIsCodex =
-    autoReviewChoices.length === 0 ||
-    autoReviewChoices.some(
-      (choice) => choice.model === CODEX_AUTO_REVIEW_MODEL,
-    );
-
   // 子代理模型不在模型映射里：Codex 拿不到它的窗口和推理档位；经路由转成 Chat / Anthropic
   // 协议时还会被换成默认模型（转换路径只放行映射里的模型）。没有映射、走原生 Responses 的
   // 供应商直接请求任意模型名，不提示。
@@ -1265,7 +1259,7 @@ export function CodexFormFields({
         models={fetchedModels}
         configuredModelIds={catalogRows.map((row) => row.model)}
         onApply={handleApplyFetchedCatalogRows}
-        onFetch={handleFetchModels}
+        onFetch={() => handleFetchModels()}
         isFetching={isFetchingModels}
         metadataSource={{
           baseUrl: codexBaseUrl,
@@ -1996,7 +1990,7 @@ export function CodexFormFields({
                 type="button"
                 variant="outline"
                 size="icon"
-                onClick={handleFetchModels}
+                onClick={() => handleFetchModels()}
                 disabled={isFetchingModels}
                 className="shrink-0"
               >
@@ -2275,8 +2269,7 @@ export function CodexFormFields({
         </div>
       )}
 
-      {/* 自动审批 —— 写进模型目录每一行的 auto_review_model_override，Codex 按主模型那一行
-          选审批模型。只能选列表里的模型；聚合模式下不生效，改用聚合设置。 */}
+      {/* 自动审批独立于模型目录；可手填或拉取单选，聚合模式改用聚合设置。 */}
       {category !== "official" && onAutoReviewModelChange && (
         <div className="space-y-1.5">
           {labelWithHelp(
@@ -2285,53 +2278,102 @@ export function CodexFormFields({
             }),
             t("codexConfig.autoReviewModelHint", {
               defaultValue:
-                "Codex 开了自动审批（Approve for me）时，判断操作能不能放行用的模型。审批请求和主对话发给同一家，所以只能选这张卡模型列表里的。聚合模式下不生效，改用聚合页签「聚合设置」里的自动审批模型。改完需要重启 Codex。",
+                "Codex 开了自动审批（Approve for me）时，判断操作能不能放行用的模型。可手动填写或拉取模型，无需加入模型列表；留空使用 codex-auto-review。审批请求和主对话发给同一家。聚合模式下改用聚合设置，修改后重启 Codex。",
             }),
             "codexAutoReviewModel",
           )}
-          <Select
-            value={autoReviewSelectValue}
-            onValueChange={(next) => {
-              // 表单里的 Radix Select 带一个隐藏的原生 select：编辑页加载时列表和已存的值同时
-              // 到达，值先于选项注册，它会回报一次空串。选项都不是空值，空串只能是这个，忽略。
-              if (!next) return;
-              onAutoReviewModelChange(next === AUTO_REVIEW_DEFAULT ? "" : next);
-            }}
-            disabled={autoReviewChoices.length === 0}
-          >
-            <SelectTrigger
+          <div className="flex gap-1">
+            <Input
               id="codexAutoReviewModel"
               aria-label={t("codexConfig.autoReviewModelLabel", {
                 defaultValue: "自动审批模型",
               })}
-            >
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value={AUTO_REVIEW_DEFAULT}>
-                {autoReviewDefaultIsCodex
-                  ? t("codexConfig.autoReviewModelCodexDefault", {
-                      defaultValue: "Codex 默认（codex-auto-review）",
-                    })
-                  : t("codexConfig.autoReviewModelMainDefault", {
-                      defaultValue: "主模型自己审批（默认）",
-                    })}
-              </SelectItem>
-              {autoReviewChoices.map((choice) => (
-                <SelectItem key={choice.model} value={choice.model}>
-                  {choice.label}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-          {autoReviewChoices.length === 0 && (
-            <p className="text-xs leading-relaxed text-fg-2">
-              {t("codexConfig.autoReviewModelNoList", {
-                defaultValue:
-                  "这张卡没有模型列表：Codex 会用官方的 codex-auto-review 审批，只有部分转发 ChatGPT 账号的中转认它，不认就会报 404。在上面的模型列表里加上模型后就能选。",
+              value={autoReviewModel}
+              onChange={(event) => onAutoReviewModelChange(event.target.value)}
+              placeholder={t("codexConfig.autoReviewModelPlaceholder", {
+                defaultValue: "留空使用 codex-auto-review",
               })}
-            </p>
-          )}
+              className="min-w-0 flex-1"
+            />
+            <Button
+              type="button"
+              variant="outline"
+              onClick={() => handleFetchModels("auto-review")}
+              disabled={isFetchingModels}
+              className="shrink-0 gap-1.5"
+            >
+              {isFetchingModels ? (
+                <Loader2 className="h-4 w-4 animate-spin" />
+              ) : (
+                <Download className="h-4 w-4" />
+              )}
+              {t("codexConfig.autoReviewModelFetch", {
+                defaultValue: "拉取模型",
+              })}
+            </Button>
+            {defaultModelSuggestions.length > 0 && (
+              <Popover
+                modal
+                open={autoReviewPickerOpen}
+                onOpenChange={setAutoReviewPickerOpen}
+              >
+                <PopoverTrigger asChild>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="icon"
+                    className="shrink-0"
+                    aria-label={t("codexConfig.autoReviewModelSelect", {
+                      defaultValue: "选择审批模型",
+                    })}
+                  >
+                    <ChevronDown className="h-4 w-4" />
+                  </Button>
+                </PopoverTrigger>
+                <PopoverContent
+                  align="end"
+                  sideOffset={4}
+                  collisionPadding={8}
+                  className="z-[200] w-72 p-0"
+                >
+                  <Command>
+                    <CommandInput
+                      placeholder={t("providerForm.searchModelPlaceholder", {
+                        defaultValue: "搜索模型…",
+                      })}
+                    />
+                    <CommandList className="max-h-64">
+                      <CommandEmpty>
+                        {t("providerForm.searchModelEmpty", {
+                          defaultValue: "没有匹配的模型。",
+                        })}
+                      </CommandEmpty>
+                      <CommandGroup>
+                        {defaultModelSuggestions.map((model) => (
+                          <CommandItem
+                            key={model.id}
+                            value={model.id}
+                            onSelect={() => {
+                              onAutoReviewModelChange(model.id);
+                              setAutoReviewPickerOpen(false);
+                            }}
+                          >
+                            {model.id}
+                          </CommandItem>
+                        ))}
+                      </CommandGroup>
+                    </CommandList>
+                  </Command>
+                </PopoverContent>
+              </Popover>
+            )}
+          </div>
+          <p className="text-xs leading-relaxed text-fg-2">
+            {t("codexConfig.autoReviewModelEmptyHint", {
+              defaultValue:
+                "无需添加到模型列表；保存供应商后应用，修改后重启 Codex。",
+            })}
+          </p>
         </div>
       )}
 

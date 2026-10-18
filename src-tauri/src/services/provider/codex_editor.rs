@@ -26,7 +26,8 @@ use crate::live::engine::{read_current, LiveFile};
 use crate::live::floor;
 use crate::live::patch::toml::{parse, TomlSteps};
 use crate::live::project::codex::{
-    is_keyless_fallback, CodexProjection, Route, RowInput, OFFICIAL_PROXY_ROUTE_ID, ROUTE_ID,
+    foreign_catalog, is_keyless_fallback, live_catalog_is_ours, CodexProjection, Route, RowInput,
+    MODEL_CATALOG_JSON, OFFICIAL_PROXY_ROUTE_ID, ROUTE_ID,
 };
 use crate::mode::operation::{AppWrite, FileChange};
 use crate::mode::state::{op, PendingTarget};
@@ -344,6 +345,25 @@ pub(crate) fn plan_save(
         proxy_injected_oauth,
     })?;
 
+    // The editor displays the effective generated catalog when a reviewer is
+    // overlaid on a user-owned catalog. That generated pointer is not the row's
+    // source: keep the original foreign pointer only when the displayed value
+    // survived unchanged. Explicit deletion/replacement must remain authoritative.
+    if let Origin::Row(row) = origin {
+        if live_catalog_is_ours(config_text(base))
+            && live_catalog_is_ours(config_text(edited))
+            && base_doc.get(MODEL_CATALOG_JSON).and_then(Item::as_str)
+                == edited_doc.get(MODEL_CATALOG_JSON).and_then(Item::as_str)
+        {
+            if let Some(pointer) = foreign_catalog(row) {
+                projection.top.retain(|(key, _)| key != MODEL_CATALOG_JSON);
+                projection
+                    .top
+                    .push((MODEL_CATALOG_JSON.to_string(), pointer.clone()));
+            }
+        }
+    }
+
     let rendered = |doc: &DocumentMut, key: &str| doc.get(key).map(render);
     let from_live: Vec<Entry> = exclusive_entries(&base_doc)
         .into_iter()
@@ -623,6 +643,168 @@ mod tests {
                 plan.edits.is_empty(),
                 "provider instructions are not global changes"
             );
+        }
+    }
+
+    fn foreign_catalog_editor_fixture(dir: &Path) -> (Value, Value, std::path::PathBuf, String) {
+        let source = dir.join("user-models.json");
+        let mut primary: Value =
+            serde_json::from_str(include_str!("../../resources/gpt5_5_template.json")).unwrap();
+        primary["slug"] = json!("primary");
+        let mut additional = primary.clone();
+        additional["slug"] = json!("source-only-model");
+        let original =
+            json!({"models": [primary, additional], "user_metadata": "keep"}).to_string();
+        std::fs::write(&source, &original).unwrap();
+        let mut config = doc(r#"model = "primary"
+model_provider = "custom"
+[model_providers.custom]
+name = "Relay"
+base_url = "https://relay.example/v1"
+wire_api = "responses"
+"#);
+        config[MODEL_CATALOG_JSON] = toml_edit::value(source.to_string_lossy().as_ref());
+        let stored = json!({
+            "auth": {"OPENAI_API_KEY": "test-key"},
+            "config": config.to_string(),
+            "autoReviewModel": "review-only",
+            "modelCatalog": {"models": [{"model": "manual-only"}]}
+        });
+        let provider = Provider::with_id("p".into(), "Relay".into(), stored.clone(), None);
+        let db = Database::memory().unwrap();
+        // Use the same in-memory projection as view(), without reading or
+        // changing process-global HOME/live configuration in this unit test.
+        let planned = plan_for_view(&db, &Owner::None, &provider).unwrap();
+        planned
+            .config()
+            .apply_to(&dir.join("config.toml"), &mut config)
+            .unwrap();
+        let mut base = stored.clone();
+        base["config"] = json!(config.to_string());
+        assert!(live_catalog_is_ours(config_text(&base)));
+        (stored, base, source, original)
+    }
+
+    #[test]
+    fn saving_projected_reviewer_view_keeps_the_user_catalog_source() {
+        let dir = tempfile::tempdir().unwrap();
+        let (stored, base, source, original) = foreign_catalog_editor_fixture(dir.path());
+        let plan = plan_save(
+            Some(&stored),
+            &base,
+            &base,
+            &Origin::row(&stored).unwrap(),
+            false,
+            false,
+            ConflictPolicy::Refuse,
+        )
+        .unwrap();
+        let saved_doc = doc(config_text(&plan.row_settings));
+        assert_eq!(
+            saved_doc.get(MODEL_CATALOG_JSON).and_then(Item::as_str),
+            source.to_str(),
+        );
+        assert!(plan.edits.is_empty());
+        assert_eq!(std::fs::read_to_string(&source).unwrap(), original);
+        assert_eq!(plan.row_settings["autoReviewModel"], "review-only");
+
+        let mut changed: Value = serde_json::from_str(&original).unwrap();
+        changed["models"][1]["slug"] = json!("updated-source-only-model");
+        std::fs::write(&source, changed.to_string()).unwrap();
+        let projection = project_for_save(&RowInput {
+            settings: &plan.row_settings,
+            official: false,
+            proxy_injected_oauth: false,
+        })
+        .unwrap();
+        let next = crate::codex_config::plan_codex_model_catalog(
+            &plan.row_settings,
+            &projection.catalog_input_text(),
+            crate::codex_config::CodexCatalogToolProfile::NativeResponses,
+            true,
+        )
+        .unwrap();
+        assert!(next.replaces_foreign_pointer);
+        let catalog = next.catalog.unwrap();
+        assert_eq!(catalog["user_metadata"], "keep");
+        assert_eq!(catalog["models"].as_array().unwrap().len(), 2);
+        assert_eq!(catalog["models"][1]["slug"], "updated-source-only-model");
+        assert_eq!(
+            catalog["models"][1]["auto_review_model_override"],
+            "review-only"
+        );
+    }
+
+    #[test]
+    fn saving_projected_view_respects_deleted_or_replaced_catalog_pointers() {
+        let dir = tempfile::tempdir().unwrap();
+        let (stored, base, _, _) = foreign_catalog_editor_fixture(dir.path());
+        let replacement = dir
+            .path()
+            .join("replacement-models.json")
+            .to_string_lossy()
+            .into_owned();
+        let another_generated = dir
+            .path()
+            .join("another")
+            .join(crate::live::project::codex::CATALOG_FILENAME)
+            .to_string_lossy()
+            .into_owned();
+        for pointer in [
+            None,
+            Some(replacement.as_str()),
+            Some(another_generated.as_str()),
+        ] {
+            let mut edited = base.clone();
+            let mut config = doc(config_text(&edited));
+            match pointer {
+                Some(value) => {
+                    config[MODEL_CATALOG_JSON] = toml_edit::value(value);
+                }
+                None => {
+                    config.remove(MODEL_CATALOG_JSON);
+                }
+            }
+            edited["config"] = json!(config.to_string());
+            let plan = plan_save(
+                Some(&stored),
+                &edited,
+                &base,
+                &Origin::row(&stored).unwrap(),
+                false,
+                false,
+                ConflictPolicy::Refuse,
+            )
+            .unwrap();
+            let saved = doc(config_text(&plan.row_settings));
+            assert_eq!(
+                saved.get(MODEL_CATALOG_JSON).and_then(Item::as_str),
+                pointer.filter(|value| *value == replacement.as_str()),
+            );
+        }
+    }
+
+    #[test]
+    fn catalog_source_restoration_requires_a_matching_generated_base_and_row_origin() {
+        let dir = tempfile::tempdir().unwrap();
+        let (stored, base, _, _) = foreign_catalog_editor_fixture(dir.path());
+        for (origin, initial) in [
+            (Origin::Live(vec![]), base.clone()),
+            (Origin::row(&json!({"config": ""})).unwrap(), base.clone()),
+            (Origin::row(&stored).unwrap(), stored.clone()),
+        ] {
+            let plan = plan_save(
+                Some(&stored),
+                &base,
+                &initial,
+                &origin,
+                false,
+                false,
+                ConflictPolicy::Refuse,
+            )
+            .unwrap();
+            let saved = doc(config_text(&plan.row_settings));
+            assert!(saved.get(MODEL_CATALOG_JSON).is_none());
         }
     }
 

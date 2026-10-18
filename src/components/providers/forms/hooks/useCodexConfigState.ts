@@ -177,8 +177,25 @@ export function useCodexConfigState({ initialData }: UseCodexConfigStateProps) {
     useState("");
   const [codexModelInstructionsFiles, setCodexModelInstructionsFilesState] =
     useState<string[]>([]);
-  // 自动审批（Auto Review）用的模型：`modelCatalog.autoReviewModel`，空串 = 用 Codex 的默认
-  const [codexAutoReviewModel, setCodexAutoReviewModel] = useState("");
+  // Independent reviewer model; older cards stored it in modelCatalog.
+  // An explicit empty top-level value selects codex-auto-review, not the old value.
+  const [codexAutoReviewModelDraft, setCodexAutoReviewModelDraft] =
+    useState("");
+  const [hasStoredCodexAutoReviewModel, setHasStoredCodexAutoReviewModel] =
+    useState(false);
+  const [codexAutoReviewModelEdited, setCodexAutoReviewModelEdited] =
+    useState(false);
+  const shouldSaveCodexAutoReviewModel =
+    hasStoredCodexAutoReviewModel || codexAutoReviewModelEdited;
+  // Legacy alias-only cards keep their single-step mapping until this field is
+  // edited. Display its target, but do not silently migrate it on an unrelated save.
+  const codexAutoReviewModel = shouldSaveCodexAutoReviewModel
+    ? codexAutoReviewModelDraft
+    : (serializeModelAliases(codexModelAliases)?.["codex-auto-review"] ?? "");
+  const setCodexAutoReviewModel = useCallback((model: string) => {
+    setCodexAutoReviewModelDraft(model);
+    setCodexAutoReviewModelEdited(true);
+  }, []);
   const [codexAuthError, setCodexAuthError] = useState("");
 
   const isUpdatingCodexBaseUrlRef = useRef(false);
@@ -239,10 +256,27 @@ export function useCodexConfigState({ initialData }: UseCodexConfigStateProps) {
           ? current
           : nextAliases,
       );
-      setCodexAutoReviewModel(
-        typeof modelCatalog?.autoReviewModel === "string"
-          ? modelCatalog.autoReviewModel.trim()
-          : "",
+      const hasIndependentReviewer = Object.prototype.hasOwnProperty.call(
+        config,
+        "autoReviewModel",
+      );
+      const hasLegacyReviewer = Boolean(
+        modelCatalog &&
+        typeof modelCatalog === "object" &&
+        Object.prototype.hasOwnProperty.call(modelCatalog, "autoReviewModel"),
+      );
+      setHasStoredCodexAutoReviewModel(
+        hasIndependentReviewer || hasLegacyReviewer,
+      );
+      setCodexAutoReviewModelEdited(false);
+      setCodexAutoReviewModelDraft(
+        hasIndependentReviewer
+          ? typeof (config as any).autoReviewModel === "string"
+            ? (config as any).autoReviewModel.trim()
+            : ""
+          : typeof modelCatalog?.autoReviewModel === "string"
+            ? modelCatalog.autoReviewModel.trim()
+            : "",
       );
 
       // 提取 Base URL
@@ -515,7 +549,9 @@ export function useCodexConfigState({ initialData }: UseCodexConfigStateProps) {
         activeInstructionsFile || savedInstructionsFiles[0] || "",
       );
       setCodexModelInstructionsFilesState(savedInstructionsFiles);
-      setCodexAutoReviewModel("");
+      setCodexAutoReviewModelDraft("");
+      setHasStoredCodexAutoReviewModel(false);
+      setCodexAutoReviewModelEdited(false);
 
       const baseUrl = extractCodexBaseUrl(config);
       setCodexBaseUrl(baseUrl || "");
@@ -539,6 +575,7 @@ export function useCodexConfigState({ initialData }: UseCodexConfigStateProps) {
     codexModelInstructionsFile,
     codexModelInstructionsFiles,
     codexAutoReviewModel,
+    shouldSaveCodexAutoReviewModel,
     codexAuthError,
     setCodexAuth,
     setCodexConfig,
