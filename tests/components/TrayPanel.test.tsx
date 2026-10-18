@@ -146,7 +146,10 @@ describe("TrayPanel window layout", () => {
         staleTime: Infinity,
       },
     });
-    vi.spyOn(settingsApi, "get").mockResolvedValue({} as Settings);
+    vi.spyOn(settingsApi, "get").mockResolvedValue({
+      showInTray: true,
+      minimizeToTrayOnClose: true,
+    } satisfies Settings);
     frames.clear();
     vi.spyOn(window, "requestAnimationFrame").mockImplementation((callback) => {
       frames.set(++frameId, callback);
@@ -176,8 +179,10 @@ describe("TrayPanel window layout", () => {
 
   it("refreshes the independent money settings cache on reopen and tray changes", async () => {
     vi.mocked(settingsApi.get).mockResolvedValue({
+      showInTray: true,
+      minimizeToTrayOnClose: true,
       usageDisplay: { currency: "CNY", exchangeRates: { CNY: 7 } },
-    } as Settings);
+    } satisfies Settings);
     await openPanel(windows);
     fireEvent.click(screen.getByRole("tab", { name: "Usage" }));
     await waitFor(() =>
@@ -186,16 +191,20 @@ describe("TrayPanel window layout", () => {
 
     await act(async () => emitTauriEvent(HIDE_EVENT, undefined));
     vi.mocked(settingsApi.get).mockResolvedValue({
+      showInTray: true,
+      minimizeToTrayOnClose: true,
       usageDisplay: { currency: "USD" },
-    } as Settings);
+    } satisfies Settings);
     await act(async () => emitTauriEvent(SHOW_EVENT, { ...windows, seq: 2 }));
     await waitFor(() =>
       expect(screen.getByTestId("tray-usage")).toHaveTextContent("$1.00"),
     );
 
     vi.mocked(settingsApi.get).mockResolvedValue({
+      showInTray: true,
+      minimizeToTrayOnClose: true,
       usageDisplay: { currency: "CNY", exchangeRates: { CNY: 8 } },
-    } as Settings);
+    } satisfies Settings);
     await act(async () => emitTauriEvent(CHANGED_EVENT, undefined));
     await waitFor(() =>
       expect(screen.getByTestId("tray-usage")).toHaveTextContent("¥8.00"),
