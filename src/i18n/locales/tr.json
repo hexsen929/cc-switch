@@ -386,6 +386,10 @@
       "checkToolUpdates": "Açılışta uygulama güncellemelerini kontrol et",
       "checkToolUpdatesHelp": "CC Switch açıkken, her başlatıldığında yüklü komut satırı uygulamalarınızı yeni sürümler için kontrol eder ve bulursa kenar çubuğunda Uygulamalar üzerinde bir nokta gösterir. Hiçbir şey otomatik olarak yükseltilmez.",
       "windowAndTerminal": "Pencere ve terminal",
+      "trayStyle": "Sistem tepsisi stili",
+      "trayStylePanel": "Panel",
+      "trayStyleMenu": "Menü",
+      "trayStyleHelp": "Sistem tepsisi simgesine tıkladığınızda neyin açılacağını belirler. Panel: her uygulamanın kullandığı sağlayıcıyı, kotasını ve kullanımını gösterir; arama ve sağlayıcı değiştirme sunar. Menü: sistemin yerel menüsüdür (Windows'ta sol tıklama ana pencereyi açar, sağ tıklama menüyü gösterir). Değişiklik hemen uygulanır.",
       "minimizeToTrayHelp": "Açık olduğunda, kapat düğmesi yalnızca pencereyi gizler ve CC Switch sistem tepsisinde çalışmaya devam eder (hafif mod tepsi menüsündedir). Kapatıldığında kapatma düğmesi kapanır.",
       "terminalHelp": "Sağlayıcı kartlarındaki “Açık terminal”in kullandığı terminal. Mevcut değilse sistemin varsayılan terminali kullanılır.",
       "sharedInstructions": "Paylaşılan Agent talimatları",
@@ -1644,7 +1648,8 @@
       "9527code": "9527 CODE, Claude Code, Codex ve diğer ana akım modeller için hızlı, kararlı aktarma sağlayan kurumsal düzeyde, tam özellikli bir yapay zeka aktarma platformudur. Bir yıllık sürekli çalışma, %99,9 hizmet istikrarı ve 7×24 insan teknik desteği. Yeni kullanıcılar sınırsız yönlendirme para iadesiyle deneme kredisi için destekle iletişime geçebilir!",
       "soleapi": "SoleAPI, geliştiriciler ve kuruluşlar için bir yapay zeka modeli ağ geçididir: bir API anahtarı, gerçek zamanlı akıllı yönlendirme, milisaniyelik yedek sağlayıcıya geçiş, %99,99 kullanılabilirlik ve 7/24 destek ile OpenAI ve Anthropic protokolleriyle yerel olarak uyumlu, Claude, GPT ve Gemini dahil 30'dan fazla lider modele ulaşır. Ücretsiz deneme kredileri ve yükleme yapan arkadaşlarınızı davet ederek devam eden para iadesi için yönlendirme bağlantısı aracılığıyla kaydolun!",
       "fluxa": "FluxA ve Baidu AI Cloud, AI ajanlerinin modelleri, API'leri ve araçları kendi başlarına satın almasına, yönetmesine ve kullanmasına olanak tanıyan AgenticPlan'ı ortaklaşa başlattı. DeepSeek V4, GLM 5.2 ve Kimi gibi amiral gemisi modellerinde %40'a varan indirim sağlayan Baidu Qianfan TokenPlan'ın yanı sıra arama, veri kazıma, sosyal medya, finans, kripto, görüntü oluşturma ve video için 13.000'den fazla ücretli API'nin kilidini açan bonus FluxA AgentMarket API kredilerini içerir.",
-      "88api": "88API, bir Hong Kong şirketi tarafından işletilen ve metin, görüntü, konuşma ve video modellerine birleşik erişim sağlayan tek noktadan çok modelli bir API platformudur. Başlıca uluslararası ödeme yöntemlerini kabul eder, fatura düzenleyebilir ve kurumsal düzeyde istikrarlı hizmet sağlar. Bonus kredileri almak için özel bağlantı üzerinden kaydolun!"
+      "88api": "88API, bir Hong Kong şirketi tarafından işletilen ve metin, görüntü, konuşma ve video modellerine birleşik erişim sağlayan tek noktadan çok modelli bir API platformudur. Başlıca uluslararası ödeme yöntemlerini kabul eder, fatura düzenleyebilir ve kurumsal düzeyde istikrarlı hizmet sağlar. Bonus kredileri almak için özel bağlantı üzerinden kaydolun!",
+      "alltokens_si": "AllTokens SI, istikrar ve dürüstlük temelinde oluşturulmuş kurumsal bir yapay zeka token aktarma ve ekip iş birliği platformudur. Üyeler, anahtarlar, kullanım ve bakiye tek bir şirket konsolunda yönetilir; açık yetkiler ve harcama sınırları, ekip kullanımının izlenebilir ve kontrol altında olmasını sağlar."
     },
     "presets": {
       "ucloud": "Compshare",
@@ -1762,6 +1767,7 @@
     "fetchModelsSuccess": "Bulunan {{count}} modelleri",
     "modelMetadataFilled": "{{model}} için bağlam penceresi ve diğer parametrelerle doldurulmuştur (kaynak: {{source}}). Lütfen tekrar kontrol edin.",
     "modelMetadataFilledMany": "{{count}} modelleri için bağlam penceresi ve diğer parametrelerle doldurulmuştur (kaynak: {{source}}). Lütfen tekrar kontrol edin.",
+    "gptContextWindowHint": "Aktarma hizmetlerindeki GPT genellikle yalnızca 272K bağlam penceresi sunan ChatGPT aboneliklerinden gelir. Daha büyük bir pencere, bağlam sıkıştırmasını üst sağlayıcı isteği reddedip bu turun başarısız olmasına kadar geciktirir; bu değeri yalnızca sağlayıcının daha büyük bir pencereyi desteklediğinden eminseniz kullanın.",
     "modelMetadataSourcePreset": "önceden ayarlanmış",
     "modelMetadataSourceBoth": "ön ayar ve models.dev",
     "modelPicker": {

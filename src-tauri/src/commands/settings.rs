@@ -66,6 +66,7 @@ pub async fn get_settings() -> Result<crate::settings::AppSettings, String> {
 /// 保存设置
 #[tauri::command]
 pub async fn save_settings(
+    app: tauri::AppHandle,
     state: tauri::State<'_, crate::store::AppState>,
     settings: crate::settings::AppSettings,
 ) -> Result<bool, String> {
@@ -96,6 +97,7 @@ pub async fn save_settings(
         || merged.codex_stack_subagent_reasoning_effort
             != existing.codex_stack_subagent_reasoning_effort
         || merged.codex_stack_auto_review_model != existing.codex_stack_auto_review_model;
+    let tray_style_changed = merged.native_tray_menu != existing.native_tray_menu;
     // Ordinarily publish settings only after all target writes, so a settings
     // failure rolls files back too. A combined directory/source change retains
     // the existing directory-first ordering to resolve the new native paths.
@@ -123,6 +125,11 @@ pub async fn save_settings(
         .map_err(|error| error.to_string())?;
     } else {
         crate::settings::update_settings(merged).map_err(|e| e.to_string())?;
+    }
+
+    // 原生托盘菜单 / 托盘面板当场切换，不用重启。
+    if tray_style_changed {
+        crate::tray::apply_tray_style(&app);
     }
 
     // 立即重写，失败时回滚设置，免得界面显示已改好、客户端还是旧的。
