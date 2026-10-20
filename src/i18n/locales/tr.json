@@ -389,7 +389,7 @@
       "trayStyle": "Sistem tepsisi stili",
       "trayStylePanel": "Panel",
       "trayStyleMenu": "Menü",
-      "trayStyleHelp": "Sistem tepsisi simgesine tıkladığınızda neyin açılacağını belirler. Panel: her uygulamanın kullandığı sağlayıcıyı, kotasını ve kullanımını gösterir; arama ve sağlayıcı değiştirme sunar. Menü: sistemin yerel menüsüdür (Windows'ta sol tıklama ana pencereyi açar, sağ tıklama menüyü gösterir). Değişiklik hemen uygulanır.",
+      "trayStyleHelp": "Sistem tepsisi simgesine tıkladığınızda neyin açılacağını belirler (Windows'ta sol tıklama her zaman ana pencereyi, sağ tıklama seçilen görünümü açar). Panel: her uygulamanın kullandığı sağlayıcıyı, kotasını ve kullanımını gösterir; arama ve sağlayıcı değiştirme sunar. Menü: sistemin yerel menüsüdür. Değişiklik hemen uygulanır.",
       "minimizeToTrayHelp": "Açık olduğunda, kapat düğmesi yalnızca pencereyi gizler ve CC Switch sistem tepsisinde çalışmaya devam eder (hafif mod tepsi menüsündedir). Kapatıldığında kapatma düğmesi kapanır.",
       "terminalHelp": "Sağlayıcı kartlarındaki “Açık terminal”in kullandığı terminal. Mevcut değilse sistemin varsayılan terminali kullanılır.",
       "sharedInstructions": "Paylaşılan Agent talimatları",
