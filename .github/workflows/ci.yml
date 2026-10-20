@@ -263,7 +263,9 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-22.04, windows-latest, macos-latest]
+        # Pin the supported ARM image instead of the moving latest pool: its
+        # hosted runner could not be acquired on two consecutive runs.
+        os: [ubuntu-22.04, windows-latest, macos-15]
     steps:
       - name: Checkout
         uses: actions/checkout@v6
