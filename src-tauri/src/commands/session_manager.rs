@@ -125,6 +125,7 @@ pub async fn reveal_session_path(path: String) -> Result<bool, String> {
 /// 在用户选定的终端里恢复一个会话。
 /// The renderer supplies the discovered session identity. The command and cwd
 /// must still match that session; subagent conversations are always read-only.
+/// AGY's index-only conversations have no source path and use a scoped lookup.
 #[tauri::command]
 pub async fn launch_session_terminal(
     command: String,
@@ -132,7 +133,7 @@ pub async fn launch_session_terminal(
     custom_config: Option<String>,
     provider_id: String,
     session_id: String,
-    source_path: String,
+    source_path: Option<String>,
 ) -> Result<bool, String> {
     // Read preferred terminal from global settings
     let preferred = crate::settings::get_preferred_terminal();
@@ -145,15 +146,17 @@ pub async fn launch_session_terminal(
     };
 
     tauri::async_runtime::spawn_blocking(move || {
-        let (native_command, native_cwd) =
-            session_manager::resume_session_target(&provider_id, &session_id, &source_path)?;
-        if command != native_command || cwd != native_cwd {
-            return Err("Session resume target changed; refresh the list".to_string());
-        }
-        session_manager::terminal::launch_terminal(
-            &target,
+        let (native_command, native_cwd) = validated_resume_target(
             &command,
             cwd.as_deref(),
+            &provider_id,
+            &session_id,
+            source_path.as_deref(),
+        )?;
+        session_manager::terminal::launch_terminal(
+            &target,
+            &native_command,
+            native_cwd.as_deref(),
             custom_config.as_deref(),
         )
     })
@@ -161,6 +164,23 @@ pub async fn launch_session_terminal(
     .map_err(|e| format!("Failed to launch terminal: {e}"))??;
 
     Ok(true)
+}
+
+fn validated_resume_target(
+    command: &str,
+    cwd: Option<&str>,
+    provider_id: &str,
+    session_id: &str,
+    source_path: Option<&str>,
+) -> Result<(String, Option<String>), String> {
+    let (native_command, native_cwd) = match source_path {
+        Some(source) => session_manager::resume_session_target(provider_id, session_id, source)?,
+        None => session_manager::resume_index_only_session_target(provider_id, session_id)?,
+    };
+    if command != native_command || cwd != native_cwd.as_deref() {
+        return Err("Session resume target changed; refresh the list".to_string());
+    }
+    Ok((native_command, native_cwd))
 }
 
 #[tauri::command]
@@ -215,4 +235,70 @@ pub async fn export_session_markdown<R: tauri::Runtime>(
         .map_err(|e| format!("无效的保存路径: {e}"))?;
     crate::config::write_text_file(&path, &content).map_err(|e| e.to_string())?;
     Ok(Some(path.to_string_lossy().into_owned()))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    #[serial_test::serial]
+    fn index_only_resume_validates_native_command_and_cwd_without_launching_a_terminal() {
+        if crate::config::sqlite_unsupported_in_temp_dir() {
+            return;
+        }
+        let fixture = session_manager::providers::agy::test_support::IndexOnlyFixture::new();
+        let project = fixture.home().join("project space");
+        fixture.insert(0, "native-id", &project);
+        let cwd = project.to_string_lossy().into_owned();
+        assert_eq!(
+            validated_resume_target(
+                "agy --conversation=native-id",
+                Some(&cwd),
+                "agy",
+                "native-id",
+                None,
+            )
+            .unwrap(),
+            (
+                "agy --conversation=native-id".to_string(),
+                Some(cwd.clone())
+            )
+        );
+        for command in [
+            "arbitrary-command",
+            "agy --conversation=different-id",
+            "agy --conversation=native-id; echo injected",
+        ] {
+            assert!(
+                validated_resume_target(command, Some(&cwd), "agy", "native-id", None)
+                    .unwrap_err()
+                    .contains("target changed")
+            );
+        }
+        assert!(validated_resume_target(
+            "agy --conversation=native-id",
+            None,
+            "agy",
+            "native-id",
+            None,
+        )
+        .is_err());
+        assert!(validated_resume_target(
+            "agy --conversation=native-id",
+            Some("different-directory"),
+            "agy",
+            "native-id",
+            None,
+        )
+        .is_err());
+        assert!(validated_resume_target(
+            "codex resume native-id",
+            Some(&cwd),
+            "codex",
+            "native-id",
+            None,
+        )
+        .is_err());
+    }
 }

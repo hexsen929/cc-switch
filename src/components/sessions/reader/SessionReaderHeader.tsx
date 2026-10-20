@@ -48,6 +48,7 @@ import { sessionMenuItemClass } from "../SessionItem";
 import {
   buildCdResumeCommand,
   canDeleteSession,
+  canResumeSession,
   formatClock,
   formatShortDateTime,
   isSessionAppId,
@@ -112,8 +113,7 @@ export const SessionReaderHeader = memo(function SessionReaderHeader({
   const appId = isSessionAppId(session.providerId) ? session.providerId : null;
   const isCodex = session.providerId === "codex";
   const readOnly = isReadOnlySession(session);
-  const command =
-    readOnly || !session.sourcePath ? undefined : session.resumeCommand;
+  const command = canResumeSession(session) ? session.resumeCommand : undefined;
   const deletable = canDeleteSession(session);
 
   const launchLabel = launchTerminal

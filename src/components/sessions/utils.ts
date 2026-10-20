@@ -45,6 +45,12 @@ export const isReadOnlySession = (session: SessionMeta) =>
   session.role === "subagent" ||
   Boolean(session.parentSessionId);
 
+/** AGY 的索引会话可能只有二进制正文；恢复时由后端重新核对原生索引。 */
+export const canResumeSession = (session: SessionMeta) =>
+  !isReadOnlySession(session) &&
+  Boolean(session.resumeCommand?.trim()) &&
+  (Boolean(session.sourcePath) || session.providerId === "agy");
+
 /** 子代理只读；MiniMax Code / Antigravity 的会话需在对应客户端中删除。 */
 export const canDeleteSession = (session: SessionMeta) =>
   Boolean(session.sourcePath) &&

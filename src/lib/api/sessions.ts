@@ -125,19 +125,23 @@ export const sessionsApi = {
     command: string;
     providerId: string;
     sessionId: string;
-    sourcePath: string;
+    /** Only AGY native-index sessions may omit the transcript source. */
+    sourcePath?: string | null;
     cwd?: string | null;
     customConfig?: string | null;
   }): Promise<boolean> {
     const { command, cwd, customConfig, providerId, sessionId, sourcePath } =
       options;
+    if (!sourcePath && providerId !== "agy") {
+      throw new Error("A transcript source is required to resume this session");
+    }
     return await invoke("launch_session_terminal", {
       command,
       cwd,
       customConfig,
       providerId,
       sessionId,
-      sourcePath,
+      sourcePath: sourcePath ?? null,
     });
   },
 };

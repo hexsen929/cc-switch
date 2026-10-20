@@ -77,6 +77,7 @@ pub fn resume_session_target(
         "grokbuild" => grokbuild::scan_sessions(),
         "pi" => pi::scan_sessions(),
         "mcode" => mcode::scan_sessions(),
+        "agy" => agy::scan_sessions(),
         _ => return Err("This application does not support session resume".to_string()),
     };
     let mut matching = sessions.into_iter().filter(|session| {
@@ -92,7 +93,37 @@ pub fn resume_session_target(
     if matching.next().is_some() {
         return Err("Session identity is ambiguous; refresh the list".to_string());
     }
-    if session.read_only || session.role.as_deref() == Some("subagent") {
+    checked_resume_target(session)
+}
+
+/// AGY can resume index-only conversations without a readable transcript. No
+/// other provider may bypass its existing source-path validation. Resolve from
+/// the native indexes each time, not from renderer commands or cached metadata.
+pub fn resume_index_only_session_target(
+    provider_id: &str,
+    session_id: &str,
+) -> Result<(String, Option<String>), String> {
+    if provider_id != "agy" {
+        return Err("A session source is required for this application".to_string());
+    }
+    let mut matching = agy::index_only_resume_candidates(session_id).into_iter();
+    let session = matching
+        .next()
+        .ok_or("Session is no longer available; refresh the list")?;
+    if matching.next().is_some() {
+        return Err("Session identity is ambiguous; refresh the list".to_string());
+    }
+    if session.source_path.is_some() {
+        return Err("Session source changed; refresh the list".to_string());
+    }
+    checked_resume_target(session)
+}
+
+fn checked_resume_target(session: SessionMeta) -> Result<(String, Option<String>), String> {
+    if session.read_only
+        || session.role.as_deref() == Some("subagent")
+        || session.parent_session_id.is_some()
+    {
         return Err("Subagent conversations are read-only".to_string());
     }
     let command = session
@@ -354,6 +385,153 @@ where
 mod tests {
     use super::*;
     use tempfile::tempdir;
+
+    struct RestoreHome(Option<std::ffi::OsString>);
+
+    impl Drop for RestoreHome {
+        fn drop(&mut self) {
+            match &self.0 {
+                Some(previous) => std::env::set_var("CC_SWITCH_TEST_HOME", previous),
+                None => std::env::remove_var("CC_SWITCH_TEST_HOME"),
+            }
+        }
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn agy_transcript_resume_requires_a_fresh_matching_native_session() {
+        let home = tempdir().expect("isolated AGY home");
+        let _restore = RestoreHome(std::env::var_os("CC_SWITCH_TEST_HOME"));
+        std::env::set_var("CC_SWITCH_TEST_HOME", home.path());
+
+        for (root, id) in agy::session_roots()
+            .into_iter()
+            .zip(["cli-main", "ide-main"])
+        {
+            let source = root
+                .join(id)
+                .join(".system_generated/logs/transcript_full.jsonl");
+            std::fs::create_dir_all(source.parent().unwrap()).unwrap();
+            std::fs::write(
+                &source,
+                r#"{"step_index":0,"type":"USER_INPUT","content":"fixture","resume_command":"untrusted command"}"#,
+            )
+            .unwrap();
+
+            // Commands come only from the scanned native ID, never from a
+            // transcript field or an arbitrary renderer-supplied command.
+            assert_eq!(
+                resume_session_target("agy", id, source.to_str().unwrap()).unwrap(),
+                (format!("agy --conversation={id}"), None)
+            );
+            assert!(
+                resume_session_target("agy", "different-id", source.to_str().unwrap()).is_err()
+            );
+            assert!(resume_session_target(
+                "agy",
+                "cli-main; echo injected",
+                source.to_str().unwrap()
+            )
+            .is_err());
+
+            // Passing a file that merely lives under an AGY root is not
+            // enough: it must still be the selected session's discovered source.
+            let unrelated = root.join("not-a-session.jsonl");
+            std::fs::write(&unrelated, "{}").unwrap();
+            assert!(resume_session_target("agy", id, unrelated.to_str().unwrap()).is_err());
+        }
+
+        let outside = home.path().join("outside.jsonl");
+        std::fs::write(&outside, "{}").unwrap();
+        assert!(resume_session_target("agy", "cli-main", outside.to_str().unwrap()).is_err());
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn agy_index_only_resume_validates_cli_ide_ids_and_requires_absent_transcripts() {
+        if crate::config::sqlite_unsupported_in_temp_dir() {
+            return;
+        }
+        let fixture = agy::test_support::IndexOnlyFixture::new();
+        let project = fixture.home().join("project space");
+        let expected_cwd = Some(project.to_string_lossy().into_owned());
+        for (index, id) in ["cli-main", "ide-main"].into_iter().enumerate() {
+            fixture.insert(index, id, &project);
+            assert_eq!(
+                resume_index_only_session_target("agy", id).unwrap(),
+                (format!("agy --conversation={id}"), expected_cwd.clone())
+            );
+            let listed = agy::scan_sessions()
+                .into_iter()
+                .find(|session| session.session_id == id)
+                .unwrap();
+            assert!(listed.source_path.is_none());
+        }
+        assert!(resume_index_only_session_target("agy", "missing-id").is_err());
+        assert!(resume_index_only_session_target("agy", "cli-main; echo injected").is_err());
+        for provider in ["codex", "claude", "gemini", "pi", "mcode"] {
+            assert!(resume_index_only_session_target(provider, "cli-main").is_err());
+        }
+
+        // A readable transcript added after the list was shown must use the
+        // ordinary path-scoped resume, not the source-less index exception.
+        let transcript =
+            agy::session_roots()[0].join("cli-main/.system_generated/logs/transcript_full.jsonl");
+        std::fs::create_dir_all(transcript.parent().unwrap()).unwrap();
+        std::fs::write(
+            &transcript,
+            r#"{"step_index":0,"type":"USER_INPUT","content":"fixture"}"#,
+        )
+        .unwrap();
+        assert!(resume_index_only_session_target("agy", "cli-main")
+            .unwrap_err()
+            .contains("source changed"));
+        assert!(resume_session_target("agy", "cli-main", transcript.to_str().unwrap()).is_ok());
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn agy_index_only_resume_rejects_duplicate_native_identities() {
+        if crate::config::sqlite_unsupported_in_temp_dir() {
+            return;
+        }
+        let fixture = agy::test_support::IndexOnlyFixture::new();
+        let project = fixture.home().join("project");
+        fixture.insert(0, "same-id", &project);
+        fixture.insert(1, "same-id", &project);
+        assert!(resume_index_only_session_target("agy", "same-id")
+            .unwrap_err()
+            .contains("ambiguous"));
+
+        // Do not let the UI's first-wins deduplication hide duplicate rows in
+        // one native index either.
+        fixture.insert(0, "same-index-id", &project);
+        fixture.insert(0, "same-index-id", &project);
+        assert!(resume_index_only_session_target("agy", "same-index-id")
+            .unwrap_err()
+            .contains("ambiguous"));
+    }
+
+    #[test]
+    fn every_resume_path_keeps_subagents_read_only() {
+        for (read_only, role, parent) in [
+            (true, None, None),
+            (false, Some("subagent"), None),
+            (false, None, Some("parent-session")),
+        ] {
+            assert!(checked_resume_target(SessionMeta {
+                provider_id: "agy".into(),
+                session_id: "candidate".into(),
+                read_only,
+                role: role.map(str::to_string),
+                parent_session_id: parent.map(str::to_string),
+                resume_command: Some("agy --conversation=candidate".into()),
+                ..SessionMeta::default()
+            })
+            .unwrap_err()
+            .contains("read-only"));
+        }
+    }
 
     fn write_codex_session(path: &Path, session_id: &str) {
         std::fs::write(

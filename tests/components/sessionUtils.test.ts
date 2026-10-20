@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   buildCdResumeCommand,
   canDeleteSession,
+  canResumeSession,
   isReadOnlySession,
   getSessionLastText,
   getSessionTimeBucket,
@@ -39,6 +40,60 @@ describe("session utils", () => {
       };
       expect(isReadOnlySession(session)).toBe(true);
       expect(canDeleteSession(session)).toBe(false);
+    },
+  );
+
+  it("resumes AGY native-index sessions without inventing a transcript path", () => {
+    const session: SessionMeta = {
+      providerId: "agy",
+      sessionId: "binary-only",
+      resumeCommand: "agy --conversation=binary-only",
+    };
+    expect(canResumeSession(session)).toBe(true);
+    expect(session.sourcePath).toBeUndefined();
+    expect(canDeleteSession(session)).toBe(false);
+  });
+
+  it.each(["claude", "codex", "gemini", "opencode", "mcode"])(
+    "requires a transcript source to resume %s",
+    (providerId) => {
+      expect(
+        canResumeSession({
+          providerId,
+          sessionId: "missing-source",
+          resumeCommand: `${providerId} resume missing-source`,
+        }),
+      ).toBe(false);
+    },
+  );
+
+  it.each([
+    { readOnly: true },
+    { role: "subagent" as const },
+    { parentSessionId: "parent" },
+  ])("blocks every read-only/subagent marker even for AGY: %j", (marker) => {
+    const session: SessionMeta = {
+      providerId: "agy",
+      sessionId: "child",
+      resumeCommand: "agy --conversation=child",
+      ...marker,
+    };
+    expect(canResumeSession(session)).toBe(false);
+    expect(canResumeSession({ ...session, sourcePath: "/child.jsonl" })).toBe(
+      false,
+    );
+  });
+
+  it.each([undefined, "", "   "])(
+    "does not resume an AGY index session without a real command: %s",
+    (resumeCommand) => {
+      expect(
+        canResumeSession({
+          providerId: "agy",
+          sessionId: "empty",
+          resumeCommand,
+        }),
+      ).toBe(false);
     },
   );
 

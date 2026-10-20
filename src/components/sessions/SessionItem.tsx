@@ -22,6 +22,7 @@ import { cn } from "@/lib/utils";
 import type { SessionMeta } from "@/types";
 import {
   canDeleteSession,
+  canResumeSession,
   formatRelativeTime,
   formatSessionTitle,
   formatShortDateTime,
@@ -101,8 +102,7 @@ export function SessionItem({
   const deletable = canDeleteSession(session);
   const readOnly = isReadOnlySession(session);
   const blocked = selectionMode && !deletable;
-  const hasCommand =
-    !readOnly && Boolean(session.resumeCommand && session.sourcePath);
+  const hasCommand = canResumeSession(session);
   const lastActive = session.lastActiveAt ?? session.createdAt;
   const dirName = session.projectDir
     ? getBaseName(session.projectDir)

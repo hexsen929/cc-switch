@@ -42,6 +42,38 @@ pub fn scan_sessions() -> Vec<SessionMeta> {
     scan_roots(&session_roots())
 }
 
+/// Fresh native-index identities for a source-less resume. Unlike the display
+/// scanner, retain duplicate IDs so the caller can reject ambiguous CLI/IDE
+/// indexes (or malformed indexes containing duplicate rows).
+pub(crate) fn index_only_resume_candidates(session_id: &str) -> Vec<SessionMeta> {
+    if !valid_session_id(session_id) {
+        return Vec::new();
+    }
+    session_roots()
+        .into_iter()
+        .flat_map(|root| {
+            let index = root
+                .parent()
+                .unwrap_or(&root)
+                .join("conversation_summaries.db");
+            read_summary_records(&index)
+                .into_iter()
+                .filter(move |meta| meta.session_id == session_id)
+                .map(move |mut meta| {
+                    let transcript = root
+                        .join(&meta.session_id)
+                        .join(".system_generated/logs/transcript_full.jsonl");
+                    if transcript.is_file() {
+                        // A transcript now exists: the existing source-scoped
+                        // resume path must validate it instead of accepting None.
+                        meta.source_path = Some(transcript.to_string_lossy().into_owned());
+                    }
+                    meta
+                })
+        })
+        .collect()
+}
+
 /// Missing roots are tolerated; a session id found in several roots is reported once (first wins).
 fn scan_roots(roots: &[PathBuf]) -> Vec<SessionMeta> {
     let mut seen = std::collections::HashSet::new();
@@ -114,6 +146,7 @@ fn scan_root(root: &Path) -> Vec<SessionMeta> {
                     last_active_at: rows.iter().filter_map(timestamp).max(),
                     source_path: None,
                     resume_command: Some(format!("agy --conversation={id}")),
+                    ..SessionMeta::default()
                 }
             };
             meta.source_path = Some(path.to_string_lossy().into_owned());
@@ -126,7 +159,14 @@ fn scan_root(root: &Path) -> Vec<SessionMeta> {
 }
 
 fn read_summaries(path: &Path) -> BTreeMap<String, SessionMeta> {
-    let mut result = BTreeMap::new();
+    read_summary_records(path)
+        .into_iter()
+        .map(|meta| (meta.session_id.clone(), meta))
+        .collect()
+}
+
+fn read_summary_records(path: &Path) -> Vec<SessionMeta> {
+    let mut result = Vec::new();
     let Ok(conn) =
         rusqlite::Connection::open_with_flags(path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)
     else {
@@ -159,20 +199,18 @@ fn read_summaries(path: &Path) -> BTreeMap<String, SessionMeta> {
                     .ok()
                     .map(|t| t.and_utc().timestamp_millis())
             });
-        result.insert(
-            id.clone(),
-            SessionMeta {
-                provider_id: "agy".into(),
-                session_id: id.clone(),
-                title: (!title.is_empty()).then_some(title),
-                summary: (!preview.is_empty()).then(|| truncate_summary(&preview, 160)),
-                project_dir,
-                created_at: None,
-                last_active_at,
-                source_path: None,
-                resume_command: Some(format!("agy --conversation={id}")),
-            },
-        );
+        result.push(SessionMeta {
+            provider_id: "agy".into(),
+            session_id: id.clone(),
+            title: (!title.is_empty()).then_some(title),
+            summary: (!preview.is_empty()).then(|| truncate_summary(&preview, 160)),
+            project_dir,
+            created_at: None,
+            last_active_at,
+            source_path: None,
+            resume_command: Some(format!("agy --conversation={id}")),
+            ..SessionMeta::default()
+        });
     }
     result
 }
@@ -222,8 +260,74 @@ pub fn load_messages(path: &Path) -> Result<Vec<SessionMessage>, String> {
 }
 
 #[cfg(test)]
+pub(crate) mod test_support {
+    use super::*;
+
+    pub(crate) struct IndexOnlyFixture {
+        home: tempfile::TempDir,
+        previous: Option<std::ffi::OsString>,
+    }
+
+    impl IndexOnlyFixture {
+        pub(crate) fn new() -> Self {
+            let home = tempfile::tempdir().unwrap();
+            let previous = std::env::var_os("CC_SWITCH_TEST_HOME");
+            std::env::set_var("CC_SWITCH_TEST_HOME", home.path());
+            Self { home, previous }
+        }
+
+        pub(crate) fn home(&self) -> &Path {
+            self.home.path()
+        }
+
+        pub(crate) fn insert(&self, root_index: usize, id: &str, project: &Path) {
+            let root = &session_roots()[root_index];
+            assert!(root.starts_with(self.home()));
+            let parent = root.parent().unwrap();
+            fs::create_dir_all(parent).unwrap();
+            let db = rusqlite::Connection::open(parent.join("conversation_summaries.db")).unwrap();
+            db.execute_batch("CREATE TABLE IF NOT EXISTS conversation_summaries(conversation_id TEXT,title TEXT,workspace_uris TEXT,preview TEXT,last_modified_time TEXT);").unwrap();
+            let uris =
+                serde_json::to_string(&[url::Url::from_file_path(project).unwrap().to_string()])
+                    .unwrap();
+            db.execute(
+                "INSERT INTO conversation_summaries VALUES (?1,'Fixture',?2,'Preview','2026-10-13T17:26:12Z')",
+                rusqlite::params![id, uris],
+            )
+            .unwrap();
+        }
+    }
+
+    impl Drop for IndexOnlyFixture {
+        fn drop(&mut self) {
+            match &self.previous {
+                Some(previous) => std::env::set_var("CC_SWITCH_TEST_HOME", previous),
+                None => std::env::remove_var("CC_SWITCH_TEST_HOME"),
+            }
+        }
+    }
+}
+
+#[cfg(test)]
 mod tests {
     use super::*;
+
+    fn assert_top_level_metadata(meta: &SessionMeta) {
+        // AGY's transcript and summary index expose no authoritative parent or
+        // agent metadata. Preserve a resumable top-level session, not a guessed
+        // child relationship or a read-only subagent.
+        assert!(meta.parent_session_id.is_none());
+        assert!(meta.role.is_none());
+        assert!(meta.nickname.is_none());
+        assert!(meta.agent_type.is_none());
+        assert!(meta.task.is_none());
+        assert!(!meta.read_only);
+        assert_eq!(
+            meta.resume_command.as_deref(),
+            Some(format!("agy --conversation={}", meta.session_id).as_str())
+        );
+    }
+
     #[test]
     fn agy_binary_only_sessions_keep_index_metadata_without_fabricated_transcripts() {
         let dir = tempfile::tempdir().unwrap();
@@ -253,6 +357,7 @@ mod tests {
         );
         assert!(sessions[0].source_path.is_none());
         assert!(sessions[0].last_active_at.is_some());
+        assert_top_level_metadata(&sessions[0]);
     }
 
     #[test]
@@ -319,6 +424,7 @@ mod tests {
         )).unwrap();
         let sessions = scan_root(dir.path());
         assert_eq!(sessions.len(), 1);
+        assert_top_level_metadata(&sessions[0]);
         assert_eq!(
             sessions[0].resume_command.as_deref(),
             Some("agy --conversation=abc-123")

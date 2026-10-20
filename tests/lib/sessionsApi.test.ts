@@ -33,6 +33,42 @@ describe("sessionsApi · 阅读页命令（P2 契约）", () => {
     });
   });
 
+  it.each([undefined, null])(
+    "launches AGY native-index sessions with no source (%s), preserving identity",
+    async (sourcePath) => {
+      core.invoke.mockResolvedValue(true);
+      await sessionsApi.launchTerminal({
+        providerId: "agy",
+        sessionId: "indexed",
+        command: "agy --conversation=indexed",
+        cwd: "/work/project",
+        sourcePath,
+      });
+      expect(core.invoke).toHaveBeenCalledWith("launch_session_terminal", {
+        providerId: "agy",
+        sessionId: "indexed",
+        command: "agy --conversation=indexed",
+        cwd: "/work/project",
+        customConfig: undefined,
+        sourcePath: null,
+      });
+    },
+  );
+
+  it.each(["codex", "claude", "opencode", "mcode"])(
+    "does not send a source-less %s launch to the backend",
+    async (providerId) => {
+      await expect(
+        sessionsApi.launchTerminal({
+          providerId,
+          sessionId: "indexed",
+          command: "resume indexed",
+        }),
+      ).rejects.toThrow("transcript source");
+      expect(core.invoke).not.toHaveBeenCalled();
+    },
+  );
+
   it("streamMessages：传 onChunk Channel，chunk 回调给调用方", async () => {
     const chunks: TranscriptChunk[] = [];
     core.invoke.mockImplementation(

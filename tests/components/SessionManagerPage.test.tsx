@@ -608,6 +608,134 @@ describe("SessionManagerPage", () => {
     launch.mockRestore();
   });
 
+  it("resumes AGY binary-only index sessions from both list and reader without a fake source", async () => {
+    platform.mac = true;
+    window.localStorage.setItem("cc-switch.sessionManager.groupMode", "time");
+    const session: SessionMeta = {
+      providerId: "agy",
+      sessionId: "indexed-agy",
+      title: "Indexed AGY Session",
+      summary: "Native index summary only",
+      projectDir: "/mock/agy",
+      lastActiveAt: Date.now(),
+      resumeCommand: "agy --conversation=indexed-agy",
+    };
+    setSessionFixtures([session], {});
+    const launch = vi
+      .spyOn(sessionsApi, "launchTerminal")
+      .mockResolvedValue(true);
+    const stream = vi.spyOn(sessionsApi, "streamMessages");
+    const read = vi.spyOn(sessionsApi, "getMessages");
+    renderPage("agy");
+
+    fireEvent.click(
+      await screen.findByRole("button", {
+        name: /中恢复 Indexed AGY Session$/,
+      }),
+    );
+    await waitFor(() => expect(launch).toHaveBeenCalledTimes(1));
+    openRow("Indexed AGY Session");
+    const resume = await screen.findByRole("button", { name: /中恢复$/ });
+    expect(resume).not.toHaveAttribute("aria-disabled", "true");
+    fireEvent.click(resume);
+    await waitFor(() => expect(launch).toHaveBeenCalledTimes(2));
+    for (const [options] of launch.mock.calls) {
+      expect(options).toEqual({
+        providerId: "agy",
+        sessionId: "indexed-agy",
+        command: "agy --conversation=indexed-agy",
+        cwd: "/mock/agy",
+        sourcePath: undefined,
+      });
+    }
+    expect(stream).not.toHaveBeenCalled();
+    expect(read).not.toHaveBeenCalled();
+    expect(screen.getByText("这个会话没有可显示的消息")).toBeInTheDocument();
+    await userEvent.click(
+      screen.getByRole("button", { name: "Indexed AGY Session 的更多操作" }),
+    );
+    for (const name of [
+      "复制整段为 Markdown",
+      "导出为 Markdown 文件",
+      "删除…",
+    ]) {
+      expect(screen.getByRole("menuitem", { name })).toHaveAttribute(
+        "aria-disabled",
+        "true",
+      );
+    }
+    launch.mockRestore();
+    stream.mockRestore();
+    read.mockRestore();
+  });
+
+  it("copies an AGY index-only resume command where one-click resume is unavailable", async () => {
+    window.localStorage.setItem("cc-switch.sessionManager.groupMode", "time");
+    setSessionFixtures(
+      [
+        {
+          providerId: "agy",
+          sessionId: "indexed-copy",
+          title: "Indexed AGY Copy",
+          lastActiveAt: Date.now(),
+          resumeCommand: "agy --conversation=indexed-copy",
+        },
+      ],
+      {},
+    );
+    renderPage("agy");
+    await screen.findByText("Indexed AGY Copy");
+    openRow("Indexed AGY Copy");
+    fireEvent.click(
+      await screen.findByRole("button", { name: "复制恢复命令" }),
+    );
+    await waitFor(() =>
+      expect(navigator.clipboard.writeText).toHaveBeenCalledWith(
+        "agy --conversation=indexed-copy",
+      ),
+    );
+  });
+
+  it.each([
+    { providerId: "codex", marker: {} },
+    { providerId: "agy", marker: { readOnly: true } },
+    { providerId: "agy", marker: { role: "subagent" as const } },
+    { providerId: "agy", marker: { parentSessionId: "missing-parent" } },
+  ])(
+    "does not resume a source-less $providerId session with marker $marker",
+    async ({ providerId, marker }) => {
+      platform.mac = true;
+      window.localStorage.setItem("cc-switch.sessionManager.groupMode", "time");
+      setSessionFixtures(
+        [
+          {
+            providerId,
+            sessionId: "blocked-index",
+            title: "Blocked Index Session",
+            lastActiveAt: Date.now(),
+            resumeCommand: "must never launch",
+            ...marker,
+          },
+        ],
+        {},
+      );
+      const launch = vi
+        .spyOn(sessionsApi, "launchTerminal")
+        .mockResolvedValue(true);
+      renderPage(providerId);
+      await screen.findByText("Blocked Index Session");
+      expect(
+        screen.queryByRole("button", { name: /中恢复 Blocked Index Session$/ }),
+      ).not.toBeInTheDocument();
+      openRow("Blocked Index Session");
+      const resume = await screen.findByRole("button", { name: /中恢复$/ });
+      expect(resume).toHaveAttribute("aria-disabled", "true");
+      fireEvent.click(resume);
+      expect(launch).not.toHaveBeenCalled();
+      launch.mockRestore();
+    },
+  );
+
   it("copies the resume command where one-click resume is unavailable", async () => {
     renderPage("codex");
     await screen.findByText("Alpha Session");

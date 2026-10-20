@@ -49,12 +49,12 @@ import { sessionKeys, useSessionTranscript } from "@/lib/query/sessions";
 import { SessionDeleteDialog, SessionSourcesDialog } from "./SessionDialogs";
 import {
   canDeleteSession,
+  canResumeSession,
   formatRelativeTime,
   getSessionKey,
   groupSessionsByProject,
   groupSessionsByTime,
   isSessionAppId,
-  isReadOnlySession,
   SESSION_APP_IDS,
   SESSION_SOURCE_PATHS,
   shortenHomePath,
@@ -396,7 +396,7 @@ export function SessionManagerPage({
   );
 
   const handleLaunch = async (session: SessionMeta) => {
-    if (isReadOnlySession(session) || !session.sourcePath) return;
+    if (!canResumeSession(session)) return;
     const command = session.resumeCommand;
     if (!command) return;
     if (!terminalName) {
@@ -735,7 +735,7 @@ export function SessionManagerPage({
         onStartSelect={() => enterSelection(session)}
         onLaunch={() => void handleLaunch(session)}
         onCopyResume={() =>
-          !isReadOnlySession(session) &&
+          canResumeSession(session) &&
           session.resumeCommand &&
           handleCopy(
             session.resumeCommand,
