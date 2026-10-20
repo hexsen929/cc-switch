@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 import {
   buildCdResumeCommand,
+  canDeleteSession,
+  isReadOnlySession,
   getSessionLastText,
   getSessionTimeBucket,
   groupSessionsByProject,
@@ -11,6 +13,35 @@ import {
 import type { SessionMeta } from "@/types";
 
 describe("session utils", () => {
+  it.each(["agy", "mcode"])(
+    "keeps %s main sessions resumable but prevents CCS deletion",
+    (providerId) => {
+      const session: SessionMeta = {
+        providerId,
+        sessionId: "main",
+        sourcePath: "/sessions/main.jsonl",
+        resumeCommand: `${providerId} --conversation=main`,
+      };
+      expect(isReadOnlySession(session)).toBe(false);
+      expect(canDeleteSession(session)).toBe(false);
+    },
+  );
+
+  it.each(["claude", "codex", "opencode", "agy"])(
+    "retains subagent read-only protection for %s",
+    (providerId) => {
+      const session: SessionMeta = {
+        providerId,
+        sessionId: "child",
+        parentSessionId: "parent",
+        sourcePath: "/sessions/child.jsonl",
+        resumeCommand: "resume child",
+      };
+      expect(isReadOnlySession(session)).toBe(true);
+      expect(canDeleteSession(session)).toBe(false);
+    },
+  );
+
   it("groups sessions by project directory, newest group first and unknown last", () => {
     const sessions: SessionMeta[] = [
       {

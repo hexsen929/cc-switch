@@ -130,7 +130,7 @@ fn deeplink_import_codex_provider_builds_auth_and_config() {
 
 #[test]
 fn claude_prompt_append_content_is_imported_as_separate_instruction_file() {
-    let _guard = test_mutex().lock().expect("acquire test mutex");
+    let _guard = test_mutex().lock().unwrap_or_else(|e| e.into_inner());
     reset_test_fs();
     let _home = ensure_test_home();
 
@@ -174,4 +174,23 @@ fn claude_prompt_append_content_is_imported_as_separate_instruction_file() {
         std::fs::read_to_string(imported_path).expect("read imported instruction file"),
         "separate append instructions"
     );
+}
+
+#[test]
+fn agy_deeplink_disabled_provider_does_not_write_native_files() {
+    let _guard = test_mutex().lock().unwrap_or_else(|e| e.into_inner());
+    reset_test_fs();
+    let home = ensure_test_home();
+    let request = parse_deeplink_url("ccswitch://v1/import?resource=provider&app=agy&name=Agy&endpoint=https://relay.example&apiKey=fixture&model=test-model&enabled=false").unwrap();
+    let db = Arc::new(Database::memory().unwrap());
+    let state = AppState::new(db.clone());
+    let id = import_provider_from_deeplink(&state, request).unwrap();
+    let rows = db.get_all_providers("agy").unwrap();
+    assert_eq!(
+        rows[&id].settings_config["config"]["model"]["name"],
+        "test-model"
+    );
+    assert!(db.get_current_provider("agy").unwrap().is_none());
+    assert!(!home.join(".gemini/antigravity-cli/settings.json").exists());
+    assert!(!home.join(".gemini/antigravity-cli/bin/agy").exists());
 }

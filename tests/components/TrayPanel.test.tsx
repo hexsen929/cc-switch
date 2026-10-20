@@ -9,7 +9,7 @@ import { QueryClientProvider, type QueryClient } from "@tanstack/react-query";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { settingsApi } from "@/lib/api";
 import type { Settings } from "@/types";
-import { TrayPanel } from "@/tray-panel/TrayPanel";
+import { TrayPanel, formatResetIn } from "@/tray-panel/TrayPanel";
 import {
   CHANGED_EVENT,
   HIDE_EVENT,
@@ -58,7 +58,11 @@ const state: TrayPanelState = {
     openPanel: "Open panel",
     configTab: "Configuration",
     usageTab: "Usage",
-    resetsAt: "Resets {when}",
+    resetsIn: "Resets in {when}",
+    durationDays: "{n}d",
+    durationHours: "{n}h",
+    durationMinutes: "{n}m",
+    durationSep: " ",
     resetCredits: "{count} resets",
   },
   problems: [],
@@ -291,6 +295,83 @@ describe("TrayPanel window layout", () => {
     await paint();
     expect(main).toHaveStyle({ left: "300px", width: "320px" });
     expect(trayPanelApi.layout).toHaveBeenCalledTimes(calls);
+  });
+
+  it("restores usage and fresh settings after the lightweight panel WebView is recreated", async () => {
+    const first = await openPanel(windows);
+    fireEvent.click(screen.getByRole("tab", { name: "Usage" }));
+    await act(async () => emitTauriEvent(HIDE_EVENT, undefined));
+    first.unmount();
+    queryClient.clear();
+
+    vi.mocked(settingsApi.get).mockResolvedValue({
+      showInTray: true,
+      minimizeToTrayOnClose: true,
+      usageDisplay: { currency: "CNY", exchangeRates: { CNY: 8 } },
+    } satisfies Settings);
+    vi.mocked(trayPanelApi.state).mockResolvedValue({
+      ...state,
+      lightweight: true,
+    });
+    vi.mocked(trayPanelApi.placement).mockResolvedValue({
+      ...windows,
+      seq: 2,
+    });
+    renderPanel();
+    await waitFor(() =>
+      expect(screen.getByTestId("tray-usage")).toHaveTextContent("¥8.00"),
+    );
+    expect(screen.getByTestId("tray-usage")).toHaveAttribute(
+      "data-visible",
+      "true",
+    );
+    expect(screen.getByRole("switch")).toHaveAttribute("aria-checked", "true");
+    expect(trayPanelApi.layout).toHaveBeenLastCalledWith(
+      expect.objectContaining({ seq: 2 }),
+    );
+
+    const calls = vi.mocked(trayPanelApi.state).mock.calls.length;
+    await act(async () => emitTauriEvent(CHANGED_EVENT, undefined));
+    expect(trayPanelApi.state).toHaveBeenCalledTimes(calls + 1);
+  });
+
+  it("colors only the balance amount green, like the provider card", async () => {
+    vi.mocked(trayPanelApi.state).mockResolvedValue({
+      ...state,
+      apps: [
+        {
+          ...state.apps[0],
+          quota: {
+            lines: [
+              {
+                text: "Balance 82.10 CNY",
+                left: null,
+                warn: false,
+                resetsAt: null,
+                emphasis: "82.10 CNY",
+              },
+              {
+                text: "Balance used up",
+                left: 0,
+                warn: true,
+                resetsAt: null,
+                emphasis: null,
+              },
+            ],
+            note: null,
+            resetCredits: null,
+          },
+        },
+      ],
+    });
+    vi.mocked(trayPanelApi.placement).mockResolvedValue(windows);
+    renderPanel();
+
+    const amount = await screen.findByText("82.10 CNY");
+    expect(amount).toHaveClass("text-green-600");
+    expect(amount.parentElement).toHaveTextContent("Balance 82.10 CNY");
+    expect(amount.parentElement).not.toHaveClass("text-green-600");
+    expect(screen.getByText("Balance used up")).toHaveClass("text-amber-500");
   });
 
   it("clips the first Windows frame without waiting for animation frames in a hidden window", async () => {
@@ -831,5 +912,33 @@ describe("TrayPanel window layout", () => {
       screen.getByRole("button", { name: "Open main window" }),
     );
     expect(container.querySelector(".tp-sub")).toBeNull();
+  });
+});
+
+describe("formatResetIn", () => {
+  const now = new Date("2026-10-20T10:00:00Z");
+  const at = (ms: number) => new Date(now.getTime() + ms).toISOString();
+  const MIN = 60_000;
+
+  it("keeps at most two units and drops a zero second unit", () => {
+    expect(formatResetIn(at((47 * 60 + 30) * MIN), now, state.texts)).toBe(
+      "Resets in 1d 23h",
+    );
+    expect(formatResetIn(at(2 * 1440 * MIN), now, state.texts)).toBe(
+      "Resets in 2d",
+    );
+    expect(formatResetIn(at((4 * 60 + 5) * MIN), now, state.texts)).toBe(
+      "Resets in 4h 5m",
+    );
+    expect(formatResetIn(at(3 * 60 * MIN), now, state.texts)).toBe(
+      "Resets in 3h",
+    );
+    expect(formatResetIn(at(12 * MIN), now, state.texts)).toBe("Resets in 12m");
+  });
+
+  it("rounds sub-minute waits up and hides past or invalid times", () => {
+    expect(formatResetIn(at(20_000), now, state.texts)).toBe("Resets in 1m");
+    expect(formatResetIn(at(-MIN), now, state.texts)).toBeNull();
+    expect(formatResetIn("not a date", now, state.texts)).toBeNull();
   });
 });

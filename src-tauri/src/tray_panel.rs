@@ -88,8 +88,13 @@ pub struct PanelTexts {
     pub open_panel: &'static str,
     pub config_tab: &'static str,
     pub usage_tab: &'static str,
-    /// 某一档的重置时间：`{when}`
-    pub resets_at: &'static str,
+    /// 某一档还有多久重置：`{when}` 是下面几个单位拼出的时长
+    pub resets_in: &'static str,
+    /// 时长单位：`{n}` 是数字；最多取两级（天+小时、小时+分），中间用 `duration_sep` 隔开
+    pub duration_days: &'static str,
+    pub duration_hours: &'static str,
+    pub duration_minutes: &'static str,
+    pub duration_sep: &'static str,
     /// 可用的额度重置次数：`{count}`
     pub reset_credits: &'static str,
 }
@@ -113,7 +118,11 @@ impl PanelTexts {
                 open_panel: "Open quick panel",
                 config_tab: "Configuration",
                 usage_tab: "Usage",
-                resets_at: "Resets {when}",
+                resets_in: "Resets in {when}",
+                duration_days: "{n}d",
+                duration_hours: "{n}h",
+                duration_minutes: "{n}m",
+                duration_sep: " ",
                 reset_credits: "{count} resets available",
             },
             "ja" => Self {
@@ -128,7 +137,11 @@ impl PanelTexts {
                 open_panel: "クイックパネルを開く",
                 config_tab: "構成",
                 usage_tab: "使用量",
-                resets_at: "{when} にリセット",
+                resets_in: "{when}後にリセット",
+                duration_days: "{n}日",
+                duration_hours: "{n}時間",
+                duration_minutes: "{n}分",
+                duration_sep: "",
                 reset_credits: "リセット可能 {count} 回",
             },
             "zh-TW" => Self {
@@ -143,7 +156,11 @@ impl PanelTexts {
                 open_panel: "開啟快捷面板",
                 config_tab: "配置",
                 usage_tab: "用量",
-                resets_at: "{when} 重置",
+                resets_in: "{when}後重置",
+                duration_days: "{n}天",
+                duration_hours: "{n}小時",
+                duration_minutes: "{n}分",
+                duration_sep: "",
                 reset_credits: "可重置 {count} 次",
             },
             _ => Self {
@@ -158,7 +175,11 @@ impl PanelTexts {
                 open_panel: "打开快捷面板",
                 config_tab: "配置",
                 usage_tab: "用量",
-                resets_at: "{when} 重置",
+                resets_in: "{when}后重置",
+                duration_days: "{n}天",
+                duration_hours: "{n}小时",
+                duration_minutes: "{n}分",
+                duration_sep: "",
                 reset_credits: "可重置 {count} 次",
             },
         }
@@ -337,6 +358,8 @@ fn ensure_window(app: &AppHandle) -> Option<WebviewWindow> {
 }
 
 fn create_window(app: &AppHandle) -> tauri::Result<WebviewWindow> {
+    // 新窗口还没套过深浅色（轻量模式下面板收起即销毁，会反复新建）。
+    *lock(&APPLIED_DARK) = None;
     let window =
         WebviewWindowBuilder::new(app, PANEL_LABEL, WebviewUrl::App("tray-panel.html".into()))
             .title("CC Switch")
@@ -377,6 +400,34 @@ fn hide_window(window: &WebviewWindow) {
     let _ = window.emit_to(PANEL_LABEL, HIDE_EVENT, ());
     // 面板里已经显示过反馈行了，下次弹出不再显示。
     crate::tray::mark_feedback_seen();
+    release_if_lightweight(window.app_handle());
+}
+
+/// 轻量模式要释放全部 WebView（Windows 上只要还剩一个，WebView2 进程就都留着）：
+/// 面板收起后销毁，下次点托盘再新建。先挪出当前调用栈、再回主线程销毁，不在面板自己的
+/// 事件回调或命令里同步拆掉它；回到主线程时再确认一次仍是收起状态，期间又弹出就留着。
+pub fn release_if_lightweight(app: &AppHandle) {
+    if !crate::lightweight::is_lightweight_mode() || panel_window(app).is_none() {
+        return;
+    }
+    let app = app.clone();
+    tauri::async_runtime::spawn(async move {
+        let handle = app.clone();
+        let _ = app.run_on_main_thread(move || {
+            let Some(window) = panel_window(&handle) else {
+                return;
+            };
+            if !crate::lightweight::is_lightweight_mode()
+                || PENDING_REVEAL.load(Ordering::Acquire)
+                || window.is_visible().unwrap_or(false)
+            {
+                return;
+            }
+            if let Err(e) = window.destroy() {
+                log::warn!("[TrayPanel] 轻量模式下销毁面板窗口失败: {e}");
+            }
+        });
+    });
 }
 
 pub fn hide_panel(app: &AppHandle) {
@@ -442,12 +493,11 @@ fn show_at(app: &AppHandle, window: &WebviewWindow, icon: (f64, f64, f64, f64)) 
 
 /// 点托盘图标：开着就关，关着就在图标旁弹出。`rect` 是点击事件带的图标矩形。
 pub fn toggle(app: &AppHandle, rect: &tauri::Rect) {
-    let Some(window) = ensure_window(app) else {
-        return;
-    };
-    if window.is_visible().unwrap_or(false) {
-        hide_window(&window);
-        return;
+    if let Some(window) = panel_window(app) {
+        if window.is_visible().unwrap_or(false) {
+            hide_window(&window);
+            return;
+        }
     }
     let just_blurred = lock(&LAST_BLUR_HIDE)
         .take()
@@ -455,6 +505,10 @@ pub fn toggle(app: &AppHandle, rect: &tauri::Rect) {
     if just_blurred {
         return;
     }
+    // 判断完「关」再建窗口：轻量模式下失焦收起时面板已销毁，这次点击只是关，不新建。
+    let Some(window) = ensure_window(app) else {
+        return;
+    };
     // 托盘矩形本来就是物理像素；万一是逻辑的，按 1 倍算也只是位置略偏。
     let pos = rect.position.to_physical::<f64>(1.0);
     let size = rect.size.to_physical::<f64>(1.0);
@@ -569,6 +623,8 @@ mod platform {
     /// macOS 26 上还会描一圈深色边。阴影由网页给每块卡片画（窗口四周留了边距）。
     pub fn init(window: &WebviewWindow) {
         let _ = window.set_shadow(false);
+        // 轻量模式下面板会销毁重建：旧窗口的玻璃挂在已销毁的视图上，丢掉，按新窗口重新垫。
+        let _ = window.run_on_main_thread(|| GLASS.with(|glass| glass.borrow_mut().clear()));
     }
 
     fn ns_window(window: &WebviewWindow) -> Option<&NSWindow> {

@@ -7,6 +7,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
 import { toast } from "@/lib/toast";
+import { MCP_APP_IDS } from "@/config/appConfig";
 
 interface SearchSource {
   engine: string;
@@ -49,16 +50,7 @@ const ENGINES: Record<string, string> = {
   you: "You.com",
   searxng: "SearXNG",
 };
-const CLIENTS = [
-  "claude",
-  "codex",
-  "gemini",
-  "grokbuild",
-  "opencode",
-  "hermes",
-  "pi",
-  "mcode",
-];
+const CLIENTS = MCP_APP_IDS;
 
 export function SearchMcpPanel() {
   const { t } = useTranslation();
@@ -446,7 +438,13 @@ export function SearchMcpPanel() {
                   )
                 }
               />
-              {client === "mcode" ? "MCode" : client === "pi" ? "Pi" : client}
+              {client === "mcode"
+                ? "MCode"
+                : client === "pi"
+                  ? "Pi"
+                  : client === "agy"
+                    ? "Antigravity"
+                    : client}
             </label>
           ))}
         </div>

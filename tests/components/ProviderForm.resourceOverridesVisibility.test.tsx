@@ -285,7 +285,7 @@ vi.mock("@/lib/authBinding", () => ({
   resolveManagedAccountId: () => null,
 }));
 
-function renderProviderForm(appId: "claude" | "opencode" | "openclaw") {
+function renderProviderForm(appId: "claude" | "opencode" | "openclaw" | "agy") {
   return render(
     <ProviderForm
       appId={appId}
@@ -315,6 +315,14 @@ describe("ProviderForm resource overrides visibility", () => {
 
   it("不会在 OpenClaw 供应商表单中显示资源覆盖面板", () => {
     renderProviderForm("openclaw");
+
+    expect(
+      screen.queryByTestId("provider-resource-overrides"),
+    ).not.toBeInTheDocument();
+  });
+
+  it("keeps Antigravity on global native resources without provider overrides", () => {
+    renderProviderForm("agy");
 
     expect(
       screen.queryByTestId("provider-resource-overrides"),

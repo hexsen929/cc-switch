@@ -591,7 +591,7 @@ function App() {
   useEffect(() => {
     const checkEnvOnSwitch = async () => {
       try {
-        if (activeApp === "mcode") return;
+        if (activeApp === "mcode" || activeApp === "agy") return;
         const conflicts = await checkEnvConflicts(activeApp);
 
         if (conflicts.length > 0) {

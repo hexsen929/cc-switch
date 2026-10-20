@@ -89,6 +89,7 @@ impl TempHome {
             AppType::Hermes,
             AppType::Pi,
             AppType::Mcode,
+            AppType::Agy,
         ] {
             assert!(prompt_file_path(&app)
                 .expect("isolated agent path")
@@ -245,6 +246,51 @@ fn codex_shared_overlay_survives_projection_restore_and_never_backfills_into_pro
 
 #[test]
 #[serial]
+fn agy_shared_overlay_is_opt_in_refreshes_and_preserves_ordinary_prompt() {
+    let home = TempHome::new();
+    let state = home.state();
+    let app = AppType::Agy;
+    let path = live_path(&app);
+    assert_eq!(path, crate::agy_config::agy_dir().join("AGENTS.md"));
+
+    // Merely adding AGY support must not create its file when no shared source
+    // is selected, or install a provider launcher as a side effect.
+    sync_from_settings().unwrap();
+    assert!(!path.exists());
+    assert!(!crate::agy_config::agy_dir().join("bin/agy").exists());
+
+    let ordinary = "# Ordinary AGY rules\nKeep this body unchanged.\n";
+    state
+        .db
+        .save_prompt(app.as_str(), &preset("agy-main", ordinary, false))
+        .unwrap();
+    PromptService::enable_prompt(&state, app.clone(), "agy-main").unwrap();
+    assert_eq!(live(&app), ordinary);
+
+    home.shared(Some("SHARED_AGY_RULE"));
+    assert_overlay(&app, ordinary, "SHARED_AGY_RULE");
+    let source = get_settings().shared_instruction_file.unwrap();
+    write_text_file(Path::new(&source), "UPDATED_AGY_RULE").unwrap();
+    sync_from_settings().unwrap();
+    assert_overlay(&app, ordinary, "UPDATED_AGY_RULE");
+    assert!(!live(&app).contains("SHARED_AGY_RULE"));
+    assert_eq!(
+        PromptService::get_current_file_content(app.clone()).unwrap(),
+        Some(ordinary.to_string())
+    );
+
+    home.shared(None);
+    assert_eq!(live(&app), ordinary);
+    assert_eq!(
+        state.db.get_prompts(app.as_str()).unwrap()["agy-main"].content,
+        ordinary
+    );
+    assert_database_is_ordinary(&state, &app);
+    assert!(!crate::agy_config::agy_dir().join("bin/agy").exists());
+}
+
+#[test]
+#[serial]
 fn formerly_contaminated_codex_database_cannot_resurrect_an_old_shared_block() {
     let home = TempHome::new();
     let state = home.state();
@@ -282,7 +328,13 @@ fn a_shared_only_file_is_not_imported_as_an_ordinary_prompt() {
     let state = home.state();
     home.shared(Some("ONLY_SHARED_RULE"));
 
-    for app in [AppType::Codex, AppType::Claude, AppType::Pi, AppType::Mcode] {
+    for app in [
+        AppType::Codex,
+        AppType::Claude,
+        AppType::Pi,
+        AppType::Mcode,
+        AppType::Agy,
+    ] {
         assert_eq!(
             PromptService::get_current_file_content(app.clone()).unwrap(),
             Some(String::new())

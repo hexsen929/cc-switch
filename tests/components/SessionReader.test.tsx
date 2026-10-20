@@ -113,6 +113,20 @@ describe("SessionReader", () => {
     vi.restoreAllMocks();
   });
 
+  it.each([
+    ["agy", "请在 Antigravity 中删除"],
+    ["mcode", "请在 MiniMax Code 中删除"],
+  ])("shows the native deletion hint for %s", async (providerId, hint) => {
+    renderReader(providerId, []);
+    await userEvent.click(
+      screen.getByRole("button", { name: `${providerId} 会话 的更多操作` }),
+    );
+    expect(
+      await screen.findByRole("menuitem", { name: "删除…" }),
+    ).toHaveAttribute("aria-disabled", "true");
+    expect(screen.getByText(hint, { exact: false })).toBeInTheDocument();
+  });
+
   describe("五家 Agent 共用骨架，只换符号、动词与合并规则", () => {
     it("Claude：⏺ 符号、Name(arg) 标题、失败步骤常显、主题色", () => {
       const { container } = renderReader("claude", fixtures.claude);

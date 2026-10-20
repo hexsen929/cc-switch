@@ -196,6 +196,14 @@
     "geminiConfig": "Gemini Yapılandırması",
     "geminiConfigHint": "Gemini'yi yapılandırmak için .env biçimini kullanın",
     "form": {
+      "agy": {
+        "connectionHint": "agy'nin Google oturumunu kullanmak için API anahtarını ve adresi boş bırakın. Adres olmadan girilen anahtar Google'ın varsayılan API'sini kullanır; üçüncü taraf adresleri Gemini API'sini desteklemelidir. Sağlayıcı değiştirdikten sonra yeni bir terminal açın veya agy'yi yeniden başlatın. Çalışan oturumlar mevcut yapılandırmalarını korur. Oturum açma modunda model keşfi geçerli agy yapılandırmasını kullanır. Bu modda model listesindeki görünen adı, API modunda ise API model kimliğini kullanın.",
+        "keyFieldsHint": "Adres, anahtar ve model sağlayıcıyla birlikte değişir; diğer yerel Antigravity ayarları korunur.",
+        "envFile": "Başlatıcı ortam değişkenleri",
+        "envFileHint": "CC Switch, agy başlatılırken API anahtarını, adresi ve modeli iletir. Diğer ortam değişkenleri uygulanmaz.",
+        "configJson": "Model yapılandırması (CC Switch biçimi)",
+        "configJsonHint": "Burada yalnızca model ayarları desteklenir. Diğer Antigravity seçeneklerini agy içinde, MCP sunucularını ise MCP panelinde yönetin."
+      },
       "gemini": {
         "model": "Model",
         "oauthTitle": "OAuth Kimlik Doğrulama Modu",
@@ -1112,7 +1120,8 @@
     "openclaw": "OpenClaw",
     "hermes": "Hermes",
     "pi": "Pi",
-    "mcode": "MiniMax Code"
+    "mcode": "MiniMax Code",
+    "agy": "Antigravity"
   },
   "mcode": {
     "empty": {
@@ -1566,7 +1575,8 @@
       "count": "Alt ajanlar: {{count}}",
       "readOnly": "Alt ajan · Salt okunur",
       "readOnlyHint": "Alt ajan oturumları salt okunurdur. Üst oturumda devam edin."
-    }
+    },
+    "agyDeleteHint": "Çalışma durumunun da kaldırılması için bu oturumu Antigravity içinde silin"
   },
   "console": {
     "providerSwitchReceived": "Alınan sağlayıcı değiştirme etkinliği:",
@@ -2536,7 +2546,8 @@
     "firstTokenHelp": "Yönlendirme hizmetinin isteği aldığı andan sağlayıcının çıktı üretmeye başladığı ana kadar geçen süre. ≈ işaretli değer, yönlendirme kapalıyken oturum günlüğü zamanlarından hesaplanır: önceki günlük satırının yazıldığı andan başladığı için istemcinin isteği hazırlama süresini de içerir ve daha yüksek görünür. Claude Code’da yalnızca yanıt düşünme ile başladığında; Codex’te yalnızca yeni günlüklerde ve yanıt bir araç çağrısıyla başlamadığında hesaplanabilir.",
     "firstTokenSumHelpTitle": "İlk token süresi nasıl hesaplanır?",
     "firstTokenSumHelp": "Yönlendirme hizmetinin isteği aldığı andan sağlayıcının çıktı üretmeye başladığı ana kadar geçen süre. Satır, isteklerin medyanını gösterir; böylece ara sıra yavaşlayan bir istek (kuyruk, soğuk başlangıç) değeri yükseltmez. Yalnızca yönlendirme hizmetinden geçen başarılı akış istekleri hesaba katılır; 30 günden eski ve günlük toplamlara dahil edilmiş istekler sayılmaz. ≈ işaretli değer oturum günlüklerinden türetilir (daha yüksek görünür ve yalnızca bazı isteklerde hesaplanabilir); yalnızca satırda yönlendirilmiş istek verisi yoksa gösterilir.",
-    "estimatedTimingTipWithFirstToken": "Yaklaşık {{duration}} sn · ilk token yaklaşık {{ttft}} sn (oturum günlüğü zamanlarından tahmin edildi)"
+    "estimatedTimingTipWithFirstToken": "Yaklaşık {{duration}} sn · ilk token yaklaşık {{ttft}} sn (oturum günlüğü zamanlarından tahmin edildi)",
+    "agyUsageHint": "Antigravity, oturum günlüğündeki özgün Token sayaçlarını gösterir; geçmiş model bilgisi yoksa unknown olarak gösterilir. Günlük güvenilir ücret bilgisi sağlamaz; maliyetin 0 görünmesi kullanımın ücretsiz olduğu anlamına gelmez."
   },
   "usageScript": {
     "title": "Kullanım Sorgusunu Yapılandır",
@@ -3155,7 +3166,9 @@
       "removeModel": "Modeli kaldır",
       "modelsHint": "Etkinleştirildiğinde ilk model Hermes varsayılanı olur.",
       "rateLimitDelay": "Hız sınırı gecikmesi (saniye)",
-      "rateLimitDelayHint": "Ardışık istekler arasındaki saniye cinsinden minimum gecikme (isteğe bağlı). Sınırsız olarak boş bırakın."
+      "rateLimitDelayHint": "Ardışık istekler arasındaki saniye cinsinden minimum gecikme (isteğe bağlı). Sınırsız olarak boş bırakın.",
+      "providerKeyBuiltin": "\"{{key}}\", Hermes’in yerleşik sağlayıcı kimliğidir. Hermes, kendi API anahtarı ortam değişkenini gerektiren yerleşik sağlayıcıyı kullanır ve bu kartın adresiyle anahtarını yok sayar. Örneğin cc-switch-{{key}} gibi farklı bir kimlik kullanın.",
+      "providerKeyBuiltinLocked": "\"{{key}}\", Hermes’in yerleşik sağlayıcı kimliğidir. Hermes yerleşik sağlayıcıyı kullanır ve bu kartın adresiyle anahtarını yok sayar. Kimlik kilitli olduğundan bu sağlayıcıyı farklı bir kimlikle (ör. cc-switch-{{key}}) yeniden ekleyin, ardından bu kartı silin."
     },
     "webui": {
       "open": "Hermes Web kullanıcı arayüzünü açın",

@@ -164,6 +164,7 @@ fn target_paths() -> Result<Vec<(AppType, PathBuf)>, AppError> {
         AppType::Hermes,
         AppType::Pi,
         AppType::Mcode,
+        AppType::Agy,
     ]
     .into_iter()
     .map(|app| prompt_file_path(&app).map(|path| (app, path)))
