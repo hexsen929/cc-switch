@@ -4559,7 +4559,7 @@ mod tests {
     }
 
     #[test]
-    fn existing_fork_v20_adds_pi_mcp_without_losing_flags() -> Result<(), AppError> {
+    fn existing_fork_v20_adds_pi_and_agy_mcp_without_losing_flags() -> Result<(), AppError> {
         let conn = Connection::open_in_memory()?;
         conn.execute_batch(
             "CREATE TABLE mcp_servers (
@@ -4573,13 +4573,13 @@ mod tests {
         Database::set_user_version(&conn, 20)?;
         for _ in 0..2 {
             Database::apply_schema_migrations_on_conn(&conn)?;
-            let flags: (bool, bool, bool) = conn.query_row(
-                "SELECT enabled_claude, enabled_codex, enabled_pi FROM mcp_servers WHERE id = 'existing'",
+            let flags: (bool, bool, bool, bool) = conn.query_row(
+                "SELECT enabled_claude, enabled_codex, enabled_pi, enabled_agy FROM mcp_servers WHERE id = 'existing'",
                 [],
-                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
             )?;
-            assert_eq!(flags, (true, true, false));
-            assert_eq!(Database::get_user_version(&conn)?, 20);
+            assert_eq!(flags, (true, true, false, false));
+            assert_eq!(Database::get_user_version(&conn)?, SCHEMA_VERSION);
         }
         Ok(())
     }
