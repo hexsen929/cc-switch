@@ -41,6 +41,7 @@ vi.mock("@/components/providers/ProviderList", () => ({
     onDuplicate,
     onConfigureUsage,
     onOpenWebsite,
+    onOpenTerminal,
     onCreate,
     onDelete,
     onRemoveFromConfig,
@@ -66,6 +67,9 @@ vi.mock("@/components/providers/ProviderList", () => ({
       </button>
       <button onClick={() => onRemoveFromConfig?.(Object.values(providers)[0])}>
         remove
+      </button>
+      <button onClick={() => onOpenTerminal?.(Object.values(providers)[0])}>
+        open-terminal
       </button>
       <button onClick={() => onCreate?.()}>create</button>
     </div>
@@ -385,6 +389,116 @@ describe("App integration with MSW", () => {
     fireEvent.keyDown(window, { key: ",", metaKey: true });
     expect(await screen.findByTestId("settings-page")).toBeInTheDocument();
     expect(screen.queryByTestId("add-provider-dialog")).not.toBeInTheDocument();
+  }, 10_000);
+
+  it("binds terminal launches to their original app and clears them on navigation", async () => {
+    // Different clients may legitimately have the same provider ID.
+    setProviders("agy", {
+      "claude-1": {
+        id: "claude-1",
+        name: "AGY Relay",
+        category: "custom",
+        settingsConfig: { env: { GEMINI_API_KEY: "fixture-key" } },
+      },
+    });
+    localStorage.setItem(
+      "cc-switch:terminal:recent-dirs",
+      JSON.stringify(["/work/project"]),
+    );
+    const open = vi.spyOn(providersApi, "openTerminal").mockResolvedValue(true);
+    try {
+      const { default: App } = await import("@/App");
+      renderApp(App);
+      await waitFor(() =>
+        expect(screen.getByTestId("provider-list").textContent).toContain(
+          "claude-1",
+        ),
+      );
+      fireEvent.click(screen.getByText("open-terminal"));
+      fireEvent.click(
+        await screen.findByRole("button", {
+          name: "provider.openTerminalDialog.confirm",
+        }),
+      );
+      await waitFor(() =>
+        expect(open).toHaveBeenLastCalledWith("claude-1", "claude", {
+          cwd: "/work/project",
+        }),
+      );
+      await waitFor(() =>
+        expect(
+          screen.queryByRole("button", {
+            name: "provider.openTerminalDialog.confirm",
+          }),
+        ).not.toBeInTheDocument(),
+      );
+
+      fireEvent.click(screen.getByText("open-terminal"));
+      await screen.findByRole("button", {
+        name: "provider.openTerminalDialog.confirm",
+      });
+      fireEvent.click(sidebarApp("Antigravity"));
+      await waitFor(() =>
+        expect(screen.getByTestId("provider-list").textContent).toContain(
+          "AGY Relay",
+        ),
+      );
+      expect(
+        screen.queryByRole("button", {
+          name: "provider.openTerminalDialog.confirm",
+        }),
+      ).not.toBeInTheDocument();
+      expect(open).toHaveBeenCalledTimes(1);
+
+      fireEvent.click(screen.getByText("open-terminal"));
+      fireEvent.click(
+        await screen.findByRole("button", {
+          name: "provider.openTerminalDialog.confirm",
+        }),
+      );
+      await waitFor(() =>
+        expect(open).toHaveBeenLastCalledWith("claude-1", "agy", {
+          cwd: "/work/project",
+        }),
+      );
+      await waitFor(() =>
+        expect(
+          screen.queryByRole("button", {
+            name: "provider.openTerminalDialog.confirm",
+          }),
+        ).not.toBeInTheDocument(),
+      );
+      fireEvent.click(screen.getByText("open-terminal"));
+      await screen.findByRole("button", {
+        name: "provider.openTerminalDialog.confirm",
+      });
+      fireEvent.click(sidebarApp("Codex"));
+      await waitFor(() =>
+        expect(screen.getByTestId("provider-list").textContent).toContain(
+          "codex-1",
+        ),
+      );
+      expect(
+        screen.queryByRole("button", {
+          name: "provider.openTerminalDialog.confirm",
+        }),
+      ).not.toBeInTheDocument();
+      fireEvent.click(sidebarApp("Antigravity"));
+      await waitFor(() =>
+        expect(screen.getByTestId("provider-list").textContent).toContain(
+          "AGY Relay",
+        ),
+      );
+      expect(
+        screen.queryByRole("button", {
+          name: "provider.openTerminalDialog.confirm",
+        }),
+      ).not.toBeInTheDocument();
+      expect(open).toHaveBeenCalledTimes(2);
+    } finally {
+      open.mockRestore();
+      localStorage.removeItem("cc-switch:terminal:recent-dirs");
+    }
   }, 10_000);
 
   it("asks before leaving an editor page with unsaved changes", async () => {

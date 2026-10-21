@@ -1375,6 +1375,12 @@ pub fn run() {
                         _ => {}
                     }
                 }
+                // #8268 测试版给 agy 装过包装脚本、改过 shell 启动文件，撤掉带标记的部分。
+                if let Err(e) =
+                    crate::services::provider::agy_direct::migrate_legacy_launcher(&state.db)
+                {
+                    log::warn!("清理旧版 agy 启动器失败: {e}");
+                }
                 // 启动流程走完：托盘这时才开始报「路由服务没在运行」，并记下退回直连的应用。
                 crate::tray::mark_startup_settled(&app_handle);
                 // Codex 官方做路由、发布了 Stack 模型时，官方模型列表过期就在后台刷新。

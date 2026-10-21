@@ -197,12 +197,13 @@
     "geminiConfigHint": "Gemini'yi yapılandırmak için .env biçimini kullanın",
     "form": {
       "agy": {
-        "connectionHint": "agy'nin Google oturumunu kullanmak için API anahtarını ve adresi boş bırakın. Adres olmadan girilen anahtar Google'ın varsayılan API'sini kullanır; üçüncü taraf adresleri Gemini API'sini desteklemelidir. Sağlayıcı değiştirdikten sonra yeni bir terminal açın veya agy'yi yeniden başlatın. Çalışan oturumlar mevcut yapılandırmalarını korur. Oturum açma modunda model keşfi geçerli agy yapılandırmasını kullanır. Bu modda model listesindeki görünen adı, API modunda ise API model kimliğini kullanın.",
-        "keyFieldsHint": "Adres, anahtar ve model sağlayıcıyla birlikte değişir; diğer yerel Antigravity ayarları korunur.",
+        "keyFieldsHint": "Model, anahtar ve adres yalnızca \"Terminali Aç\" için kullanılır; Antigravity ayarlarına kaydedilmez.",
         "envFile": "Başlatıcı ortam değişkenleri",
-        "envFileHint": "CC Switch, agy başlatılırken API anahtarını, adresi ve modeli iletir. Diğer ortam değişkenleri uygulanmaz.",
+        "envFileHint": "Karttaki \"Terminali Aç\" seçeneği API anahtarını ve adresi yalnızca o agy oturumuna iletir; yerel ayarlara veya kalıcı bir başlatıcıya kaydetmez. macOS/Linux, okunduktan sonra silinen 0600 izinli geçici bir ortam dosyası kullanır. Diğer ortam değişkenleri uygulanmaz.",
         "configJson": "Model yapılandırması (CC Switch biçimi)",
-        "configJsonHint": "Burada yalnızca model ayarları desteklenir. Diğer Antigravity seçeneklerini agy içinde, MCP sunucularını ise MCP panelinde yönetin."
+        "configJsonHint": "Burada yalnızca model ayarları desteklenir. Diğer Antigravity seçeneklerini agy içinde, MCP sunucularını ise MCP panelinde yönetin.",
+        "endpointHelp": "Google'ın varsayılan API'sini kullanmak için boş bırakın. Üçüncü taraf adresleri Gemini API'sini ve agy'nin yerleşik Gemini modellerini desteklemelidir.",
+        "modelHelp": "Model listesindeki görünen adı kullanın (Modelleri Getir). Yalnızca o oturuma uygulanır."
       },
       "gemini": {
         "model": "Model",
@@ -224,7 +225,21 @@
     "formSubtitleStack": "{{app}} (Birleştirme modu)",
     "editCurrentNoticeFile": "Bu, kullanımda olan sağlayıcıdır. Kaydetme şunu yazar:",
     "editCurrentNoticeFileEnd": "hemen; sonraki istek bunu kullanır.",
-    "editCurrentNotice": "Bu, kullanımda olan sağlayıcıdır. Kaydetme hemen etkili olur; sonraki istek yeni ayarları kullanır."
+    "editCurrentNotice": "Bu, kullanımda olan sağlayıcıdır. Kaydetme hemen etkili olur; sonraki istek yeni ayarları kullanır.",
+    "openTerminalWithProvider": "Bu Sağlayıcıyla Terminali Aç",
+    "openTerminalDialog": {
+      "title": "Terminal hangi klasörde açılsın?",
+      "description": "Seçtiğiniz klasörde bir terminal açılır ve {{app}}, \"{{name}}\" ayarlarıyla başlatılır. Genellikle proje klasörünüzü seçmelisiniz.",
+      "isolationTitle": "Bu terminal yalıtılmıştır",
+      "isolationBody": "\"{{name}}\" kullanılmaya devam eder. Daha sonra CC Switch içinde sağlayıcı değiştirmeniz bu terminali etkilemez; bu terminal de CC Switch içindeki etkin sağlayıcıyı değiştirmez.",
+      "isolationBodyAgy": "\"{{name}}\" anahtarı ve adresi yalnızca bu terminaldeki agy için kullanılır; Antigravity ayarlarına veya kalıcı bir başlatıcıya kaydedilmez. macOS/Linux, okunduktan sonra silinen 0600 izinli geçici bir ortam dosyası kullanır. Başka bir terminalde doğrudan agy çalıştırıldığında mevcut Google oturumu kullanılır.",
+      "noDir": "Klasör seçilmedi",
+      "choose": "Klasör Seç…",
+      "change": "Değiştir…",
+      "recent": "Son Kullanılanlar",
+      "forget": "Son kullanılanlardan kaldır",
+      "confirm": "Terminali Aç"
+    }
   },
   "claudeCode": {
     "needsRouting": "Yönlendirme Gerekiyor",
@@ -2547,7 +2562,7 @@
     "firstTokenSumHelpTitle": "İlk token süresi nasıl hesaplanır?",
     "firstTokenSumHelp": "Yönlendirme hizmetinin isteği aldığı andan sağlayıcının çıktı üretmeye başladığı ana kadar geçen süre. Satır, isteklerin medyanını gösterir; böylece ara sıra yavaşlayan bir istek (kuyruk, soğuk başlangıç) değeri yükseltmez. Yalnızca yönlendirme hizmetinden geçen başarılı akış istekleri hesaba katılır; 30 günden eski ve günlük toplamlara dahil edilmiş istekler sayılmaz. ≈ işaretli değer oturum günlüklerinden türetilir (daha yüksek görünür ve yalnızca bazı isteklerde hesaplanabilir); yalnızca satırda yönlendirilmiş istek verisi yoksa gösterilir.",
     "estimatedTimingTipWithFirstToken": "Yaklaşık {{duration}} sn · ilk token yaklaşık {{ttft}} sn (oturum günlüğü zamanlarından tahmin edildi)",
-    "agyUsageHint": "Antigravity, oturum günlüğündeki özgün Token sayaçlarını gösterir; geçmiş model bilgisi yoksa unknown olarak gösterilir. Günlük güvenilir ücret bilgisi sağlamaz; maliyetin 0 görünmesi kullanımın ücretsiz olduğu anlamına gelmez."
+    "agyUsageHint": "Antigravity, oturum günlüklerindeki özgün Token sayılarını gösterir; tutarlar ilgili Gemini API fiyatlarıyla tahmin edilir. Resmî abonelikler plana göre ücretlendirilir; bu tutarlar yalnızca referans içindir. Model bilgisi olmayan eski kayıtlar unknown olarak kaydedilir ve fiyatlandırılmaz."
   },
   "usageScript": {
     "title": "Kullanım Sorgusunu Yapılandır",
@@ -2636,7 +2651,8 @@
     "tip1": "• {{apiKey}} ve {{baseUrl}} değişkenleri otomatik olarak değiştirilir",
     "tip2": "• Çıkarıcı işlevi korumalı alan ortamında çalışır, ES2020+ sözdizimini destekler",
     "tip3": "• Nesne değişmez ifadesini oluşturmak için tüm yapılandırmanın () içine sarılması gerekir",
-    "templateSub2API": "Sub2API"
+    "templateSub2API": "Sub2API",
+    "officialSubscriptionHintAgy": "Oturum açmış hesabın kotasını sorgulamak için agy'nin yerleşik /usage komutunu çalıştırır. Oturum açma kimlik bilgileri okunmaz; her sorgu yaklaşık 10 saniye sürer. Varsayılan olarak kapalıdır ve yalnızca etkinleştirildikten sonra çalışır."
   },
   "dbUpgrade": {
     "title": "Veritabanı sürümü çok yeni",
@@ -4106,7 +4122,11 @@
       "geminiFlashLite": "Lite",
       "monthly": "Ay",
       "credits": "Kredi",
-      "copilotPremium": "Premium"
+      "copilotPremium": "Premium",
+      "agyGeminiFiveHour": "Gemini 5 sa",
+      "agyGeminiWeekly": "Gemini Hf",
+      "agyThirdPartyFiveHour": "Claude 5 sa",
+      "agyThirdPartyWeekly": "Claude Hf"
     },
     "fiveHour": "5 saat",
     "sevenDay": "Haftalık",
@@ -4127,7 +4147,13 @@
     "expired": "Oturumun süresi doldu",
     "expiredHint": "Giriş bilgilerinizi yenilemek için {{tool}} komutunu çalıştırın",
     "queryFailed": "Sorgu başarısız oldu",
-    "refresh": "Yenile"
+    "refresh": "Yenile",
+    "agyGemini": "Gemini",
+    "agyThirdParty": "Claude/GPT",
+    "agyGeminiFiveHour": "Gemini 5 saatlik",
+    "agyGeminiWeekly": "Gemini haftalık",
+    "agyThirdPartyFiveHour": "Claude/GPT 5 saatlik",
+    "agyThirdPartyWeekly": "Claude/GPT haftalık"
   },
   "nav": {
     "mainLabel": "Ana gezinme",
@@ -4187,7 +4213,8 @@
       "openclaw": "Npm ile yüklenir",
       "hermes": "Resmi komut dosyasıyla yüklenir",
       "pi": "Npm ile yüklenir",
-      "mcode": "Resmi komut dosyasıyla yüklenir, npm'ye geri döner"
+      "mcode": "Resmi komut dosyasıyla yüklenir, npm'ye geri döner",
+      "agy": "Resmî kurulum betiğiyle yüklenir"
     }
   },
   "appPage": {

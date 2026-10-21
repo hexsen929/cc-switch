@@ -272,9 +272,16 @@ function App() {
     provider: Provider;
     action: "remove" | "delete";
   } | null>(null);
-  const [terminalProvider, setTerminalProvider] = useState<Provider | null>(
-    null,
-  );
+  // 终端目标始终绑定打开时的应用，避免导航后把旧卡 ID 发给另一个客户端。
+  const [terminalTarget, setTerminalTarget] = useState<{
+    provider: Provider;
+    appId: AppId;
+  } | null>(null);
+  useEffect(() => {
+    setTerminalTarget((current) =>
+      current && current.appId !== activeApp ? null : current,
+    );
+  }, [activeApp]);
   const [envConflicts, setEnvConflicts] = useState<EnvConflict[]>([]);
   const [showEnvBanner, setShowEnvBanner] = useState(false);
 
@@ -639,6 +646,7 @@ function App() {
     setIsAddOpen(false);
     setEditingProvider(null);
     setUsageProvider(null);
+    setTerminalTarget(null);
   };
 
   // 整页编辑器里有未保存的修改：先确认，确认放弃后再执行这次导航
@@ -1257,7 +1265,11 @@ function App() {
     onDuplicate: handleDuplicateProvider,
     onConfigureUsage: setUsageProvider,
     onOpenWebsite: handleOpenWebsite,
-    onOpenTerminal: activeApp === "claude" ? setTerminalProvider : undefined,
+    onOpenTerminal:
+      activeApp === "claude" || activeApp === "agy"
+        ? (provider: Provider) =>
+            setTerminalTarget({ provider, appId: activeApp })
+        : undefined,
     onCreate: () => openAddProvider(currentModeView),
     searchOpen: providerSearchOpen,
     onSearchOpenChange: setProviderSearchOpen,
@@ -1615,9 +1627,13 @@ function App() {
       )}
 
       <OpenTerminalDialog
-        provider={terminalProvider}
-        appId={activeApp}
-        onClose={() => setTerminalProvider(null)}
+        provider={terminalTarget?.provider ?? null}
+        appId={terminalTarget?.appId ?? activeApp}
+        onClose={() =>
+          setTerminalTarget((current) =>
+            current === terminalTarget ? null : current,
+          )
+        }
       />
 
       <ConfirmDialog

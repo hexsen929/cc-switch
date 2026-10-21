@@ -28,7 +28,8 @@ describe("Antigravity usage limitations", () => {
       ];
       expect(text).toBe(expected.usage.agyUsageHint);
       expect(text).toContain("unknown");
-      expect(text).toContain("0");
+      // 金额按 Gemini API 价格估算，不再是写死的 0
+      expect(text).toContain("Gemini API");
       expect(text).not.toBe("usage.agyUsageHint");
     },
   );
@@ -52,7 +53,7 @@ describe("Antigravity locale parity", () => {
     expect(reference).toEqual(
       expect.arrayContaining([
         "apps.agy",
-        "provider.form.agy.connectionHint",
+        "provider.form.agy.modelHelp",
         "sessionManager.agyDeleteHint",
       ]),
     );
@@ -62,4 +63,16 @@ describe("Antigravity locale parity", () => {
     const own = new Set(collect(locales[lng], "", []));
     expect(reference.filter((key) => !own.has(key))).toEqual([]);
   });
+
+  it.each([en, ja, tr, zh, zhTW])(
+    "describes temporary credential files and preserves terminal placeholders",
+    (locale) => {
+      const dialog = locale.provider.openTerminalDialog;
+      expect(dialog.description).toContain("{{name}}");
+      expect(dialog.description).toContain("{{app}}");
+      expect(dialog.isolationBodyAgy).toContain("{{name}}");
+      expect(dialog.isolationBodyAgy).toContain("0600");
+      expect(locale.provider.form.agy.envFileHint).toContain("0600");
+    },
+  );
 });

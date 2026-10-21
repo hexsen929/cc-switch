@@ -513,6 +513,56 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
+    fn agy_private_profile_is_retained_for_transcript_and_index_only_resume() {
+        if crate::config::sqlite_unsupported_in_temp_dir() {
+            return;
+        }
+        let fixture = agy::test_support::IndexOnlyFixture::new();
+        let project = fixture.home().join("project");
+        let dir = fixture.insert_profile("relay one", "binary-id", &project);
+        let command = crate::agy_config::resume_command(Some(&dir), "binary-id");
+        assert_eq!(
+            resume_index_only_session_target("agy", "binary-id").unwrap(),
+            (
+                command.clone(),
+                Some(project.to_string_lossy().into_owned())
+            )
+        );
+        let listed = agy::scan_sessions()
+            .into_iter()
+            .find(|session| session.session_id == "binary-id")
+            .unwrap();
+        assert!(listed.source_path.is_none());
+        assert_eq!(listed.resume_command.as_deref(), Some(command.as_str()));
+
+        let source = dir.join(
+            "antigravity-cli/brain/transcript-id/.system_generated/logs/transcript_full.jsonl",
+        );
+        std::fs::create_dir_all(source.parent().unwrap()).unwrap();
+        std::fs::write(
+            &source,
+            r#"{"step_index":0,"type":"USER_INPUT","content":"<USER_REQUEST>fixture</USER_REQUEST>"}"#,
+        )
+        .unwrap();
+        assert_eq!(
+            resume_session_target("agy", "transcript-id", source.to_str().unwrap()).unwrap(),
+            (
+                crate::agy_config::resume_command(Some(&dir), "transcript-id"),
+                None
+            )
+        );
+        assert!(resume_index_only_session_target("agy", "transcript-id").is_err());
+
+        // Private profiles do not gain the display scanner's first-wins
+        // exception: a source-less identity present in two profiles is ambiguous.
+        fixture.insert_profile("another relay", "binary-id", &project);
+        assert!(resume_index_only_session_target("agy", "binary-id")
+            .unwrap_err()
+            .contains("ambiguous"));
+    }
+
+    #[test]
     fn every_resume_path_keeps_subagents_read_only() {
         for (read_only, role, parent) in [
             (true, None, None),

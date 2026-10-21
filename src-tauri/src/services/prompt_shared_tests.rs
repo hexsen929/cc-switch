@@ -251,7 +251,10 @@ fn agy_shared_overlay_is_opt_in_refreshes_and_preserves_ordinary_prompt() {
     let state = home.state();
     let app = AppType::Agy;
     let path = live_path(&app);
-    assert_eq!(path, crate::agy_config::agy_dir().join("AGENTS.md"));
+    assert_eq!(
+        path,
+        crate::agy_config::customizations_dir().join("AGENTS.md")
+    );
 
     // Merely adding AGY support must not create its file when no shared source
     // is selected, or install a provider launcher as a side effect.

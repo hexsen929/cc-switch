@@ -128,6 +128,7 @@ pub async fn reveal_session_path(path: String) -> Result<bool, String> {
 /// AGY's index-only conversations have no source path and use a scoped lookup.
 #[tauri::command]
 pub async fn launch_session_terminal(
+    state: tauri::State<'_, crate::store::AppState>,
     command: String,
     cwd: Option<String>,
     custom_config: Option<String>,
@@ -135,6 +136,7 @@ pub async fn launch_session_terminal(
     session_id: String,
     source_path: Option<String>,
 ) -> Result<bool, String> {
+    let db = state.db.clone();
     // Read preferred terminal from global settings
     let preferred = crate::settings::get_preferred_terminal();
     // Map global setting terminal names to session terminal names
@@ -153,6 +155,20 @@ pub async fn launch_session_terminal(
             &session_id,
             source_path.as_deref(),
         )?;
+        // Only a freshly validated AGY session may select a provider's private
+        // profile and receive its API key. Never branch on an unchecked command.
+        if provider_id == "agy" {
+            if let Some((provider, conversation)) =
+                crate::services::provider::agy_direct::key_resume_target(&db, &native_command)
+                    .map_err(|error| error.to_string())?
+            {
+                return crate::commands::misc::open_agy_resume_terminal(
+                    &provider,
+                    &conversation,
+                    native_cwd,
+                );
+            }
+        }
         session_manager::terminal::launch_terminal(
             &target,
             &native_command,
@@ -300,5 +316,55 @@ mod tests {
             None,
         )
         .is_err());
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn private_agy_resume_is_validated_before_selecting_provider_credentials() {
+        if crate::config::sqlite_unsupported_in_temp_dir() {
+            return;
+        }
+        let fixture = session_manager::providers::agy::test_support::IndexOnlyFixture::new();
+        let project = fixture.home().join("project space");
+        let dir = fixture.insert_profile("relay one", "private-id", &project);
+        let db = crate::database::Database::memory().unwrap();
+        let provider = crate::provider::Provider::with_id(
+            "relay one".into(),
+            "Relay".into(),
+            serde_json::json!({"env":{"GEMINI_API_KEY":"fixture-secret"},"config":{}}),
+            None,
+        );
+        db.save_provider("agy", &provider).unwrap();
+        let command = crate::agy_config::resume_command(Some(&dir), "private-id");
+        let cwd = project.to_string_lossy().into_owned();
+        let (native_command, native_cwd) =
+            validated_resume_target(&command, Some(&cwd), "agy", "private-id", None).unwrap();
+        assert_eq!(native_cwd.as_deref(), Some(cwd.as_str()));
+        assert!(!native_command.contains("fixture-secret"));
+        let (found, conversation) =
+            crate::services::provider::agy_direct::key_resume_target(&db, &native_command)
+                .unwrap()
+                .unwrap();
+        assert_eq!(found.id, provider.id);
+        assert_eq!(conversation, "private-id");
+
+        // A matching provider prefix is not an authorization to bypass fresh
+        // session identity or native command/cwd validation.
+        for (candidate, id, cwd) in [
+            (command.clone(), "other-id", Some(cwd.as_str())),
+            (
+                format!("{command}; echo injected"),
+                "private-id",
+                Some(cwd.as_str()),
+            ),
+            (command.clone(), "private-id", None),
+            (
+                "agy --conversation=private-id".to_string(),
+                "private-id",
+                Some(cwd.as_str()),
+            ),
+        ] {
+            assert!(validated_resume_target(&candidate, cwd, "agy", id, None).is_err());
+        }
     }
 }
