@@ -33,6 +33,20 @@ export function useUsageCacheBridge() {
         usageKeys.script(payload.providerId, payload.appType),
         payload.data,
       );
+    } else if (payload.kind === "subscription" && payload.appType === "agy") {
+      // These events do not identify the account. Never write a potentially late
+      // old-account payload into the current generation; re-read the actual login.
+      // A query emits this same event itself, so skip in-flight/equal results.
+      void queryClient.invalidateQueries({
+        queryKey: subscriptionKeys.quota("agy"),
+        predicate: (query) => {
+          const current = query.state.data as SubscriptionQuota | undefined;
+          return (
+            query.state.fetchStatus !== "fetching" &&
+            (!current || current.queriedAt !== payload.data.queriedAt)
+          );
+        },
+      });
     } else if (payload.kind === "subscription") {
       queryClient.setQueryData<SubscriptionQuota>(
         subscriptionKeys.quota(payload.appType),

@@ -1,10 +1,17 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { OpenTerminalDialog } from "@/components/providers/OpenTerminalDialog";
 import type { Provider } from "@/types";
+import {
+  AGY_CURRENT_SCOPE_KEY,
+  agyCurrentQuotaKey,
+} from "@/lib/query/agyCurrentQuota";
 
 const openTerminalMock = vi.fn();
 const pickDirectoryMock = vi.fn();
+const agyStatusMock = vi.fn();
+const agyRunningMock = vi.fn();
 
 vi.mock("@/lib/api", () => ({
   providersApi: {
@@ -13,7 +20,12 @@ vi.mock("@/lib/api", () => ({
   settingsApi: {
     pickDirectory: (...args: unknown[]) => pickDirectoryMock(...args),
   },
+  authApi: {
+    authGetStatus: (...args: unknown[]) => agyStatusMock(...args),
+    agyAccountIsRunning: () => agyRunningMock(),
+  },
 }));
+vi.mock("@/lib/platform", () => ({ isMac: () => true }));
 
 vi.mock("@/lib/toast", () => ({
   toast: { success: vi.fn(), error: vi.fn() },
@@ -35,9 +47,12 @@ function renderDialog(
   onClose = vi.fn(),
   target: Provider = provider,
   appId: "claude" | "agy" = "claude",
+  client = new QueryClient({ defaultOptions: { queries: { retry: false } } }),
 ) {
   render(
-    <OpenTerminalDialog provider={target} appId={appId} onClose={onClose} />,
+    <QueryClientProvider client={client}>
+      <OpenTerminalDialog provider={target} appId={appId} onClose={onClose} />
+    </QueryClientProvider>,
   );
   return onClose;
 }
@@ -47,7 +62,117 @@ describe("OpenTerminalDialog", () => {
     window.localStorage.clear();
     openTerminalMock.mockReset().mockResolvedValue(true);
     pickDirectoryMock.mockReset();
+    agyStatusMock.mockReset().mockResolvedValue({
+      provider: "agy_oauth",
+      authenticated: true,
+      default_account_id: "a",
+      accounts: [
+        { id: "a", login: "a@example.com" },
+        { id: "b", login: "b@example.com" },
+      ],
+    });
+    agyRunningMock.mockReset().mockResolvedValue(false);
   });
+
+  const agyOfficial = (accountId?: string) =>
+    ({
+      id: "agy-official",
+      name: "Google Official",
+      category: "official",
+      settingsConfig: { env: {} },
+      meta: accountId
+        ? {
+            authBinding: {
+              source: "managed_account",
+              authProvider: "agy_oauth",
+              accountId,
+            },
+          }
+        : undefined,
+    }) as Provider;
+
+  it("says agy's sign-in will switch when the card is bound to another account", async () => {
+    agyRunningMock.mockResolvedValue(true);
+    renderDialog(vi.fn(), agyOfficial("b"), "agy");
+    expect(
+      await screen.findByText(/打开前把 agy 的登录切换到 b@example.com/),
+    ).toBeInTheDocument();
+    expect(await screen.findByText(/检测到 agy 正在运行/)).toBeInTheDocument();
+  });
+
+  it("stays quiet when the bound account is already signed in, or nothing is bound", async () => {
+    renderDialog(vi.fn(), agyOfficial("a"), "agy");
+    await waitFor(() => expect(agyStatusMock).toHaveBeenCalled());
+    await waitFor(() =>
+      expect(screen.queryByText(/切换到/)).not.toBeInTheDocument(),
+    );
+    agyStatusMock.mockClear();
+    renderDialog(vi.fn(), agyOfficial(), "agy");
+    expect(agyStatusMock).not.toHaveBeenCalled();
+  });
+
+  it.each(["loading", "error"] as const)(
+    "warns about the bound global login even when status is %s",
+    async (state) => {
+      const client = new QueryClient({
+        defaultOptions: { queries: { retry: false } },
+      });
+      if (state === "loading")
+        agyStatusMock.mockImplementation(() => new Promise(() => {}));
+      else agyStatusMock.mockRejectedValue(new Error("status unavailable"));
+      renderDialog(vi.fn(), agyOfficial("b"), "agy", client);
+      expect(
+        await screen.findByText(/打开前把 agy 的登录切换到 b/),
+      ).toBeInTheDocument();
+      if (state === "error") {
+        await waitFor(() =>
+          expect(
+            client.getQueryState(["managed-auth-status", "agy_oauth"])?.status,
+          ).toBe("error"),
+        );
+        expect(
+          screen.getByText(/打开前把 agy 的登录切换到 b/),
+        ).toBeInTheDocument();
+      }
+    },
+  );
+
+  it.each([false, true])(
+    "clears old current-account quota after a bound launch (terminal failure=%s)",
+    async (fails) => {
+      const client = new QueryClient({
+        defaultOptions: { queries: { retry: false } },
+      });
+      client.setQueryData(AGY_CURRENT_SCOPE_KEY, 0);
+      client.setQueryData(agyCurrentQuotaKey(0), {
+        success: true,
+        oldAccount: "a",
+      });
+      window.localStorage.setItem(STORAGE_KEY, JSON.stringify(["/work/agy"]));
+      if (fails)
+        openTerminalMock.mockRejectedValue(
+          new Error("terminal failed after switch"),
+        );
+      renderDialog(vi.fn(), agyOfficial("b"), "agy", client);
+      await waitFor(() =>
+        expect(
+          client.getQueryState(["managed-auth-status", "agy_oauth"])?.status,
+        ).toBe("success"),
+      );
+      fireEvent.click(
+        screen.getByRole("button", {
+          name: "provider.openTerminalDialog.confirm",
+        }),
+      );
+      await waitFor(() =>
+        expect(client.getQueryData(AGY_CURRENT_SCOPE_KEY)).toBe(1),
+      );
+      expect(client.getQueryData(agyCurrentQuotaKey(0))).toBeUndefined();
+      await waitFor(() =>
+        expect(agyStatusMock.mock.calls.length).toBeGreaterThanOrEqual(2),
+      );
+    },
+  );
 
   it("explains first and only opens the folder picker on request", async () => {
     pickDirectoryMock.mockResolvedValue("/work/alpha");

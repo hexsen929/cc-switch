@@ -203,7 +203,11 @@
         "configJson": "Model yapılandırması (CC Switch biçimi)",
         "configJsonHint": "Burada yalnızca model ayarları desteklenir. Diğer Antigravity seçeneklerini agy içinde, MCP sunucularını ise MCP panelinde yönetin.",
         "endpointHelp": "Google'ın varsayılan API'sini kullanmak için boş bırakın. Üçüncü taraf adresleri Gemini API'sini ve agy'nin yerleşik Gemini modellerini desteklemelidir.",
-        "modelHelp": "Model listesindeki görünen adı kullanın (Modelleri Getir). Yalnızca o oturuma uygulanır."
+        "modelHelp": "Model listesindeki görünen adı kullanın (Modelleri Getir). Yalnızca o oturuma uygulanır.",
+        "account": "Hesap",
+        "accountFollow": "agy'nin mevcut oturumunu kullan",
+        "accountMissing": "Bu bilgisayarda bulunmayan bir hesap",
+        "accountHelp": "Bir hesap seçilirse Terminali Aç önce agy oturumunu o hesaba geçirir. Bu değişiklik geneldir: daha sonra başlatılan agy oturumları bu hesabı kullanır. Hesapları Yetkilendirme Merkezi üzerinden ekleyin."
       },
       "gemini": {
         "model": "Model",
@@ -238,7 +242,10 @@
       "change": "Değiştir…",
       "recent": "Son Kullanılanlar",
       "forget": "Son kullanılanlardan kaldır",
-      "confirm": "Terminali Aç"
+      "confirm": "Terminali Aç",
+      "agySwitchTitle": "Bu işlem agy oturumunu değiştirir",
+      "agySwitchBody": "Terminal açılmadan önce agy oturumu {{account}} hesabına geçirilir. Daha sonra başlatılan agy oturumları bu hesabı kullanır.",
+      "agySwitchRunning": "agy çalışıyor: açık agy oturumları önceki hesabı kullanmaya devam eder ve onu yeniden kaydedebilir. Mümkünse önce bu oturumları kapatın."
     }
   },
   "claudeCode": {
@@ -425,7 +432,7 @@
     "tabAdvanced": "Gelişmiş",
     "tabProxy": "Yönlendirme",
     "authCenter": {
-      "description": "Sağlayıcı olarak GitHub Copilot, ChatGPT ve xAI aboneliklerini kullanın. Yönlendirme hizmeti kimlik bilgilerini enjekte eder, böylece bu sağlayıcılar Yönlendirme modunda çalışır (Codex'nin resmi oturum açma bağlaması hariç).",
+      "description": "Sağlayıcı olarak GitHub Copilot, ChatGPT ve xAI aboneliklerini kullanın. Yönlendirme hizmeti kimlik bilgilerini enjekte eder; bu sağlayıcılar Yönlendirme modunda çalışır (Codex resmî oturum açma bağlaması hariç). Antigravity hesapları agy resmî oturumunu değiştirir.",
       "beta": "beta",
       "copilotDescription": "GitHub Copilot hesaplarını yönetin",
       "codexOauthDescription": "ChatGPT hesaplarını yönetin",
@@ -476,7 +483,6 @@
         "title": "Uyumluluk düzeltici",
         "description": "API isteği uyumluluk sorunlarını otomatik olarak düzeltin",
         "enabled": "Uyumluluk düzelticiyi etkinleştir",
-        "enabledDescription": "Ana anahtar, kapatıldığında tüm düzeltme özellikleri devre dışı bırakılacaktır",
         "requestGroup": "İstek düzeltme",
         "responseGroup": "Yanıt düzeltme",
         "thinkingSignature": "Düşünme imzası düzeltme",
@@ -513,7 +519,6 @@
           "debug": "Hata ayıklama",
           "trace": "İz"
         },
-        "levelHint": "Günlük düzeyi açıklamaları:",
         "levelDesc": {
           "error": "Yalnızca kritik hatalar",
           "warn": "Hatalar + uyarılar",
@@ -654,7 +659,6 @@
     },
     "webdavSync": {
       "title": "WebDAV bulut eşitleme",
-      "description": "WebDAV aracılığıyla veritabanı ve beceri yapılandırmalarını cihazlar arasında eşitle edin.",
       "baseUrl": "WebDAV Sunucu URL'si",
       "baseUrlPlaceholder": "https://dav.example.com/dav/",
       "username": "WebDAV Hesabı",
@@ -695,8 +699,6 @@
         "synologyHint": "Önce Synology Paket Merkezi'nde WebDAV Sunucu paketini kurun ve etkinleştirin.",
         "custom": "Özel"
       },
-      "remoteRootDefault": "Varsayılan: cc-switch-sync",
-      "profileDefault": "Varsayılan: varsayılan",
       "saveAndTestSuccess": "Yapılandırma kaydedildi, bağlantı tamam",
       "saveAndTestFailed": "Yapılandırma kaydedildi ancak bağlantı testi başarısız oldu: {{error}}",
       "noRemoteData": "Uzak sunucuda eşitleme verisi bulunamadı",
@@ -769,9 +771,7 @@
       "endpointHint": "Çoğu S3 uyumlu hizmet için gereklidir",
       "endpointPlaceholder": "örneğin https://s3-compatible.example.com",
       "remoteRoot": "Uzak Kök Dizini",
-      "remoteRootDefault": "Varsayılan: cc-switch-sync",
       "profile": "Eşitleme profili adı",
-      "profileDefault": "Varsayılan: varsayılan",
       "autoSync": "Otomatik eşitleme",
       "autoSyncHint": "Etkinleştirildiğinde, her veritabanı değişikliği otomatik bir S3 yüklemesini tetikler.",
       "enabled": "S3 Eşitlemeunu Etkinleştir",
@@ -1666,7 +1666,6 @@
       "subrouter": "SubRouter, bir anahtarın birden fazla modele ve sağlayıcıya erişmesine olanak tanıyan bir AI aktarma toplayıcıdır.",
       "qiniu": "Qiniu Cloud, çok protokollü bir yapay zeka aktarımıdır: yerel Claude, GPT ve Gemini modelleri için tek bir anahtar; Anthropic, OpenAI ve Gemini API'lerinin tümü desteklenir.",
       "fenno": "Fenno.ai, geniş bir ana akım model yelpazesine erişmenizi sağlayan istikrarlı, verimli bir API rölesidir. Özel CC Switch teklifi: Bu bağlantı aracılığıyla 7 gün geçerli, 50$ kredi değerindeki 1,99$ Deneme Planına abone olun!",
-      "zetaapi": "ZetaAPI gerçek, bozulmamış modelleri resmi fiyatlandırmanın %35'i kadar düşük bir fiyatla sunar. Özel CC Switch teklifi: bu bağlantı aracılığıyla kaydolun ve ilk yüklemenizde %10 indirim için CC-SWITCH promosyon kodunu kullanın!",
       "teamorouter": "TeamoRouter, %90'a varan indirimlerle kurumsal düzeyde bir Agentic LLM ağ geçididir. CC Switch kullanıcılarına özel avantajlar sunar: ilk yüklemenizde %10 indirim için bu bağlantı aracılığıyla yeni bir kullanıcı olarak kaydolun!",
       "ppio": "PPIO, Çin'in önde gelen bağımsız Aracı Bulut sağlayıcısıdır ve her amiral gemisi açık kaynak modeline tek bir API anahtarı aracılığıyla hizmet verir. 10 ¥ değerinde kredi kuponu almak için bu bağlantı aracılığıyla kaydolun ve kimlik doğrulamayı tamamlayın.",
       "xycai": "XycAi kurumsal düzeyde bir token fabrikasıdır: 200'den fazla global modele tek tıklamayla erişim, otomatik SLA telafisi ve anormal önbellek ücretleri için %100 geri ödeme!",
@@ -1674,7 +1673,10 @@
       "soleapi": "SoleAPI, geliştiriciler ve kuruluşlar için bir yapay zeka modeli ağ geçididir: bir API anahtarı, gerçek zamanlı akıllı yönlendirme, milisaniyelik yedek sağlayıcıya geçiş, %99,99 kullanılabilirlik ve 7/24 destek ile OpenAI ve Anthropic protokolleriyle yerel olarak uyumlu, Claude, GPT ve Gemini dahil 30'dan fazla lider modele ulaşır. Ücretsiz deneme kredileri ve yükleme yapan arkadaşlarınızı davet ederek devam eden para iadesi için yönlendirme bağlantısı aracılığıyla kaydolun!",
       "fluxa": "FluxA ve Baidu AI Cloud, AI ajanlerinin modelleri, API'leri ve araçları kendi başlarına satın almasına, yönetmesine ve kullanmasına olanak tanıyan AgenticPlan'ı ortaklaşa başlattı. DeepSeek V4, GLM 5.2 ve Kimi gibi amiral gemisi modellerinde %40'a varan indirim sağlayan Baidu Qianfan TokenPlan'ın yanı sıra arama, veri kazıma, sosyal medya, finans, kripto, görüntü oluşturma ve video için 13.000'den fazla ücretli API'nin kilidini açan bonus FluxA AgentMarket API kredilerini içerir.",
       "88api": "88API, bir Hong Kong şirketi tarafından işletilen ve metin, görüntü, konuşma ve video modellerine birleşik erişim sağlayan tek noktadan çok modelli bir API platformudur. Başlıca uluslararası ödeme yöntemlerini kabul eder, fatura düzenleyebilir ve kurumsal düzeyde istikrarlı hizmet sağlar. Bonus kredileri almak için özel bağlantı üzerinden kaydolun!",
-      "alltokens_si": "AllTokens SI, istikrar ve dürüstlük temelinde oluşturulmuş kurumsal bir yapay zeka token aktarma ve ekip iş birliği platformudur. Üyeler, anahtarlar, kullanım ve bakiye tek bir şirket konsolunda yönetilir; açık yetkiler ve harcama sınırları, ekip kullanımının izlenebilir ve kontrol altında olmasını sağlar."
+      "alltokens_si": "AllTokens SI, istikrar ve dürüstlük temelinde oluşturulmuş kurumsal bir yapay zeka token aktarma ve ekip iş birliği platformudur. Üyeler, anahtarlar, kullanım ve bakiye tek bir şirket konsolunda yönetilir; açık yetkiler ve harcama sınırları, ekip kullanımının izlenebilir ve kontrol altında olmasını sağlar.",
+      "haoai": "hao.ai geliştiriciler ve ekipler için hızlı, kararlı bir birleşik LLM API ağ geçididir. Tek anahtarla OpenAI ve Anthropic uyumlu API'ler üzerinden GPT, Claude, Grok ve diğer önde gelen modellere erişebilirsiniz. Model yönlendirmesi, yük devretme ve tam istek günlükleri sunar; fiyatlar resmî referans ücretlerinin %15'ine kadar düşer. Bu bağlantıyla kaydolan CC Switch kullanıcıları ilk siparişlerinde %5 bonus kredi kazanır!",
+      "dit": "DIT.ai düşük maliyetli çok sağlayıcılı yönlendirme sunan bir AI token borsasıdır. Tek OpenAI uyumlu API ile GPT, Claude, Gemini, DeepSeek, Grok ve Llama dahil 50'den fazla modele erişilir. Sağlayıcılar 160'tan fazla rota üzerinde rekabet eder; fiyatlar genellikle resmî fiyatlardan %30–70 daha düşüktür. CC Switch kullanıcıları bu bağlantıyla kaydolup \"ccswitch\" koduyla 5 dolarlık hoş geldiniz kuponu alabilir!",
+      "everyapi": "EveryAPI kendi masaüstü istemcisiyle Claude Code, Codex, Cursor ve 20'den fazla aracı tek tıklamayla yapılandırır. Tek anahtarla Claude, GPT, DeepSeek, GLM, MiniMax, Kimi ve Doubao modellerine erişilir; model değiştirirken yapılandırmayı düzenlemeniz gerekmez. Kayıtta 14 yuan ücretsiz kredi, GPT modellerinde resmî fiyatın %15'inden başlayan ücretler sunulur. CC Switch kullanıcıları ilk yüklemelerinde süresiz \"ccswitch\" koduyla %20 indirim alır!"
     },
     "presets": {
       "ucloud": "Compshare",
@@ -2074,16 +2076,13 @@
     "npmPackage": "API Biçimi",
     "nativeConfigHint": "Yerel OpenCode V2 yapılandırmasını aşağıdaki JSON olarak düzenleyin. Kaydederken sağlayıcı ve model alanları korunur.",
     "selectPackage": "API biçimini seçin",
-    "npmPackageHint": "AI hizmeti için API formatını seçin",
     "builtinDefaults": "OpenCode yerleşik sağlayıcı varsayılanlarını kullanın",
     "customProviderRequired": "Yeni bir sağlayıcı kimliği, bir npm paketi ve en az bir model gerektirir. Yalnızca canlı yapılandırmadaki mevcut bir kimlik varsayılanları devralabilir.",
     "duplicateRequiresDefinition": "Bu sağlayıcıda bir npm paketi veya model tanımı eksik ve doğrudan kopyalanamıyor. Özel sağlayıcı olarak kopyalamadan önce bir npm paketi ve en az bir model belirtin.",
     "duplicateRequiresNativeDefinition": "Bu yerel V2 sağlayıcısında paket veya model tanımları eksik ve doğrudan kopyalanamıyor. Yeni bir kimlik altına kopyalamadan önce bir paket ve en az bir model ekleyin.",
     "nativeCustomProviderRequired": "Yeni sağlayıcı kimliği bir paket ve en az bir model gerektirir. Yalnızca canlı yapılandırmadaki mevcut bir kimlik varsayılanları devralabilir.",
     "baseUrl": "Temel URL",
-    "baseUrlHint": "Özel API uç nokta URL'si",
     "models": "Modeller",
-    "modelsHint": "Mevcut modelleri ve görünen adlarını yapılandırın",
     "addModel": "Manuel olarak ekle",
     "modelId": "Model Kimliği",
     "modelName": "Görünen Ad",
@@ -2561,8 +2560,7 @@
     "firstTokenHelp": "Yönlendirme hizmetinin isteği aldığı andan sağlayıcının çıktı üretmeye başladığı ana kadar geçen süre. ≈ işaretli değer, yönlendirme kapalıyken oturum günlüğü zamanlarından hesaplanır: önceki günlük satırının yazıldığı andan başladığı için istemcinin isteği hazırlama süresini de içerir ve daha yüksek görünür. Claude Code’da yalnızca yanıt düşünme ile başladığında; Codex’te yalnızca yeni günlüklerde ve yanıt bir araç çağrısıyla başlamadığında hesaplanabilir.",
     "firstTokenSumHelpTitle": "İlk token süresi nasıl hesaplanır?",
     "firstTokenSumHelp": "Yönlendirme hizmetinin isteği aldığı andan sağlayıcının çıktı üretmeye başladığı ana kadar geçen süre. Satır, isteklerin medyanını gösterir; böylece ara sıra yavaşlayan bir istek (kuyruk, soğuk başlangıç) değeri yükseltmez. Yalnızca yönlendirme hizmetinden geçen başarılı akış istekleri hesaba katılır; 30 günden eski ve günlük toplamlara dahil edilmiş istekler sayılmaz. ≈ işaretli değer oturum günlüklerinden türetilir (daha yüksek görünür ve yalnızca bazı isteklerde hesaplanabilir); yalnızca satırda yönlendirilmiş istek verisi yoksa gösterilir.",
-    "estimatedTimingTipWithFirstToken": "Yaklaşık {{duration}} sn · ilk token yaklaşık {{ttft}} sn (oturum günlüğü zamanlarından tahmin edildi)",
-    "agyUsageHint": "Antigravity, oturum günlüklerindeki özgün Token sayılarını gösterir; tutarlar ilgili Gemini API fiyatlarıyla tahmin edilir. Resmî abonelikler plana göre ücretlendirilir; bu tutarlar yalnızca referans içindir. Model bilgisi olmayan eski kayıtlar unknown olarak kaydedilir ve fiyatlandırılmaz."
+    "estimatedTimingTipWithFirstToken": "Yaklaşık {{duration}} sn · ilk token yaklaşık {{ttft}} sn (oturum günlüğü zamanlarından tahmin edildi)"
   },
   "usageScript": {
     "title": "Kullanım Sorgusunu Yapılandır",
@@ -2652,7 +2650,7 @@
     "tip2": "• Çıkarıcı işlevi korumalı alan ortamında çalışır, ES2020+ sözdizimini destekler",
     "tip3": "• Nesne değişmez ifadesini oluşturmak için tüm yapılandırmanın () içine sarılması gerekir",
     "templateSub2API": "Sub2API",
-    "officialSubscriptionHintAgy": "Oturum açmış hesabın kotasını sorgulamak için agy'nin yerleşik /usage komutunu çalıştırır. Oturum açma kimlik bilgileri okunmaz; her sorgu yaklaşık 10 saniye sürer. Varsayılan olarak kapalıdır ve yalnızca etkinleştirildikten sonra çalışır."
+    "officialSubscriptionHintAgy": "Resmî kotayı Yetkilendirme Merkezi'nde saklanan hesap tokenlarıyla sorgular. Geçerli oturum belirlenemiyorsa veya platform hesap değiştirmeyi desteklemiyorsa agy'nin /usage komutu kullanılır (yaklaşık 10 saniye). Varsayılan olarak kapalıdır; etkinleştirdikten sonra sorgulanır."
   },
   "dbUpgrade": {
     "title": "Veritabanı sürümü çok yeni",
@@ -3028,7 +3026,6 @@
       "title": "Günlük Hafıza",
       "sectionTitle": "Günlük Hafıza",
       "cardTitle": "Günlük Bellek Dosyaları",
-      "cardDescription": "Günlük anılara göz atın ve yönetin",
       "createToday": "Bellek Ekle",
       "empty": "Henüz günlük hafıza dosyası yok",
       "loadFailed": "Günlük bellek dosyaları yüklenemedi",
@@ -3059,7 +3056,6 @@
     "selectProtocol": "API Protokolünü seçin",
     "apiProtocolHint": "Sağlayıcının API'si ile uyumlu protokol türünü seçin. Çoğu sağlayıcı OpenAI Tamamlamalar biçimini kullanır.",
     "baseUrl": "API Uç Nokta",
-    "baseUrlHint": "Sağlayıcının API uç nokta adresi.",
     "models": "Model Yapılandırması",
     "addModel": "Model Ekle",
     "selectDefaultModel": "Varsayılan Modeli Seçin",
@@ -3083,7 +3079,6 @@
     "userAgentHint": "Bazı sağlayıcılar, düzgün çalışması için bir tarayıcı Kullanıcı Aracısı başlığına ihtiyaç duyar.",
     "env": {
       "title": "Ortam Değişkenleri",
-      "description": "openclaw.json'daki ortam değişkenlerini yönetin (API anahtarları, özel değişkenler vb.)",
       "editorHint": "Env bölümünün tamamını JSON olarak düzenleyin. env.vars ve env.shellEnv gibi iç içe geçmiş nesneler desteklenir.",
       "objectRequired": "OpenClaw env bir JSON nesnesi olmalıdır.",
       "invalidJson": "OpenClaw ortamı geçerli JSON olmalıdır.",
@@ -3098,7 +3093,6 @@
     },
     "tools": {
       "title": "Araç İzinleri",
-      "description": "openclaw.json'daki araç izinlerini yönetin (izin ver/reddet listeleri)",
       "profile": "İzin Profili",
       "profileMinimal": "Asgari",
       "profileCoding": "Kodlama",
@@ -3152,7 +3146,6 @@
   "hermes": {
     "form": {
       "baseUrl": "API Uç Nokta",
-      "baseUrlHint": "Bu sağlayıcının API uç nokta URL'si.",
       "providerKey": "Sağlayıcı Anahtarı",
       "providerKeyPlaceholder": "my-provider",
       "providerKeyHint": "Yalnızca küçük harfler, sayılar ve kısa çizgiler. config.yaml dosyasında sağlayıcı adı olarak kullanılır.",
@@ -3161,7 +3154,6 @@
       "providerKeyInvalid": "Sağlayıcı anahtarı yalnızca küçük harfler, sayılar ve kısa çizgiler içerebilir",
       "providerKeyDuplicate": "Bu sağlayıcı anahtarı zaten mevcut",
       "apiMode": "API Modu",
-      "apiModeHint": "Sağlayıcı API protokolü. Uç noktanızla eşleşen formatı seçin.",
       "apiModeChatCompletions": "OpenAI Sohbet Tamamlamaları",
       "apiModeAnthropicMessages": "Anthropic Mesajları",
       "apiModeCodexResponses": "OpenAI Yanıtları",
@@ -4239,7 +4231,7 @@
     },
     "active": "aktif",
     "activeTitle": "{{mode}} aktif",
-    "noProvider": "(yok)",
+    "noProvider": "yok",
     "failover": "Yedek sağlayıcıya geçiş",
     "routeSettings": "Yönlendirme ayarları",
     "routeSettingsTitle": "Yönlendirme ayarları",
@@ -4462,6 +4454,10 @@
       "text": "Kredi ≈ {{usd}}",
       "usd": "≈ {{usd}}",
       "detail": "Kredi bakiyesi {{balance}} · ≈ {{usd}}, API fiyatlarında · yalnızca limitleriniz dolduktan sonra kullanılır"
+    },
+    "windows": {
+      "title": "Tüm kotalar",
+      "showAll": "Tüm kotaları göster"
     }
   },
   "appMatrix": {
@@ -4847,7 +4843,8 @@
       "helpTitle": "{{service}} hesapları nasıl kullanılır?",
       "copilotHelp": "Claude Code ve Claude Desktop'deki GitHub Copilot ön ayarları tarafından kullanılır. Seçilmiş bir hesaba sahip olmayan sağlayıcılar Varsayılan hesabı kullanır.",
       "chatgptHelp": "Claude Code ve Claude Desktop'deki ChatGPT ön ayarları ve Codex'nin resmi oturum açma bağlaması tarafından kullanılır. Seçilmiş bir hesaba sahip olmayan sağlayıcılar Varsayılan hesabı kullanır.",
-      "xaiHelp": "Claude Code, Claude Desktop ve Codex'deki xAI ön ayarları tarafından kullanılır. Seçilmiş bir hesaba sahip olmayan sağlayıcılar Varsayılan hesabı kullanır."
+      "xaiHelp": "Claude Code, Claude Desktop ve Codex'deki xAI ön ayarları tarafından kullanılır. Seçilmiş bir hesaba sahip olmayan sağlayıcılar Varsayılan hesabı kullanır.",
+      "agyHelp": "Antigravity CLI (agy) resmî oturum açma hesapları. agy aynı anda yalnızca bir hesapla oturum açabilir. Hesap değiştirme, agy oturumunu seçilen hesapla değiştirir; daha sonra başlatılan agy oturumları bu hesabı kullanır. agy'nin mevcut hesabı buraya otomatik eklenir; başka hesaba geçişte kaybolmaz."
     },
     "addAccount": "Hesap ekle",
     "groupMenu": "{{service}} için daha fazla eylem",
@@ -4878,7 +4875,9 @@
       "copy": "Kodu kopyala",
       "copied": "Kod kopyalandı.",
       "open": "Yetkilendirme sayfasını açın",
-      "note": "Tarayıcınızda yetkilendirme sayfası açık; bitirdiğinizde bu kendi kendine güncellenir. {{service}}'nin kullanım koşullarına dikkat edin."
+      "note": "Tarayıcınızda yetkilendirme sayfası açık; bitirdiğinizde bu kendi kendine güncellenir. {{service}}'nin kullanım koşullarına dikkat edin.",
+      "browserNote": "{{service}} oturum açma sayfası tarayıcınızda açıldı. Oturum açıp erişim izni verdiğinizde bu ekran otomatik güncellenir.",
+      "reopen": "Oturum açma sayfasını yeniden aç"
     },
     "toast": {
       "added": "{{service}} hesabı eklendi.",
@@ -4889,6 +4888,18 @@
       "loading": "Kota kontrol ediliyor…",
       "refresh": "Kotayı yenile",
       "refreshAria": "{{login}} için kotayı yenileyin"
+    },
+    "agy": {
+      "reauthNote": "Oturum süresi doldu; bu hesaba geçiş yapılamıyor",
+      "addedOn": "Eklenme: {{date}}",
+      "statusLoadFailed": "Antigravity hesapları okunamadı. Yeniden deneyin.",
+      "empty": "Henüz Antigravity hesabı yok. agy'nin oturum açtığı hesap burada otomatik görünür.",
+      "login": "Google ile oturum aç",
+      "current": "agy tarafından kullanılıyor",
+      "switchTo": "agy oturumunu bu hesaba geçir",
+      "removeNote": "agy oturumu açık kalır. agy bu hesabı kullanıyorsa kaldırıldıktan sonra da çalışmaya devam eder.",
+      "switched": "Hesap değiştirildi. Yeni agy oturumları bu hesabı kullanacak.",
+      "switchedWhileRunning": "Hesap değiştirildi. agy çalışıyor: açık oturumlar önceki hesabı kullanmaya devam eder ve onu yeniden kaydedebilir. agy uygulamasından çıkıp yeniden açın."
     }
   },
   "requestDiagnostics": {

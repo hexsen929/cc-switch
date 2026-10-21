@@ -8,12 +8,15 @@ import { resolveManagedAccountId } from "@/lib/authBinding";
 import { PROVIDER_TYPES } from "@/config/constants";
 import { resolveDisplayUsage, type LastGoodSnapshot } from "./queries";
 import { extractErrorMessage } from "@/utils/errorUtils";
+import { AGY_CURRENT_SCOPE_KEY, agyCurrentQuotaKey } from "./agyCurrentQuota";
 
 const REFETCH_INTERVAL = 5 * 60 * 1000; // 5 minutes
 
 export const subscriptionKeys = {
   all: ["subscription"] as const,
   quota: (appId: AppId) => [...subscriptionKeys.all, "quota", appId] as const,
+  agyCurrentScope: AGY_CURRENT_SCOPE_KEY,
+  agyCurrentQuota: agyCurrentQuotaKey,
 };
 
 /**
@@ -82,13 +85,25 @@ export function useSubscriptionQuota(
   autoQuery = false,
   autoQueryIntervalMinutes = 5,
 ) {
+  // React Query owns the generation, so mounted observers and future mounts share it.
+  // Other apps retain their existing key and keep-last-good identity.
+  const { data: agyScope = 0 } = useQuery({
+    queryKey: subscriptionKeys.agyCurrentScope,
+    queryFn: () => 0,
+    initialData: 0,
+    enabled: false,
+    staleTime: Infinity,
+  });
   const refetchInterval =
     autoQuery && autoQueryIntervalMinutes > 0
       ? Math.max(autoQueryIntervalMinutes, 1) * 60 * 1000
       : false;
 
   const query = useQuery({
-    queryKey: subscriptionKeys.quota(appId),
+    queryKey:
+      appId === "agy"
+        ? subscriptionKeys.agyCurrentQuota(agyScope)
+        : subscriptionKeys.quota(appId),
     queryFn: () => subscriptionApi.getQuota(appId),
     enabled:
       enabled &&
@@ -103,7 +118,10 @@ export function useSubscriptionQuota(
     retry: 1,
   });
 
-  return useQuotaKeepLastGood(query, appId);
+  return useQuotaKeepLastGood(
+    query,
+    appId === "agy" ? `agy:${agyScope}` : appId,
+  );
 }
 
 export interface UseCodexOauthQuotaOptions {
@@ -202,4 +220,35 @@ export function useXaiOauthQuotaByAccountId(
   });
 
   return useQuotaKeepLastGood(query, accountId ?? "default");
+}
+
+/**
+ * Antigravity 账号的剩余额度（按账号 ID，用该账号自己的令牌直接查，不用先切号）。
+ * 授权中心逐个账号、以及绑了这个账号的官方卡共用同一份缓存。
+ */
+export function useAgyAccountQuota(
+  accountId: string,
+  options: UseCodexOauthQuotaOptions = {},
+) {
+  const {
+    enabled = true,
+    autoQuery = false,
+    autoQueryIntervalMinutes = 5,
+  } = options;
+  const refetchInterval =
+    autoQuery && autoQueryIntervalMinutes > 0
+      ? Math.max(autoQueryIntervalMinutes, 1) * 60 * 1000
+      : false;
+  const query = useQuery({
+    queryKey: ["agy_oauth", "quota", accountId],
+    queryFn: () => subscriptionApi.getAgyAccountQuota(accountId),
+    enabled,
+    refetchInterval,
+    refetchIntervalInBackground: Boolean(refetchInterval),
+    refetchOnWindowFocus: Boolean(refetchInterval),
+    staleTime: REFETCH_INTERVAL,
+    retry: 1,
+  });
+
+  return useQuotaKeepLastGood(query, accountId);
 }

@@ -391,6 +391,8 @@ fn run_tool_lifecycle_silently(command_line: &str, _label: &str) -> Result<(), S
     // 避免用户默认 shell 为 fish/zsh 时 `set -e` 等语义不一致。
     let mut command = Command::new("bash");
     command.arg("-c").arg(command_line);
+    // Use the login shell's PATH for child node/npm, while retaining fork
+    // fallbacks for runtimes not registered in the user's shell rc files.
     if let Some(path) = build_lifecycle_execution_path() {
         command.env("PATH", path);
     }
@@ -408,7 +410,7 @@ fn build_lifecycle_execution_path() -> Option<std::ffi::OsString> {
 
     // 上游登录 shell 的 PATH 最接近 CLI 探测和用户终端的真实环境；fork 的目录扫描
     // 仍作为兜底，覆盖未写入 shell rc 的 nvm/fnm/mise/Volta/Homebrew 安装。
-    if let Some(login_path) = login_shell_path() {
+    if let Some(login_path) = login_shell_path(None) {
         let fallback = fallback_path.to_string_lossy();
         return Some(std::ffi::OsString::from(merge_path_segments(
             &login_path,
@@ -2997,7 +2999,8 @@ fn merge_path_segments(primary: &str, extra: &str) -> String {
 }
 
 /// 用与 `resolve_path_default` 相同的登录 shell 解析用户的真实 PATH，
-/// 供 `run_tool_lifecycle_silently` 注入给安装/升级脚本。
+/// 供 `run_tool_lifecycle_silently` 注入给安装/升级脚本，也供
+/// `run_detected_tool_command_with_timeout` 注入给运行时调用的 CLI。
 ///
 /// **要解决的不对称**：探测阶段（`try_get_version` / `resolve_path_default`）跑的是
 /// `$SHELL -lic`，会读 `.zshrc`/`.zprofile`，看得到 nvm / homebrew / volta；而执行阶段
@@ -3017,20 +3020,32 @@ fn merge_path_segments(primary: &str, extra: &str) -> String {
 /// 任何 shell 下格式都正确。写绝对路径又绕过了 alias / function / PATH 三重不确定性
 /// （交互式 shell 会加载用户 alias）。
 ///
-/// 解析不到时返回 `None`，调用方保持原有行为（不注入），不引入新的失败模式。
+/// 解析不到（含超过 `deadline`）时返回 `None`，调用方保持原有行为（不注入），
+/// 不引入新的失败模式。
 #[cfg(not(target_os = "windows"))]
-fn login_shell_path() -> Option<String> {
-    use std::process::Command;
+fn login_shell_path(deadline: Option<CommandDeadline>) -> Option<String> {
     let shell = std::env::var("SHELL")
         .ok()
         .filter(|s| is_valid_shell(s))
         .unwrap_or_else(|| "sh".to_string());
-    let flag = default_flag_for_shell(&shell);
-    let out = Command::new(shell)
-        .arg(flag)
+    login_shell_path_for_shell(&shell, deadline)
+}
+
+#[cfg(not(target_os = "windows"))]
+fn login_shell_path_for_shell(shell: &str, deadline: Option<CommandDeadline>) -> Option<String> {
+    use std::process::{Command, Stdio};
+    let flag = default_flag_for_shell(shell);
+    let mut cmd = Command::new(shell);
+    cmd.arg(flag)
         .arg("/usr/bin/env")
-        .output()
-        .ok()?;
+        // 与 `resolve_path_default` 相同：交互式 rc 不能读到继承来的 stdin，
+        // 也不能因持有控制终端被作业控制停住。
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    isolate_child_process_group(&mut cmd);
+    let child = cmd.spawn().ok()?;
+    let out = wait_child_output(child, deadline).ok()?;
     if !out.status.success() {
         return None;
     }
@@ -4225,10 +4240,20 @@ pub(crate) fn run_detected_tool_command_with_timeout(
         .ok_or_else(|| format!("Invalid {tool} executable path"))?;
     #[cfg(target_os = "windows")]
     let current_path = effective_path_string();
+    // GUI 启动时继承的是 launchd 的窄 PATH（/usr/bin:/bin:/usr/sbin:/sbin）。npm 装的 CLI
+    // 是 `#!/usr/bin/env node` 脚本，node 常不在工具自己的目录里（如 codex 在
+    // /opt/homebrew/bin、node 在 /usr/local/bin），只补工具目录会 exit 127（#8653）。
+    // 与安装/升级同样补上登录 shell 的 PATH。
     #[cfg(not(target_os = "windows"))]
-    let current_path = std::env::var_os("PATH")
-        .map(|value| value.to_string_lossy().into_owned())
-        .unwrap_or_default();
+    let current_path = {
+        let inherited = std::env::var_os("PATH")
+            .map(|value| value.to_string_lossy().into_owned())
+            .unwrap_or_default();
+        match login_shell_path(deadline) {
+            Some(login_path) => merge_path_segments(&login_path, &inherited),
+            None => inherited,
+        }
+    };
 
     #[cfg(target_os = "windows")]
     {
@@ -4760,6 +4785,7 @@ fn wsl_distro_from_path(path: &Path) -> Option<String> {
 #[tauri::command]
 pub async fn open_provider_terminal(
     state: State<'_, crate::store::AppState>,
+    agy_accounts: State<'_, crate::commands::AgyAccountState>,
     app: String,
     #[allow(non_snake_case)] providerId: String,
     cwd: Option<String>,
@@ -4776,7 +4802,10 @@ pub async fn open_provider_terminal(
         .ok_or_else(|| format!("提供商 {providerId} 不存在"))?;
 
     let launch = match app_type {
-        AppType::Agy => agy_terminal_launch(provider)?,
+        AppType::Agy => {
+            switch_agy_to_bound_account(&agy_accounts.0, provider).await?;
+            agy_terminal_launch(provider)?
+        }
         _ => {
             let env_vars = extract_env_vars_from_config(&provider.settings_config, &app_type);
             claude_terminal_launch(&env_vars, &providerId)?
@@ -4919,6 +4948,52 @@ fn claude_terminal_launch(
         batch_vars: Vec::new(),
         cleanup: vec![config_file],
     })
+}
+
+/// 官方卡绑了授权中心的账号时，先把 agy 的全局登录切到它（已经是它就不写）。没绑的卡跟着
+/// agy 当前的登录走。不能切号的平台（目前除 macOS 外）忽略绑定，照常打开。
+async fn switch_agy_to_bound_account(
+    accounts: &crate::services::agy_account::AgyAccountManager,
+    provider: &crate::provider::Provider,
+) -> Result<(), String> {
+    if !crate::services::provider::agy_direct::is_official(provider) {
+        return Ok(());
+    }
+    let Some(account_id) = provider
+        .meta
+        .as_ref()
+        .and_then(|meta| meta.managed_account_id_for("agy_oauth"))
+        .filter(|id| !id.trim().is_empty())
+    else {
+        return Ok(());
+    };
+    if !crate::services::agy_account::keychain::supported() {
+        log::info!("[AgyAccount] 这个平台不能切号，忽略卡片绑定的账号");
+        return Ok(());
+    }
+    if !accounts
+        .list()
+        .await
+        .iter()
+        .any(|account| account.id == account_id)
+    {
+        return Err(crate::error::AppError::localized(
+            "agy.account.bound_missing",
+            format!(
+                "「{}」绑定的 Antigravity 账号不在这台电脑的授权中心里：请先在授权中心添加它，或编辑这张卡改选账号",
+                provider.name
+            ),
+            format!(
+                "The Antigravity account bound to \"{}\" is not in this computer's Auth Center. Add it there, or edit the card to choose another account.",
+                provider.name
+            ),
+        )
+        .to_string());
+    }
+    accounts
+        .switch_to(&account_id)
+        .await
+        .map_err(|error| error.to_string())
 }
 
 /// Antigravity CLI：官方登录卡跑 `agy`，卡上设了模型就加 `--model`（只对这次会话生效）；
@@ -5927,23 +6002,30 @@ fn windows_start_command(
 }
 
 /// 同 `run_windows_start_command`，额外给启动的终端设置环境变量（`start` 会继承）。
+///
+/// stdio 指向 NUL、只等 `cmd` 的退出码，不能用 `output()` 捕获：`start` 打开的终端会
+/// 继承这里的 stdout/stderr 管道句柄，管道要等那个窗口和里面的进程全部退出才到 EOF，
+/// 调用就一直挂到用户关掉终端，界面也一直转圈（#6712）。启动失败仍能从退出码看出来。
 #[cfg(target_os = "windows")]
 fn run_windows_start_command_with_env(
     args: &[&str],
     terminal_name: &str,
     envs: &[(&str, &str)],
 ) -> Result<(), String> {
-    let output = windows_start_command(args, envs, &effective_path_string())
-        .output()
+    use std::process::Stdio;
+
+    let status = windows_start_command(args, envs, &effective_path_string())
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
         .map_err(|e| format!("启动 {} 失败: {e}", terminal_name))?;
 
-    if !output.status.success() {
-        let stderr = decode_command_output(&output.stderr);
+    if !status.success() {
         return Err(format!(
-            "{} 启动失败 (exit code: {:?}): {}",
+            "{} 启动失败 (exit code: {:?})",
             terminal_name,
-            output.status.code(),
-            stderr
+            status.code()
         ));
     }
 
@@ -6486,6 +6568,69 @@ mod tests {
 
     #[cfg(target_os = "windows")]
     #[test]
+    fn windows_terminal_start_returns_before_the_child_releases_inherited_handles() {
+        let root = tempfile::tempdir().unwrap();
+        let started = root.path().join("started.txt");
+        let release = root.path().join("release.txt");
+        let done = root.path().join("done.txt");
+        let value = r#"fixture \" & | %PATH% !literal! 中文"#;
+        let script = "[IO.File]::WriteAllText($env:CC_SWITCH_START_MARK, $env:CC_SWITCH_START_CARRIER); while (-not [IO.File]::Exists($env:CC_SWITCH_START_RELEASE)) { Start-Sleep -Milliseconds 25 }; [IO.File]::WriteAllText($env:CC_SWITCH_START_DONE, 'done')";
+        let encoded = powershell_encoded_command(script);
+        let entries = [
+            (
+                "CC_SWITCH_START_MARK",
+                started.to_string_lossy().into_owned(),
+            ),
+            (
+                "CC_SWITCH_START_RELEASE",
+                release.to_string_lossy().into_owned(),
+            ),
+            ("CC_SWITCH_START_DONE", done.to_string_lossy().into_owned()),
+            ("CC_SWITCH_START_CARRIER", value.to_string()),
+        ];
+        let (tx, rx) = std::sync::mpsc::channel();
+        std::thread::scope(|scope| {
+            scope.spawn(|| {
+                let envs: Vec<(&str, &str)> = entries
+                    .iter()
+                    .map(|(name, value)| (*name, value.as_str()))
+                    .collect();
+                let result = run_windows_start_command_with_env(
+                    &[
+                        "/B",
+                        "powershell",
+                        "-NoProfile",
+                        "-EncodedCommand",
+                        &encoded,
+                    ],
+                    "fixture terminal",
+                    &envs,
+                );
+                let _ = tx.send(result);
+            });
+            let early = rx.recv_timeout(std::time::Duration::from_secs(5));
+            let returned_before_release = early.is_ok();
+            // Release even on failure so a regressed output()-based wrapper
+            // cannot leave a permanently waiting background fixture behind.
+            std::fs::write(&release, "release").unwrap();
+            let result = early
+                .unwrap_or_else(|_| rx.recv_timeout(std::time::Duration::from_secs(15)).unwrap());
+            result.unwrap();
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(15);
+            while !done.is_file() && std::time::Instant::now() < deadline {
+                std::thread::sleep(std::time::Duration::from_millis(25));
+            }
+            assert!(done.is_file(), "the child must actually have run");
+            assert_eq!(std::fs::read_to_string(&started).unwrap(), value);
+            assert!(
+                returned_before_release,
+                "opening a terminal must not wait for its child to close stdout/stderr"
+            );
+        });
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
     fn windows_lifecycle_preserves_process_path_priority_and_failure() {
         let root = tempfile::tempdir().unwrap();
         let preferred = root.path().join("process tools");
@@ -6556,6 +6701,38 @@ mod tests {
             started.elapsed() < std::time::Duration::from_secs(5),
             "kill should return promptly instead of waiting out the sleep"
         );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn login_shell_path_uses_login_environment_and_respects_the_runtime_deadline() {
+        use std::os::unix::fs::PermissionsExt;
+        let root = tempfile::tempdir().unwrap();
+        let shell = root.path().join("sh");
+        std::fs::write(
+            &shell,
+            "#!/bin/sh\nprintf 'welcome\\nPATH=/login/node/bin:/usr/bin:/bin\\n'\n",
+        )
+        .unwrap();
+        std::fs::set_permissions(&shell, std::fs::Permissions::from_mode(0o700)).unwrap();
+        let path = login_shell_path_for_shell(
+            shell.to_str().unwrap(),
+            CommandDeadline::from_timeout(Some(std::time::Duration::from_secs(2))),
+        );
+        assert_eq!(path.as_deref(), Some("/login/node/bin:/usr/bin:/bin"));
+        assert_eq!(
+            merge_path_segments(path.as_deref().unwrap(), "/usr/bin:/fork/fallback"),
+            "/login/node/bin:/usr/bin:/bin:/fork/fallback"
+        );
+
+        std::fs::write(&shell, "#!/bin/sh\n/bin/sleep 5\n").unwrap();
+        let started = std::time::Instant::now();
+        assert!(login_shell_path_for_shell(
+            shell.to_str().unwrap(),
+            CommandDeadline::from_timeout(Some(std::time::Duration::from_millis(200)))
+        )
+        .is_none());
+        assert!(started.elapsed() < std::time::Duration::from_secs(3));
     }
 
     #[cfg(target_os = "windows")]

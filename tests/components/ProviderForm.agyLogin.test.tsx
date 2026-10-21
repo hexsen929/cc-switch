@@ -72,6 +72,45 @@ describe("Antigravity login and API authentication", () => {
     expect(settings.env.GOOGLE_GEMINI_BASE_URL).toBeUndefined();
   });
 
+  it("resets a reused official card's selected account when initial data changes", async () => {
+    const client = createTestQueryClient();
+    const onSubmit = vi.fn();
+    const ui = (accountId?: string) => (
+      <QueryClientProvider client={client}>
+        <ProviderForm
+          appId="agy"
+          providerId="bound"
+          submitLabel="save-provider"
+          onSubmit={onSubmit}
+          onCancel={vi.fn()}
+          initialData={{
+            name: "Bound official",
+            category: "official",
+            settingsConfig: { env: {}, config: {} },
+            meta: accountId
+              ? {
+                  authBinding: {
+                    source: "managed_account",
+                    authProvider: "agy_oauth",
+                    accountId,
+                  },
+                }
+              : {},
+          }}
+        />
+      </QueryClientProvider>
+    );
+    const view = render(ui("a"));
+    view.rerender(ui("b"));
+    fireEvent.click(screen.getByRole("button", { name: "save-provider" }));
+    await waitFor(() => expect(onSubmit).toHaveBeenCalledTimes(1));
+    expect(onSubmit.mock.calls[0][0].meta.authBinding?.accountId).toBe("b");
+    view.rerender(ui());
+    fireEvent.click(screen.getByRole("button", { name: "save-provider" }));
+    await waitFor(() => expect(onSubmit).toHaveBeenCalledTimes(2));
+    expect(onSubmit.mock.calls[1][0].meta.authBinding).toBeUndefined();
+  });
+
   it("saves a Google API key without requiring a custom endpoint", async () => {
     const onSubmit = renderLogin({ GEMINI_API_KEY: "fixture-key" });
     fireEvent.click(screen.getByRole("button", { name: "save-provider" }));

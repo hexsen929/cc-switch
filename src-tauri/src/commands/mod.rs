@@ -1,5 +1,6 @@
 #![allow(non_snake_case)]
 
+mod agy_account;
 mod auth;
 mod balance;
 mod claude_append_instructions;
@@ -43,6 +44,7 @@ mod usage;
 mod webdav_sync;
 mod workspace;
 
+pub use agy_account::*;
 pub use auth::*;
 pub use balance::*;
 pub use claude_append_instructions::*;

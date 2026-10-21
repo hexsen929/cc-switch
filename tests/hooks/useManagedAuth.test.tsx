@@ -4,6 +4,10 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { useManagedAuth } from "@/components/providers/forms/hooks/useManagedAuth";
 import { CODEX_OAUTH_DUPLICATE_ACCOUNT_ERROR } from "@/lib/api/auth";
+import {
+  AGY_CURRENT_SCOPE_KEY,
+  agyCurrentQuotaKey,
+} from "@/lib/query/agyCurrentQuota";
 
 const apiMocks = vi.hoisted(() => ({
   authGetStatus: vi.fn(),
@@ -12,9 +16,12 @@ const apiMocks = vi.hoisted(() => ({
   authCancelLogin: vi.fn(),
   authRemoveAccount: vi.fn(),
   authLogout: vi.fn(),
+  authSetDefaultAccount: vi.fn(),
+  agyAccountIsRunning: vi.fn(),
 }));
 const toastMocks = vi.hoisted(() => ({
   success: vi.fn(),
+  warning: vi.fn(),
 }));
 
 vi.mock("@/lib/api", () => ({
@@ -25,6 +32,10 @@ vi.mock("@/lib/api", () => ({
       apiMocks.authPollForAccount(...args),
     authCancelLogin: (...args: unknown[]) => apiMocks.authCancelLogin(...args),
     authLogout: (...args: unknown[]) => apiMocks.authLogout(...args),
+    authSetDefaultAccount: (...args: unknown[]) =>
+      apiMocks.authSetDefaultAccount(...args),
+    agyAccountIsRunning: (...args: unknown[]) =>
+      apiMocks.agyAccountIsRunning(...args),
     authRemoveAccount: (...args: unknown[]) =>
       apiMocks.authRemoveAccount(...args),
   },
@@ -40,6 +51,7 @@ vi.mock("@/lib/clipboard", () => ({
 vi.mock("sonner", () => ({
   toast: {
     success: toastMocks.success,
+    warning: toastMocks.warning,
   },
 }));
 
@@ -85,7 +97,54 @@ describe("useManagedAuth", () => {
     apiMocks.authCancelLogin.mockReset().mockResolvedValue(true);
     apiMocks.authRemoveAccount.mockReset().mockResolvedValue(undefined);
     apiMocks.authLogout.mockReset().mockResolvedValue(undefined);
+    apiMocks.authSetDefaultAccount.mockReset().mockResolvedValue(undefined);
+    apiMocks.agyAccountIsRunning.mockReset().mockResolvedValue(false);
   });
+
+  it.each([false, true])(
+    "clears the current AGY quota generation after a switch attempt (verification failure=%s)",
+    async (fails) => {
+      const queryClient = new QueryClient({
+        defaultOptions: { queries: { retry: false } },
+      });
+      queryClient.setQueryData(AGY_CURRENT_SCOPE_KEY, 0);
+      queryClient.setQueryData(agyCurrentQuotaKey(0), { oldAccount: "a" });
+      queryClient.setQueryData(["subscription", "quota", "codex"], {
+        untouched: true,
+      });
+      apiMocks.authGetStatus.mockResolvedValue({
+        provider: "agy_oauth",
+        authenticated: true,
+        default_account_id: "a",
+        accounts: [],
+      });
+      const { result } = renderHook(() => useManagedAuth("agy_oauth"), {
+        wrapper: createWrapper(queryClient),
+      });
+      await waitFor(() => expect(result.current.isStatusSuccess).toBe(true));
+      apiMocks.authGetStatus.mockResolvedValue({
+        provider: "agy_oauth",
+        authenticated: true,
+        default_account_id: "b",
+        accounts: [],
+      });
+      if (fails) {
+        apiMocks.authSetDefaultAccount.mockRejectedValue(
+          new Error("login was written but verification failed"),
+        );
+      }
+      act(() => result.current.setDefaultAccount("b"));
+      await waitFor(() =>
+        expect(queryClient.getQueryData(AGY_CURRENT_SCOPE_KEY)).toBe(1),
+      );
+      expect(queryClient.getQueryData(agyCurrentQuotaKey(0))).toBeUndefined();
+      expect(
+        queryClient.getQueryData(["subscription", "quota", "codex"]),
+      ).toEqual({ untouched: true });
+      await waitFor(() => expect(result.current.defaultAccountId).toBe("b"));
+      if (fails) expect(result.current.error).toContain("verification failed");
+    },
+  );
 
   it("starts reauthentication for the selected account", async () => {
     const { result } = renderHook(() => useManagedAuth("codex_oauth"), {
