@@ -91,6 +91,54 @@ describe("useAddProviderMutation", () => {
     );
   });
 
+  it.each([undefined, false])(
+    "preserves Kimi native provider keys and explicit archive-only choice (%s)",
+    async (addToLive) => {
+      const { wrapper } = createWrapper();
+      const { result } = renderHook(() => useAddProviderMutation("kimi"), {
+        wrapper,
+      });
+      const provider = await act(async () =>
+        result.current.mutateAsync({
+          name: "Kimi native profile",
+          providerKey: "kimi-native",
+          addToLive,
+          settingsConfig: {
+            provider: {
+              type: "openai",
+              base_url: "https://example.com/v1",
+              api_key: "fixture",
+            },
+            models: {
+              "kimi-native/model": { model: "model", max_context_size: 262144 },
+            },
+          },
+        }),
+      );
+      expect(provider.id).toBe("kimi-native");
+      expect(uuidMocks.generateUUID).not.toHaveBeenCalled();
+      expect(apiMocks.add).toHaveBeenCalledWith(
+        expect.objectContaining({ id: "kimi-native" }),
+        "kimi",
+        addToLive,
+        undefined,
+      );
+    },
+  );
+
+  it("rejects Kimi provider creation without a native key", async () => {
+    const { wrapper } = createWrapper();
+    const { result } = renderHook(() => useAddProviderMutation("kimi"), {
+      wrapper,
+    });
+    await act(async () => {
+      await expect(
+        result.current.mutateAsync({ name: "Missing key", settingsConfig: {} }),
+      ).rejects.toThrow("Provider key is required for kimi");
+    });
+    expect(apiMocks.add).not.toHaveBeenCalled();
+  });
+
   it("duplicates Claude Desktop official providers with a fresh id", async () => {
     const { wrapper } = createWrapper();
     const { result } = renderHook(

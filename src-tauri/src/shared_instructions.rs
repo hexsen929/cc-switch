@@ -164,6 +164,7 @@ fn target_paths() -> Result<Vec<(AppType, PathBuf)>, AppError> {
         AppType::Hermes,
         AppType::Pi,
         AppType::Mcode,
+        AppType::Kimi,
         AppType::Agy,
     ]
     .into_iter()

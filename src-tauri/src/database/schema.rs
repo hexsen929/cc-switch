@@ -71,6 +71,7 @@ impl Database {
             enabled_opencode BOOLEAN NOT NULL DEFAULT 0,
             enabled_mcode BOOLEAN NOT NULL DEFAULT 0,
             enabled_agy BOOLEAN NOT NULL DEFAULT 0,
+            enabled_kimi BOOLEAN NOT NULL DEFAULT 0,
             enabled_hermes BOOLEAN NOT NULL DEFAULT 0,
             enabled_pi BOOLEAN NOT NULL DEFAULT 0
         )",
@@ -105,6 +106,7 @@ impl Database {
             enabled_opencode BOOLEAN NOT NULL DEFAULT 0,
             enabled_mcode BOOLEAN NOT NULL DEFAULT 0,
             enabled_agy BOOLEAN NOT NULL DEFAULT 0,
+            enabled_kimi BOOLEAN NOT NULL DEFAULT 0,
             enabled_hermes BOOLEAN NOT NULL DEFAULT 0,
             installed_at INTEGER NOT NULL DEFAULT 0,
             content_hash TEXT,
@@ -744,6 +746,19 @@ impl Database {
                             }
                         }
                         Self::set_user_version(conn, 21)?;
+                    }
+                    21 => {
+                        for table in ["mcp_servers", "skills"] {
+                            if Self::table_exists(conn, table)? {
+                                Self::add_column_if_missing(
+                                    conn,
+                                    table,
+                                    "enabled_kimi",
+                                    "BOOLEAN NOT NULL DEFAULT 0",
+                                )?;
+                            }
+                        }
+                        Self::set_user_version(conn, 22)?;
                     }
                     _ => {
                         return Err(AppError::Database(format!(
@@ -4324,12 +4339,187 @@ mod tests {
     }
 
     #[test]
+    fn kimi_migration_preserves_existing_flags_and_defaults_to_disabled() -> Result<(), AppError> {
+        let conn = Connection::open_in_memory()?;
+        conn.execute_batch(
+            "CREATE TABLE mcp_servers (
+                id TEXT PRIMARY KEY,
+                enabled_codex BOOLEAN,
+                enabled_agy BOOLEAN,
+                enabled_mcode BOOLEAN
+             );
+             CREATE TABLE skills (
+                id TEXT PRIMARY KEY,
+                enabled_claude BOOLEAN,
+                enabled_agy BOOLEAN,
+                enabled_mcode BOOLEAN
+             );
+             INSERT INTO mcp_servers VALUES ('m', 1, 1, 1);
+             INSERT INTO skills VALUES ('s', 1, 1, 1);",
+        )?;
+        Database::set_user_version(&conn, 21)?;
+        Database::apply_schema_migrations_on_conn(&conn)?;
+        assert_eq!(Database::get_user_version(&conn)?, SCHEMA_VERSION);
+        for (table, flag) in [
+            ("mcp_servers", "enabled_codex"),
+            ("skills", "enabled_claude"),
+        ] {
+            let flags = conn.query_row(
+                &format!("SELECT {flag}, enabled_agy, enabled_mcode, enabled_kimi FROM {table}"),
+                [],
+                |row| {
+                    Ok((
+                        row.get::<_, bool>(0)?,
+                        row.get::<_, bool>(1)?,
+                        row.get::<_, bool>(2)?,
+                        row.get::<_, bool>(3)?,
+                    ))
+                },
+            )?;
+            assert_eq!(flags, (true, true, true, false));
+            let column: (bool, String) = conn.query_row(
+                &format!(
+                    "SELECT \"notnull\", dflt_value FROM pragma_table_info('{table}')
+                     WHERE name = 'enabled_kimi'"
+                ),
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )?;
+            assert_eq!(column, (true, "0".to_string()));
+            conn.execute(&format!("UPDATE {table} SET enabled_kimi = 1"), [])?;
+        }
+        Database::apply_schema_migrations_on_conn(&conn)?;
+        for table in ["mcp_servers", "skills"] {
+            let enabled: bool =
+                conn.query_row(&format!("SELECT enabled_kimi FROM {table}"), [], |row| {
+                    row.get(0)
+                })?;
+            assert!(
+                enabled,
+                "repeat migration must preserve {table}'s Kimi flag"
+            );
+        }
+        assert_eq!(Database::get_user_version(&conn)?, SCHEMA_VERSION);
+        Ok(())
+    }
+
+    #[test]
+    fn kimi_migration_handles_an_existing_column_on_either_table() -> Result<(), AppError> {
+        for existing_table in ["mcp_servers", "skills"] {
+            let conn = Connection::open_in_memory()?;
+            conn.execute_batch(
+                "CREATE TABLE mcp_servers (id TEXT PRIMARY KEY);
+                 CREATE TABLE skills (id TEXT PRIMARY KEY);
+                 INSERT INTO mcp_servers VALUES ('m');
+                 INSERT INTO skills VALUES ('s');",
+            )?;
+            conn.execute(
+                &format!(
+                    "ALTER TABLE {existing_table}
+                     ADD COLUMN enabled_kimi BOOLEAN NOT NULL DEFAULT 0"
+                ),
+                [],
+            )?;
+            conn.execute(&format!("UPDATE {existing_table} SET enabled_kimi = 1"), [])?;
+            Database::set_user_version(&conn, 21)?;
+
+            for _ in 0..2 {
+                Database::apply_schema_migrations_on_conn(&conn)?;
+
+                assert_eq!(Database::get_user_version(&conn)?, SCHEMA_VERSION);
+                for table in ["mcp_servers", "skills"] {
+                    let enabled: bool =
+                        conn.query_row(&format!("SELECT enabled_kimi FROM {table}"), [], |row| {
+                            row.get(0)
+                        })?;
+                    assert_eq!(enabled, table == existing_table);
+                }
+            }
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn kimi_migration_rolls_back_schema_and_version_then_can_retry() -> Result<(), AppError> {
+        use rusqlite::hooks::{AuthAction, AuthContext, Authorization};
+
+        fn deny_proxy_config_alter(context: AuthContext<'_>) -> Authorization {
+            match context.action {
+                AuthAction::AlterTable {
+                    table_name: "proxy_config",
+                    ..
+                } => Authorization::Deny,
+                _ => Authorization::Allow,
+            }
+        }
+
+        let conn = Connection::open_in_memory()?;
+        conn.execute_batch(
+            "CREATE TABLE mcp_servers (id TEXT PRIMARY KEY, enabled_codex BOOLEAN);
+             CREATE TABLE skills (id TEXT PRIMARY KEY, enabled_claude BOOLEAN);
+             CREATE TABLE proxy_config (app_type TEXT PRIMARY KEY);
+             INSERT INTO mcp_servers VALUES ('m', 1);
+             INSERT INTO skills VALUES ('s', 1);",
+        )?;
+        Database::set_user_version(&conn, 21)?;
+        // Fail the post-migration fork-column repair, after both Kimi columns and
+        // user_version=22 have already been written inside the savepoint.
+        conn.authorizer(Some(deny_proxy_config_alter));
+        let error = Database::apply_schema_migrations_on_conn(&conn)
+            .expect_err("post-migration schema repair must fail");
+        conn.authorizer(None::<fn(AuthContext<'_>) -> Authorization>);
+
+        assert!(error.to_string().contains("codex_chatgpt_auth_takeover"));
+        assert!(
+            conn.is_autocommit(),
+            "failed migration must release its savepoint"
+        );
+        assert_eq!(Database::get_user_version(&conn)?, 21);
+        for table in ["mcp_servers", "skills"] {
+            assert!(!Database::has_column(&conn, table, "enabled_kimi")?);
+            assert!(!Database::has_column(&conn, table, "enabled_mcode")?);
+        }
+
+        Database::apply_schema_migrations_on_conn(&conn)?;
+        assert_eq!(Database::get_user_version(&conn)?, SCHEMA_VERSION);
+        for (table, flag) in [
+            ("mcp_servers", "enabled_codex"),
+            ("skills", "enabled_claude"),
+        ] {
+            let flags: (bool, bool) = conn.query_row(
+                &format!("SELECT {flag}, enabled_kimi FROM {table}"),
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )?;
+            assert_eq!(flags, (true, false));
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn kimi_clean_database_persists_mcp_and_skill_flags_independently() -> Result<(), AppError> {
+        let db = Database::memory()?;
+        let server = serde_json::from_value(serde_json::json!({"id":"m", "name":"m", "server":{"command":"echo"}, "apps":{"kimi":true,"codex":true}})).unwrap();
+        db.save_mcp_server(&server)?;
+        db.update_mcp_server_app_enabled("m", &crate::app_config::AppType::Kimi, false)?;
+        let saved = db.get_all_mcp_servers()?;
+        assert!(!saved["m"].apps.kimi);
+        assert!(saved["m"].apps.codex);
+        let skill = serde_json::from_value(serde_json::json!({"id":"s", "name":"s", "description":"", "directory":"s", "apps":{"kimi":true,"claude":true}, "installedAt":0})).unwrap();
+        db.save_skill(&skill)?;
+        let saved = db.get_installed_skill("s")?.unwrap();
+        assert!(saved.apps.kimi && saved.apps.claude);
+        assert!(db.get_all_installed_skills()?["s"].apps.kimi);
+        Ok(())
+    }
+
+    #[test]
     fn agy_migration_preserves_existing_flags_and_defaults_to_disabled() -> Result<(), AppError> {
         let conn = Connection::open_in_memory()?;
         conn.execute_batch("CREATE TABLE mcp_servers(id TEXT PRIMARY KEY, enabled_gemini BOOLEAN); CREATE TABLE skills(id TEXT PRIMARY KEY, enabled_codex BOOLEAN); INSERT INTO mcp_servers VALUES ('m',1); INSERT INTO skills VALUES ('s',1);")?;
         Database::set_user_version(&conn, 20)?;
         Database::apply_schema_migrations_on_conn(&conn)?;
-        assert_eq!(Database::get_user_version(&conn)?, 21);
+        assert_eq!(Database::get_user_version(&conn)?, SCHEMA_VERSION);
         for (table, flag) in [
             ("mcp_servers", "enabled_gemini"),
             ("skills", "enabled_codex"),

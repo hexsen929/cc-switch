@@ -367,4 +367,105 @@ mod tests {
             assert!(validated_resume_target(&candidate, cwd, "agy", id, None).is_err());
         }
     }
+
+    #[test]
+    #[serial_test::serial]
+    fn kimi_resume_requires_a_fresh_native_source_command_and_cwd() {
+        struct RestoreKimiHome(Option<std::ffi::OsString>);
+        impl Drop for RestoreKimiHome {
+            fn drop(&mut self) {
+                match &self.0 {
+                    Some(previous) => std::env::set_var("KIMI_CODE_HOME", previous),
+                    None => std::env::remove_var("KIMI_CODE_HOME"),
+                }
+            }
+        }
+        let tmp = tempfile::tempdir().unwrap();
+        let home = tmp.path().join("kimi's home");
+        let _restore = RestoreKimiHome(std::env::var_os("KIMI_CODE_HOME"));
+        std::env::set_var("KIMI_CODE_HOME", &home);
+        let dir = home.join("sessions/workspace/session-main");
+        std::fs::create_dir_all(dir.join("agents/main")).unwrap();
+        let state = dir.join("state.json");
+        let wire = dir.join("agents/main/wire.jsonl");
+        std::fs::write(&wire, "").unwrap();
+        std::fs::write(
+            &state,
+            serde_json::json!({"title":"Native Kimi session","cwd":"/native/project"}).to_string(),
+        )
+        .unwrap();
+        let source = wire.to_string_lossy().into_owned();
+        let (command, cwd) =
+            session_manager::resume_session_target("kimi", "session-main", &source).unwrap();
+        assert!(command.contains("kimi --session session-main"));
+        assert_eq!(cwd.as_deref(), Some("/native/project"));
+        assert_eq!(
+            validated_resume_target(
+                &command,
+                cwd.as_deref(),
+                "kimi",
+                "session-main",
+                Some(&source),
+            )
+            .unwrap(),
+            (command.clone(), cwd.clone())
+        );
+        for (candidate, candidate_cwd, id, candidate_source) in [
+            (
+                format!("{command}; echo injected"),
+                cwd.as_deref(),
+                "session-main",
+                Some(source.as_str()),
+            ),
+            (command.clone(), None, "session-main", Some(source.as_str())),
+            (
+                command.clone(),
+                Some("/different/project"),
+                "session-main",
+                Some(source.as_str()),
+            ),
+            (
+                command.clone(),
+                cwd.as_deref(),
+                "different-id",
+                Some(source.as_str()),
+            ),
+            (command.clone(), cwd.as_deref(), "session-main", None),
+        ] {
+            assert!(validated_resume_target(
+                &candidate,
+                candidate_cwd,
+                "kimi",
+                id,
+                candidate_source,
+            )
+            .is_err());
+        }
+        let outside = tmp.path().join("outside.jsonl");
+        std::fs::write(&outside, "").unwrap();
+        assert!(session_manager::resume_session_target(
+            "kimi",
+            "session-main",
+            &outside.to_string_lossy(),
+        )
+        .is_err());
+
+        // The source still exists, but native state changes must invalidate a
+        // stale renderer cwd or a session which became archived/a child.
+        for native in [
+            serde_json::json!({"cwd":"/new/project"}),
+            serde_json::json!({"cwd":"/native/project","archived":true}),
+            serde_json::json!({"cwd":"/native/project","custom":{"session_kind":"child"}}),
+        ] {
+            std::fs::write(&state, native.to_string()).unwrap();
+            assert!(validated_resume_target(
+                &command,
+                cwd.as_deref(),
+                "kimi",
+                "session-main",
+                Some(&source),
+            )
+            .is_err());
+        }
+    }
 }

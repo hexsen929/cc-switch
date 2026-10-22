@@ -55,7 +55,7 @@ describe("sessionsApi · 阅读页命令（P2 契约）", () => {
     },
   );
 
-  it.each(["codex", "claude", "opencode", "mcode"])(
+  it.each(["codex", "claude", "opencode", "mcode", "kimi"])(
     "does not send a source-less %s launch to the backend",
     async (providerId) => {
       await expect(

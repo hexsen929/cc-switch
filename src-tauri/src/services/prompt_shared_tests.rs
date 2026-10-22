@@ -49,6 +49,7 @@ impl TempHome {
             ("HERMES_HOME", dir.path().join("hermes")),
             ("MINIMAX_DATA_DIR", dir.path().join("mcode")),
             ("MAVIS_DATA_DIR", dir.path().join("mcode")),
+            ("KIMI_CODE_HOME", dir.path().join("kimi")),
         ];
         let previous_env = variables
             .iter()
@@ -89,6 +90,7 @@ impl TempHome {
             AppType::Hermes,
             AppType::Pi,
             AppType::Mcode,
+            AppType::Kimi,
             AppType::Agy,
         ] {
             assert!(prompt_file_path(&app)
@@ -294,6 +296,64 @@ fn agy_shared_overlay_is_opt_in_refreshes_and_preserves_ordinary_prompt() {
 
 #[test]
 #[serial]
+fn kimi_keeps_shared_instructions_and_ordinary_prompt_global_in_additive_mode() {
+    let home = TempHome::new();
+    let state = home.state();
+    let app = AppType::Kimi;
+    let path = live_path(&app);
+    assert_eq!(path, home.dir.path().join("kimi/AGENTS.md"));
+    sync_from_settings().unwrap();
+    assert!(!path.exists(), "an unset shared source must remain opt-in");
+
+    // Even a stale/imported provider carrying an override must not hijack the
+    // global prompt: additive Kimi has no single current provider projection.
+    let mut provider = Provider::with_id(
+        "native".into(),
+        "Native".into(),
+        serde_json::json!({}),
+        None,
+    );
+    provider.meta = Some(ProviderMeta {
+        resource_overrides: Some(ProviderResourceOverrides {
+            prompt: Some(ProviderPromptOverrides {
+                enabled: true,
+                mode: ProviderPromptOverrideMode::Disabled,
+                prompt_id: None,
+            }),
+            ..Default::default()
+        }),
+        ..Default::default()
+    });
+    state.db.save_provider(app.as_str(), &provider).unwrap();
+    state
+        .db
+        .set_current_provider(app.as_str(), &provider.id)
+        .unwrap();
+    let ordinary = "# Kimi global rules\nKeep this body unchanged.\n";
+    state
+        .db
+        .save_prompt(app.as_str(), &preset("kimi-main", ordinary, false))
+        .unwrap();
+    PromptService::enable_prompt(&state, app.clone(), "kimi-main").unwrap();
+    assert_eq!(live(&app), ordinary);
+
+    home.shared(Some("SHARED_KIMI_RULE"));
+    assert_overlay(&app, ordinary, "SHARED_KIMI_RULE");
+    home.shared(Some("UPDATED_KIMI_RULE"));
+    PromptService::sync_to_live(&state, app.clone()).unwrap();
+    assert_overlay(&app, ordinary, "UPDATED_KIMI_RULE");
+    assert!(!live(&app).contains("SHARED_KIMI_RULE"));
+    home.shared(None);
+    assert_eq!(live(&app), ordinary);
+    assert_eq!(
+        state.db.get_prompts(app.as_str()).unwrap()["kimi-main"].content,
+        ordinary
+    );
+    assert_database_is_ordinary(&state, &app);
+}
+
+#[test]
+#[serial]
 fn formerly_contaminated_codex_database_cannot_resurrect_an_old_shared_block() {
     let home = TempHome::new();
     let state = home.state();
@@ -336,6 +396,7 @@ fn a_shared_only_file_is_not_imported_as_an_ordinary_prompt() {
         AppType::Claude,
         AppType::Pi,
         AppType::Mcode,
+        AppType::Kimi,
         AppType::Agy,
     ] {
         assert_eq!(

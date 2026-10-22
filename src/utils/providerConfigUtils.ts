@@ -57,6 +57,10 @@ export const getApiKeyFromConfig = (
       return config.apiKey;
     }
 
+    if (appType === "kimi")
+      return typeof config?.provider?.api_key === "string"
+        ? config.provider.api_key
+        : "";
     const env = config?.env;
 
     if (!env) return "";
@@ -1183,6 +1187,7 @@ export const extractProviderBaseUrl = (
   }
 
   const directBaseUrl =
+    (isPlainObject(object.provider) ? object.provider.base_url : undefined) ||
     object.baseUrl ||
     object.base_url ||
     object.options?.baseURL ||

@@ -664,6 +664,7 @@ fn project_dir_for(source: &ValidatedSource) -> Option<PathBuf> {
         "pi" => pi::scan_sessions(),
         "mcode" => mcode::scan_sessions(),
         "agy" => super::providers::agy::scan_sessions(),
+        "kimi" => super::providers::kimi::scan_sessions(),
         _ => return None,
     };
     let project = sessions
@@ -1342,5 +1343,49 @@ mod tests {
         assert!(canonical_local_image("relative.png").is_err());
         assert!(canonical_local_image("/tmp/x.svg").is_err());
         assert!(canonical_local_image("/etc/passwd").is_err());
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn kimi_markdown_images_use_only_the_native_sessions_project_directory() {
+        struct RestoreKimiHome(Option<std::ffi::OsString>);
+        impl Drop for RestoreKimiHome {
+            fn drop(&mut self) {
+                match &self.0 {
+                    Some(previous) => std::env::set_var("KIMI_CODE_HOME", previous),
+                    None => std::env::remove_var("KIMI_CODE_HOME"),
+                }
+            }
+        }
+        let tmp = tempdir().unwrap();
+        let home = tmp.path().join("kimi");
+        let _restore = RestoreKimiHome(std::env::var_os("KIMI_CODE_HOME"));
+        std::env::set_var("KIMI_CODE_HOME", &home);
+        let dir = home.join("sessions/workspace/session-main");
+        std::fs::create_dir_all(dir.join("agents/main")).unwrap();
+        let project = tmp.path().join("project");
+        std::fs::create_dir(&project).unwrap();
+        std::fs::write(
+            dir.join("state.json"),
+            serde_json::json!({"cwd":project.to_string_lossy()}).to_string(),
+        )
+        .unwrap();
+        let wire = dir.join("agents/main/wire.jsonl");
+        std::fs::write(&wire, "").unwrap();
+        let source = validate_source("kimi", &wire.to_string_lossy()).unwrap();
+        let image = |path: PathBuf| ImageRef {
+            source: ImageSource::LocalFile {
+                path: path.to_string_lossy().into_owned(),
+            },
+            media_type: "image/png".into(),
+            size: 16,
+            alt: None,
+        };
+        let allowed = project.join("result.png");
+        std::fs::write(&allowed, vec![7u8; 16]).unwrap();
+        assert_eq!(load_image(&source, &image(allowed)).unwrap(), vec![7u8; 16]);
+        let outside = tmp.path().join("outside.png");
+        std::fs::write(&outside, vec![8u8; 16]).unwrap();
+        assert!(load_image(&source, &image(outside)).is_err());
     }
 }

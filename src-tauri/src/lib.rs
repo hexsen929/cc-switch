@@ -27,6 +27,8 @@ mod grok_config;
 pub mod hermes_config;
 mod init_status;
 mod jsonc_document;
+mod kimi_config;
+mod kimi_session;
 mod lightweight;
 #[cfg(target_os = "linux")]
 mod linux_fix;

@@ -354,21 +354,26 @@ export const SessionReaderHeader = memo(function SessionReaderHeader({
           {t("sessionManager.deleteEllipsis", { defaultValue: "删除…" })}
         </DropdownMenuItem>
         {!deletable &&
-          (readOnly || ["mcode", "agy"].includes(session.providerId)) && (
+          (readOnly ||
+            ["mcode", "agy", "kimi"].includes(session.providerId)) && (
             <p className="px-2.5 pb-1.5 text-caption text-fg-2">
               {readOnly
                 ? t("sessionManager.subagents.readOnlyHint", {
                     defaultValue: "子代理会话仅供阅读，请在主会话中继续操作",
                   })
                 : t(
-                    session.providerId === "agy"
-                      ? "sessionManager.agyDeleteHint"
-                      : "sessionManager.mcodeDeleteHint",
+                    session.providerId === "kimi"
+                      ? "kimi.deleteSessionHint"
+                      : session.providerId === "agy"
+                        ? "sessionManager.agyDeleteHint"
+                        : "sessionManager.mcodeDeleteHint",
                     {
                       defaultValue:
-                        session.providerId === "agy"
-                          ? "请在 Antigravity 中删除"
-                          : "请在 MiniMax Code 中删除",
+                        session.providerId === "kimi"
+                          ? "请在 Kimi Code 中删除"
+                          : session.providerId === "agy"
+                            ? "请在 Antigravity 中删除"
+                            : "请在 MiniMax Code 中删除",
                     },
                   )}
             </p>

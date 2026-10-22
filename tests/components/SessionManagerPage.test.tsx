@@ -431,8 +431,8 @@ describe("SessionManagerPage", () => {
     await openAppMenu();
     const menu = await screen.findByRole("menu");
     const items = within(menu).getAllByRole("menuitemradio");
-    // 全部应用 + 10 个来源，按会话数从多到少
-    expect(items).toHaveLength(11);
+    // 全部应用 + 11 个来源，按会话数从多到少
+    expect(items).toHaveLength(12);
     expect(items[0]).toHaveTextContent("全部应用5");
     expect(items[1]).toHaveTextContent("Codex3");
     expect(items[items.length - 1]).toHaveTextContent("无会话");
@@ -463,6 +463,7 @@ describe("SessionManagerPage", () => {
         hermes: false,
         pi: false,
         mcode: false,
+        kimi: false,
         agy: false,
       },
     });
@@ -698,6 +699,7 @@ describe("SessionManagerPage", () => {
 
   it.each([
     { providerId: "codex", marker: {} },
+    { providerId: "kimi", marker: {} },
     { providerId: "agy", marker: { readOnly: true } },
     { providerId: "agy", marker: { role: "subagent" as const } },
     { providerId: "agy", marker: { parentSessionId: "missing-parent" } },

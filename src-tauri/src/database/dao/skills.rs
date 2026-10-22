@@ -23,7 +23,7 @@ impl Database {
             .prepare(
                 "SELECT id, name, description, directory, repo_owner, repo_name, repo_branch,
                         readme_url, enabled_claude, enabled_codex, enabled_gemini, enabled_grokbuild,
-                        enabled_opencode, enabled_hermes, installed_at, content_hash, updated_at, enabled_mcode, enabled_agy
+                        enabled_opencode, enabled_hermes, installed_at, content_hash, updated_at, enabled_mcode, enabled_agy, enabled_kimi
                  FROM skills ORDER BY name ASC",
             )
             .map_err(|e| AppError::Database(e.to_string()))?;
@@ -49,6 +49,7 @@ impl Database {
                         pi: false,
                         mcode: row.get(17)?,
                         agy: row.get(18)?,
+                        kimi: row.get(19)?,
                     },
                     installed_at: row.get(14)?,
                     content_hash: row.get(15)?,
@@ -72,7 +73,7 @@ impl Database {
             .prepare(
                 "SELECT id, name, description, directory, repo_owner, repo_name, repo_branch,
                         readme_url, enabled_claude, enabled_codex, enabled_gemini, enabled_grokbuild,
-                        enabled_opencode, enabled_hermes, installed_at, content_hash, updated_at, enabled_mcode, enabled_agy
+                        enabled_opencode, enabled_hermes, installed_at, content_hash, updated_at, enabled_mcode, enabled_agy, enabled_kimi
                  FROM skills WHERE id = ?1",
             )
             .map_err(|e| AppError::Database(e.to_string()))?;
@@ -97,6 +98,7 @@ impl Database {
                     pi: false,
                     mcode: row.get(17)?,
                     agy: row.get(18)?,
+                    kimi: row.get(19)?,
                 },
                 installed_at: row.get(14)?,
                 content_hash: row.get(15)?,
@@ -118,8 +120,8 @@ impl Database {
             "INSERT OR REPLACE INTO skills
              (id, name, description, directory, repo_owner, repo_name, repo_branch,
               readme_url, enabled_claude, enabled_codex, enabled_gemini, enabled_grokbuild, enabled_opencode, enabled_hermes,
-              installed_at, content_hash, updated_at, enabled_mcode, enabled_agy)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19)",
+              installed_at, content_hash, updated_at, enabled_mcode, enabled_agy, enabled_kimi)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20)",
             params![
                 skill.id,
                 skill.name,
@@ -140,6 +142,7 @@ impl Database {
                 skill.updated_at,
                 skill.apps.mcode,
                 skill.apps.agy,
+                skill.apps.kimi,
             ],
         )
         .map_err(|e| AppError::Database(e.to_string()))?;
@@ -208,8 +211,8 @@ impl Database {
         let conn = lock_conn!(self.conn);
         let affected = conn
             .execute(
-                "UPDATE skills SET enabled_claude = ?1, enabled_codex = ?2, enabled_gemini = ?3, enabled_grokbuild = ?4, enabled_opencode = ?5, enabled_hermes = ?6, enabled_mcode = ?8, enabled_agy = ?9 WHERE id = ?7",
-                params![apps.claude, apps.codex, apps.gemini, apps.grokbuild, apps.opencode, apps.hermes, id, apps.mcode, apps.agy],
+                "UPDATE skills SET enabled_claude = ?1, enabled_codex = ?2, enabled_gemini = ?3, enabled_grokbuild = ?4, enabled_opencode = ?5, enabled_hermes = ?6, enabled_mcode = ?8, enabled_agy = ?9, enabled_kimi = ?10 WHERE id = ?7",
+                params![apps.claude, apps.codex, apps.gemini, apps.grokbuild, apps.opencode, apps.hermes, id, apps.mcode, apps.agy, apps.kimi],
             )
             .map_err(|e| AppError::Database(e.to_string()))?;
         Ok(affected > 0)
@@ -333,10 +336,81 @@ mod tests {
         }
     }
 
+    fn all_persisted_apps() -> SkillApps {
+        SkillApps {
+            claude: true,
+            codex: true,
+            gemini: true,
+            grokbuild: true,
+            opencode: true,
+            hermes: true,
+            mcode: true,
+            agy: true,
+            kimi: true,
+            ..Default::default()
+        }
+    }
+
+    fn assert_stored_skill_matches(db: &Database, expected: &InstalledSkill) {
+        let stored = db
+            .get_installed_skill(&expected.id)
+            .expect("query skill")
+            .expect("skill remains installed");
+        let all = db.get_all_installed_skills().expect("query all skills");
+        let expected = serde_json::to_value(expected).expect("serialize expected skill");
+        assert_eq!(
+            serde_json::to_value(&stored).expect("serialize single skill"),
+            expected
+        );
+        assert_eq!(
+            serde_json::to_value(&all[&stored.id]).expect("serialize listed skill"),
+            expected
+        );
+    }
+
+    #[test]
+    fn save_skill_round_trips_kimi_and_all_other_persisted_flags() {
+        let db = Database::memory().expect("memory db");
+        let expected = skill("owner/repo:skill", "original", all_persisted_apps());
+
+        db.save_skill(&expected).expect("seed skill");
+
+        assert_stored_skill_matches(&db, &expected);
+    }
+
+    #[test]
+    fn update_skill_apps_toggles_kimi_without_changing_other_flags_or_metadata() {
+        let db = Database::memory().expect("memory db");
+        let mut expected = skill("owner/repo:skill", "original", all_persisted_apps());
+        db.save_skill(&expected).expect("seed skill");
+
+        for enabled in [false, true] {
+            expected.apps.kimi = enabled;
+            assert!(db
+                .update_skill_apps(&expected.id, &expected.apps)
+                .expect("toggle Kimi flag"));
+
+            assert_stored_skill_matches(&db, &expected);
+        }
+    }
+
+    #[test]
+    fn update_skill_apps_does_not_insert_missing_kimi_skill() {
+        let db = Database::memory().expect("memory db");
+
+        assert!(!db
+            .update_skill_apps("missing", &SkillApps::only(&AppType::Kimi))
+            .expect("missing update is not an error"));
+        assert!(db
+            .get_installed_skill("missing")
+            .expect("query skill")
+            .is_none());
+    }
+
     #[test]
     fn update_skill_metadata_preserves_enabled_apps() {
         let db = Database::memory().expect("memory db");
-        let installed_apps = SkillApps::only(&AppType::Codex);
+        let installed_apps = all_persisted_apps();
         let original = skill("owner/repo:skill", "original", installed_apps.clone());
         db.save_skill(&original).expect("seed skill");
 
@@ -360,6 +434,29 @@ mod tests {
         assert_eq!(stored.content_hash, candidate.content_hash);
         assert_eq!(stored.updated_at, candidate.updated_at);
         assert_eq!(stored.apps, installed_apps);
+    }
+
+    #[test]
+    fn update_skill_metadata_does_not_restore_a_stale_kimi_flag() {
+        let db = Database::memory().expect("memory db");
+        let original = skill("owner/repo:skill", "original", all_persisted_apps());
+        db.save_skill(&original).expect("seed skill");
+
+        let mut candidate = original.clone();
+        candidate.name = "updated".to_string();
+        candidate.content_hash = Some("updated-hash".to_string());
+        candidate.updated_at = 42;
+        let mut current_apps = original.apps;
+        current_apps.kimi = false;
+        db.update_skill_apps(&candidate.id, &current_apps)
+            .expect("disable Kimi during metadata download");
+
+        assert!(db
+            .update_skill_metadata(&candidate)
+            .expect("update metadata"));
+
+        candidate.apps = current_apps;
+        assert_stored_skill_matches(&db, &candidate);
     }
 
     #[test]

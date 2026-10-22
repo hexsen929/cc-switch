@@ -116,21 +116,27 @@ describe("SearchMcpPanel", () => {
     ]);
   });
 
-  it("adds search MCP to Antigravity only when explicitly selected", async () => {
-    await renderPanel();
-    const agy = screen.getByRole("checkbox", { name: "Antigravity" });
-    expect(agy).not.toBeChecked();
-    fireEvent.click(agy);
-    fireEvent.click(
-      screen.getByRole("switch", { name: "启用统一联网搜索 MCP" }),
-    );
-    fireEvent.click(screen.getByRole("button", { name: "保存并添加到 MCP" }));
-    await waitFor(() =>
-      expect(mocks.invoke).toHaveBeenCalledWith("add_search_mcp_to_apps", {
-        apps: ["claude", "codex", "gemini", "agy"],
-      }),
-    );
-  });
+  it.each([
+    ["Antigravity", "agy"],
+    ["kimi", "kimi"],
+  ] as const)(
+    "adds search MCP to %s only when explicitly selected",
+    async (label, appId) => {
+      await renderPanel();
+      const target = screen.getByRole("checkbox", { name: label });
+      expect(target).not.toBeChecked();
+      fireEvent.click(target);
+      fireEvent.click(
+        screen.getByRole("switch", { name: "启用统一联网搜索 MCP" }),
+      );
+      fireEvent.click(screen.getByRole("button", { name: "保存并添加到 MCP" }));
+      await waitFor(() =>
+        expect(mocks.invoke).toHaveBeenCalledWith("add_search_mcp_to_apps", {
+          apps: ["claude", "codex", "gemini", appId],
+        }),
+      );
+    },
+  );
 
   it.each([
     [false, false, "搜索 MCP 未启用", "共享本地代理未运行"],

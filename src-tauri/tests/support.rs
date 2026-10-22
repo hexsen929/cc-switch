@@ -24,6 +24,9 @@ pub fn ensure_test_home() -> &'static Path {
         // 用 CC_SWITCH_TEST_HOME 显式覆盖，以确保测试不会污染真实用户目录。
         std::env::set_var("CC_SWITCH_TEST_HOME", &base);
         std::env::set_var("HOME", &base);
+        // Kimi's explicit data-home override takes precedence over HOME.
+        // Keep inherited developer or runner configuration outside the fixture.
+        std::env::set_var("KIMI_CODE_HOME", base.join(".kimi-code"));
         #[cfg(windows)]
         std::env::set_var("USERPROFILE", &base);
         // Claude Desktop 的配置目录在 Windows 上只读 LOCALAPPDATA（见 claude_desktop_config.rs
@@ -44,6 +47,7 @@ pub fn reset_test_fs() {
         ".codex",
         ".cc-switch",
         ".gemini",
+        ".kimi-code",
         ".grok",
         ".config",
         ".openclaw",

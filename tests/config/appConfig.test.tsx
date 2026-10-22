@@ -13,7 +13,7 @@ import { PROMPT_APP_IDS, promptAppOf } from "@/lib/query/prompts";
 import { promptFileName } from "@/components/prompts/promptUtils";
 
 describe("appConfig provider lifecycle", () => {
-  it.each(["opencode", "openclaw", "hermes", "pi", "mcode"])(
+  it.each(["opencode", "openclaw", "hermes", "pi", "mcode", "kimi"])(
     "classifies %s as additive",
     (appId) => {
       expect(isAdditiveAppId(appId)).toBe(true);
@@ -42,5 +42,22 @@ describe("Antigravity capabilities", () => {
     expect(PROMPT_APP_IDS).toContain("agy");
     expect(promptAppOf("agy")).toBe("agy");
     expect(promptFileName("agy")).toBe("AGENTS.md");
+  });
+});
+
+// Kimi keeps its own additive catalog and native authentication; global resources remain available.
+describe("Kimi Code capabilities", () => {
+  it("supports native global resources without enabling fork proxy or Profile modes", () => {
+    expect(isAdditiveAppId("kimi")).toBe(true);
+    expect(SKILLS_APP_IDS).toContain("kimi");
+    expect(MCP_APP_IDS).toContain("kimi");
+    expect(PROMPT_APP_IDS).toContain("kimi");
+    expect(promptAppOf("kimi")).toBe("kimi");
+    expect(promptFileName("kimi")).toBe("AGENTS.md");
+    expect(isProxyAppId("kimi")).toBe(false);
+    expect(isModeAppId("kimi")).toBe(false);
+    expect(isStackAppId("kimi")).toBe(false);
+    expect(usesEditorView("kimi")).toBe(false);
+    expect(APP_PROFILE_SCOPE.kimi).toBeUndefined();
   });
 });

@@ -14,7 +14,7 @@ import {
 import type { SessionMeta } from "@/types";
 
 describe("session utils", () => {
-  it.each(["agy", "mcode"])(
+  it.each(["agy", "mcode", "kimi"])(
     "keeps %s main sessions resumable but prevents CCS deletion",
     (providerId) => {
       const session: SessionMeta = {
@@ -24,11 +24,12 @@ describe("session utils", () => {
         resumeCommand: `${providerId} --conversation=main`,
       };
       expect(isReadOnlySession(session)).toBe(false);
+      expect(canResumeSession(session)).toBe(true);
       expect(canDeleteSession(session)).toBe(false);
     },
   );
 
-  it.each(["claude", "codex", "opencode", "agy"])(
+  it.each(["claude", "codex", "opencode", "agy", "kimi"])(
     "retains subagent read-only protection for %s",
     (providerId) => {
       const session: SessionMeta = {
@@ -39,6 +40,7 @@ describe("session utils", () => {
         resumeCommand: "resume child",
       };
       expect(isReadOnlySession(session)).toBe(true);
+      expect(canResumeSession(session)).toBe(false);
       expect(canDeleteSession(session)).toBe(false);
     },
   );
@@ -54,7 +56,7 @@ describe("session utils", () => {
     expect(canDeleteSession(session)).toBe(false);
   });
 
-  it.each(["claude", "codex", "gemini", "opencode", "mcode"])(
+  it.each(["claude", "codex", "gemini", "opencode", "mcode", "kimi"])(
     "requires a transcript source to resume %s",
     (providerId) => {
       expect(
