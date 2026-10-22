@@ -6612,14 +6612,92 @@ mod tests {
     #[cfg(target_os = "windows")]
     #[test]
     fn windows_terminal_start_returns_before_the_child_releases_inherited_handles() {
+        use windows_sys::Win32::{
+            Foundation::{CloseHandle, HANDLE, WAIT_OBJECT_0},
+            System::Threading::{
+                OpenProcess, TerminateProcess, WaitForSingleObject, PROCESS_SYNCHRONIZE,
+                PROCESS_TERMINATE,
+            },
+        };
+
+        // `done.txt` only means the script reached its last statement. Keep the
+        // actual child handle until PowerShell/CLR shutdown has closed every
+        // inherited handle, otherwise nextest can report a passed-but-leaky test.
+        struct FixtureProcess {
+            pid_file: PathBuf,
+            release: PathBuf,
+            handle: HANDLE,
+        }
+        impl FixtureProcess {
+            fn capture(&mut self) -> Result<(), String> {
+                if !self.handle.is_null() {
+                    return Ok(());
+                }
+                let deadline = std::time::Instant::now() + std::time::Duration::from_secs(15);
+                while std::time::Instant::now() < deadline {
+                    if let Some(pid) = std::fs::read_to_string(&self.pid_file)
+                        .ok()
+                        .and_then(|raw| raw.trim().parse::<u32>().ok())
+                    {
+                        // The private fixture wrote this PID and is still
+                        // waiting for release, so its identity cannot be reused.
+                        self.handle =
+                            unsafe { OpenProcess(PROCESS_SYNCHRONIZE | PROCESS_TERMINATE, 0, pid) };
+                        if !self.handle.is_null() {
+                            return Ok(());
+                        }
+                        return Err(format!(
+                            "open fixture process: {}",
+                            std::io::Error::last_os_error()
+                        ));
+                    }
+                    std::thread::sleep(std::time::Duration::from_millis(25));
+                }
+                Err("fixture did not publish its PID".to_string())
+            }
+
+            fn wait_for_exit(&self) -> bool {
+                // SAFETY: capture owns a live process handle; this operation
+                // observes that exact fixture, not a later process with its PID.
+                !self.handle.is_null()
+                    && unsafe { WaitForSingleObject(self.handle, 15_000) } == WAIT_OBJECT_0
+            }
+        }
+        impl Drop for FixtureProcess {
+            fn drop(&mut self) {
+                // This guard lives inside the scope callback, so unwind cleanup
+                // runs before scope joins a potentially pipe-blocked wrapper.
+                let _ = self.capture();
+                let _ = std::fs::write(&self.release, "release");
+                if !self.handle.is_null() {
+                    if !self.wait_for_exit() {
+                        // SAFETY: terminate only our captured fixture on timeout.
+                        unsafe {
+                            TerminateProcess(self.handle, 1);
+                        }
+                        let _ = self.wait_for_exit();
+                    }
+                    // SAFETY: this guard owns and closes the handle exactly once.
+                    unsafe {
+                        CloseHandle(self.handle);
+                    }
+                }
+            }
+        }
+
         let root = tempfile::tempdir().unwrap();
         let started = root.path().join("started.txt");
         let release = root.path().join("release.txt");
         let done = root.path().join("done.txt");
+        let pid_file = root.path().join("child.pid");
         let value = r#"fixture \" & | %PATH% !literal! 中文"#;
-        let script = "[IO.File]::WriteAllText($env:CC_SWITCH_START_MARK, $env:CC_SWITCH_START_CARRIER); while (-not [IO.File]::Exists($env:CC_SWITCH_START_RELEASE)) { Start-Sleep -Milliseconds 25 }; [IO.File]::WriteAllText($env:CC_SWITCH_START_DONE, 'done')";
+        let script = "[IO.File]::WriteAllText($env:CC_SWITCH_START_PID, [string]$PID); [IO.File]::WriteAllText($env:CC_SWITCH_START_MARK, $env:CC_SWITCH_START_CARRIER); while (-not [IO.File]::Exists($env:CC_SWITCH_START_RELEASE)) { Start-Sleep -Milliseconds 25 }; [IO.File]::WriteAllText($env:CC_SWITCH_START_DONE, 'done')";
         let encoded = powershell_encoded_command(script);
         let entries = [
+            (
+                "CC_SWITCH_START_PID",
+                pid_file.to_string_lossy().into_owned(),
+            ),
             (
                 "CC_SWITCH_START_MARK",
                 started.to_string_lossy().into_owned(),
@@ -6633,6 +6711,11 @@ mod tests {
         ];
         let (tx, rx) = std::sync::mpsc::channel();
         std::thread::scope(|scope| {
+            let mut fixture = FixtureProcess {
+                pid_file,
+                release: release.clone(),
+                handle: std::ptr::null_mut(),
+            };
             scope.spawn(|| {
                 let envs: Vec<(&str, &str)> = entries
                     .iter()
@@ -6653,16 +6736,19 @@ mod tests {
             });
             let early = rx.recv_timeout(std::time::Duration::from_secs(5));
             let returned_before_release = early.is_ok();
-            // Release even on failure so a regressed output()-based wrapper
-            // cannot leave a permanently waiting background fixture behind.
+            fixture
+                .capture()
+                .expect("capture the waiting child process");
+            // The early-return observation is already recorded. Only now release
+            // the child, then wait for real process exit rather than a file write.
             std::fs::write(&release, "release").unwrap();
             let result = early
                 .unwrap_or_else(|_| rx.recv_timeout(std::time::Duration::from_secs(15)).unwrap());
             result.unwrap();
-            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(15);
-            while !done.is_file() && std::time::Instant::now() < deadline {
-                std::thread::sleep(std::time::Duration::from_millis(25));
-            }
+            assert!(
+                fixture.wait_for_exit(),
+                "fixture must fully exit after release"
+            );
             assert!(done.is_file(), "the child must actually have run");
             assert_eq!(std::fs::read_to_string(&started).unwrap(), value);
             assert!(

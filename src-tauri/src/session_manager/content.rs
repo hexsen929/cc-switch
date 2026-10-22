@@ -639,13 +639,14 @@ fn read_local_image(canonical: &Path, allowed: &[PathBuf], max: u64) -> Result<V
     read_limited(canonical, max, TOO_LARGE_IMAGE)
 }
 
-/// 会话的项目目录：从该 provider 的会话列表里按 sourcePath 查（扫描有文件级缓存），
-/// 结果按 (provider, sourcePath) 记住。项目目录为文件系统根时不采用。
+/// 会话的项目目录：按已校验的规范化源身份匹配 provider 会话列表，不能直接比较
+/// sourcePath 文本（Windows 分隔符、verbatim 前缀及符号链接别名可能不同）。
+/// 文件源按规范化路径缓存；项目目录为文件系统根时不采用。
 fn project_dir_for(source: &ValidatedSource) -> Option<PathBuf> {
     static PROJECT_DIRS: LazyLock<Mutex<std::collections::HashMap<(String, String), PathBuf>>> =
         LazyLock::new(Default::default);
 
-    let key = (source.provider_id.clone(), source.raw.clone());
+    let key = (source.provider_id.clone(), source.load_path());
     if let Some(dir) = PROJECT_DIRS.lock().ok()?.get(&key) {
         return Some(dir.clone());
     }
@@ -669,7 +670,12 @@ fn project_dir_for(source: &ValidatedSource) -> Option<PathBuf> {
     };
     let project = sessions
         .into_iter()
-        .find(|meta| meta.source_path.as_deref() == Some(source.raw.as_str()))?
+        .find(|meta| {
+            meta.source_path.as_deref().is_some_and(|candidate_path| {
+                validate_source(&source.provider_id, candidate_path)
+                    .is_ok_and(|candidate| candidate.location == source.location)
+            })
+        })?
         .project_dir?;
     let dir = Path::new(&project).canonicalize().ok()?;
     // 文件系统根没有父目录：不把整个磁盘当作项目目录
@@ -1372,8 +1378,7 @@ mod tests {
         .unwrap();
         let wire = dir.join("agents/main/wire.jsonl");
         std::fs::write(&wire, "").unwrap();
-        let source = validate_source("kimi", &wire.to_string_lossy()).unwrap();
-        let image = |path: PathBuf| ImageRef {
+        let image = |path: &Path| ImageRef {
             source: ImageSource::LocalFile {
                 path: path.to_string_lossy().into_owned(),
             },
@@ -1383,9 +1388,30 @@ mod tests {
         };
         let allowed = project.join("result.png");
         std::fs::write(&allowed, vec![7u8; 16]).unwrap();
-        assert_eq!(load_image(&source, &image(allowed)).unwrap(), vec![7u8; 16]);
         let outside = tmp.path().join("outside.png");
         std::fs::write(&outside, vec![8u8; 16]).unwrap();
-        assert!(load_image(&source, &image(outside)).is_err());
+        // The scanner and IPC caller may spell the same source differently:
+        // Windows canonical paths add a verbatim prefix, while joins can keep
+        // mixed separators. A Unix dot-segment alias forces the same regression
+        // on every Unix platform instead of relying on temp-dir symlinks.
+        let requested_sources = vec![wire.canonicalize().unwrap(), wire];
+        #[cfg(not(windows))]
+        let requested_sources = std::iter::once(dir.join("agents/main/../main/wire.jsonl"))
+            .chain(requested_sources)
+            .collect::<Vec<_>>();
+        for requested in requested_sources {
+            let source = validate_source("kimi", &requested.to_string_lossy()).unwrap();
+            assert_eq!(
+                project_dir_for(&source),
+                Some(project.canonicalize().unwrap()),
+                "project lookup must use source identity, not raw path spelling: {}",
+                requested.display(),
+            );
+            assert_eq!(
+                load_image(&source, &image(&allowed)).unwrap(),
+                vec![7u8; 16]
+            );
+            assert!(load_image(&source, &image(&outside)).is_err());
+        }
     }
 }
