@@ -203,12 +203,13 @@ export function ManagedAccountsGroup({
     }
   };
 
-  const openPage = () => {
+  const openPage = async () => {
     const uri = login.deviceCode?.verification_uri;
-    if (uri) {
-      void settingsApi.openExternal(uri).catch((e) => {
-        console.debug("[AuthCenter] Failed to open authorization page:", e);
-      });
+    if (!uri) return;
+    try {
+      await settingsApi.openExternal(uri);
+    } catch (e) {
+      console.debug("[AuthCenter] Failed to open authorization page:", e);
     }
   };
 
