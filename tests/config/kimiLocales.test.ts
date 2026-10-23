@@ -23,6 +23,11 @@ describe("Kimi Code locale parity", () => {
       const own = leaves(locale.kimi);
       expect(Object.keys(own).sort()).toEqual(Object.keys(reference).sort());
       expect(Object.values(own).every((text) => text.trim())).toBe(true);
+      for (const [path, text] of Object.entries(reference)) {
+        expect(own[path].match(/\{\{[^}]+\}\}/g) ?? []).toEqual(
+          text.match(/\{\{[^}]+\}\}/g) ?? [],
+        );
+      }
       expect(locale.requestDiagnostics.title.trim()).not.toBe("");
     },
   );
