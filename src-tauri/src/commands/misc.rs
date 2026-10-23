@@ -6655,6 +6655,36 @@ mod tests {
 
     #[cfg(target_os = "windows")]
     #[test]
+    fn windows_terminal_start_child_fixture() {
+        // Only the parent fixture sets this on its child Command; ordinary test
+        // runs must not wait for a release marker or change process environment.
+        if std::env::var_os("CC_SWITCH_START_CHILD_FIXTURE").as_deref()
+            != Some(std::ffi::OsStr::new("1"))
+        {
+            return;
+        }
+
+        let path = |name| PathBuf::from(std::env::var_os(name).expect("fixture path must be set"));
+        let pid_file = path("CC_SWITCH_START_PID");
+        let unpublished_pid = pid_file.with_extension("pending");
+        std::fs::write(&unpublished_pid, std::process::id().to_string()).unwrap();
+        // Publish only a complete PID, so the parent cannot capture a partial
+        // decimal value belonging to an unrelated process.
+        std::fs::rename(&unpublished_pid, &pid_file).unwrap();
+        std::fs::write(
+            path("CC_SWITCH_START_MARK"),
+            std::env::var("CC_SWITCH_START_CARRIER").expect("fixture value must be set"),
+        )
+        .unwrap();
+        let release = path("CC_SWITCH_START_RELEASE");
+        while !release.is_file() {
+            std::thread::sleep(std::time::Duration::from_millis(25));
+        }
+        std::fs::write(path("CC_SWITCH_START_DONE"), "done").unwrap();
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
     fn windows_terminal_start_returns_before_the_child_releases_inherited_handles() {
         use windows_sys::Win32::{
             Foundation::{CloseHandle, HANDLE, WAIT_OBJECT_0},
@@ -6664,8 +6694,8 @@ mod tests {
             },
         };
 
-        // `done.txt` only means the script reached its last statement. Keep the
-        // actual child handle until PowerShell/CLR shutdown has closed every
+        // `done.txt` only means the fixture reached its last statement. Keep the
+        // actual child handle until the Rust test process has closed every
         // inherited handle, otherwise nextest can report a passed-but-leaky test.
         struct FixtureProcess {
             pid_file: PathBuf,
@@ -6735,9 +6765,14 @@ mod tests {
         let done = root.path().join("done.txt");
         let pid_file = root.path().join("child.pid");
         let value = r#"fixture \" & | %PATH% !literal! 中文"#;
-        let script = "[IO.File]::WriteAllText($env:CC_SWITCH_START_PID, [string]$PID); [IO.File]::WriteAllText($env:CC_SWITCH_START_MARK, $env:CC_SWITCH_START_CARRIER); while (-not [IO.File]::Exists($env:CC_SWITCH_START_RELEASE)) { Start-Sleep -Milliseconds 25 }; [IO.File]::WriteAllText($env:CC_SWITCH_START_DONE, 'done')";
-        let encoded = powershell_encoded_command(script);
+        // Re-enter only the private Rust fixture so publishing its PID needs no
+        // external PowerShell runtime, while still using the real `start /B`.
+        let executable = std::env::current_exe().unwrap();
+        let executable = executable
+            .to_str()
+            .expect("fixture executable must be UTF-8");
         let entries = [
+            ("CC_SWITCH_START_CHILD_FIXTURE", "1".to_string()),
             (
                 "CC_SWITCH_START_PID",
                 pid_file.to_string_lossy().into_owned(),
@@ -6768,10 +6803,11 @@ mod tests {
                 let result = run_windows_start_command_with_env(
                     &[
                         "/B",
-                        "powershell",
-                        "-NoProfile",
-                        "-EncodedCommand",
-                        &encoded,
+                        "", // `start` treats the first quoted argument as its window title.
+                        executable,
+                        "--exact",
+                        "commands::misc::tests::windows_terminal_start_child_fixture",
+                        "--nocapture",
                     ],
                     "fixture terminal",
                     &envs,
