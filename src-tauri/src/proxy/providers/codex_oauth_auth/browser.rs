@@ -335,11 +335,14 @@ mod tests {
                 "chatgpt_plan_type": "plus"
             }
         });
+        // Match test_codex_id_token: the shared identity parser also requires
+        // a decodable JWT header with a nonempty `alg`, not just `sub` claims.
+        let header = URL_SAFE_NO_PAD.encode(br#"{"alg":"none"}"#);
         OAuthTokenResponse {
             access_token: "fixture-access".into(),
             refresh_token: Some("fixture-refresh".into()),
             id_token: Some(format!(
-                "header.{}.signature",
+                "{header}.{}.",
                 URL_SAFE_NO_PAD.encode(serde_json::to_vec(&claims).unwrap())
             )),
             expires_in: Some(3600),
