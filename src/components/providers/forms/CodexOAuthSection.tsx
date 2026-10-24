@@ -13,6 +13,7 @@ import {
 } from "@/components/ui/select";
 import { Loader2, Plus, AlertTriangle, RefreshCw } from "lucide-react";
 import { useCodexOauth } from "./hooks/useCodexOauth";
+import type { CodexLoginMethod } from "@/lib/api/auth";
 import {
   ManagedAccountRemoveDialog,
   type ManagedAccountRemoveTarget,
@@ -95,6 +96,8 @@ export const CodexOAuthSection: React.FC<CodexOAuthSectionProps> = ({
   helpSide,
 }) => {
   const { t, i18n } = useTranslation();
+  const [loginMethod, setLoginMethod] =
+    React.useState<CodexLoginMethod>("browser");
 
   const {
     accounts,
@@ -117,7 +120,7 @@ export const CodexOAuthSection: React.FC<CodexOAuthSectionProps> = ({
     cancelAuth,
     logout,
     refetchStatus,
-  } = useCodexOauth();
+  } = useCodexOauth(loginMethod);
   const accountUsers = useManagedAccountUsers("codex_oauth", defaultAccountId);
   const [removeTarget, setRemoveTarget] =
     React.useState<ManagedAccountRemoveTarget | null>(null);
@@ -471,6 +474,30 @@ export const CodexOAuthSection: React.FC<CodexOAuthSectionProps> = ({
       })}
       loginLabel={t("codexOauth.loginWithChatGPT", "使用 ChatGPT 登录")}
       onAdd={addAccount}
+      loginOptions={
+        <div className="flex items-center gap-3 border-t border-border px-4 py-2">
+          <Label htmlFor="codex-login-method">
+            {t("codexOauth.loginMethod", "登录方式")}
+          </Label>
+          <Select
+            value={loginMethod}
+            onValueChange={(value) => setLoginMethod(value as CodexLoginMethod)}
+            disabled={isAddingAccount}
+          >
+            <SelectTrigger id="codex-login-method" className="w-[200px]">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="browser">
+                {t("codexOauth.browserLogin", "浏览器登录")}
+              </SelectItem>
+              <SelectItem value="device_code">
+                {t("codexOauth.deviceCodeLogin", "设备代码登录")}
+              </SelectItem>
+            </SelectContent>
+          </Select>
+        </div>
+      }
       canReauth
       onReauth={reauthAccount}
       onSetDefault={setDefaultAccount}

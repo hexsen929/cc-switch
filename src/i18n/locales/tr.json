@@ -1204,9 +1204,9 @@
       "contextWindow": "Bağlam penceresi",
       "maxTokens": "Maksimum çıkış tokenları",
       "compatibility": "Uyumluluk",
-      "compatibilityHint": "Uyumlu veya yerel uç noktalar için istek davranışını ayarlayın.",
+      "compatibilityHint": "Yalnızca OpenAI uyumlu olduğunu söyleyen bir uç nokta bazı istekleri reddettiğinde gerekir. Her seçenek uç noktanın bir farkını belirtir: örneğin supportsDeveloperRole = false, developer rolünü kabul etmediği; maxTokensField = max_tokens, yalnızca eski alan adını kabul ettiği anlamına gelir. Hazır ayarlar gerekenleri kendisi doldurur; boş bırakılırsa varsayılanlar kullanılır.",
       "addCompatibilityOption": "Ekle",
-      "noCompatibilityOptions": "Hiçbir uyumluluk seçeneği yapılandırılmadı",
+      "noCompatibilityOptions": "Ayarlanmadı — varsayılanlar kullanılır",
       "optionKey": "Seçenek",
       "optionValue": "Değer",
       "removeCompatibilityOption": "Uyumluluk seçeneğini kaldır",
@@ -1916,7 +1916,12 @@
     "retry": "Yeniden dene",
     "copyCode": "Kodu kopyala",
     "fastMode": "FAST modu",
-    "fastModeDescription": "Daha düşük gecikme süresi için service_tier=\"priority\" gönderin. Varsayılan olarak kapalı — etkinleştirilmesi ChatGPT kotanızı daha yüksek oranda tüketir."
+    "fastModeDescription": "Daha düşük gecikme süresi için service_tier=\"priority\" gönderin. Varsayılan olarak kapalı — etkinleştirilmesi ChatGPT kotanızı daha yüksek oranda tüketir.",
+    "loginMethod": "Oturum açma yöntemi",
+    "browserLogin": "Tarayıcıyla oturum aç",
+    "deviceCodeLogin": "Cihaz koduyla oturum aç",
+    "openBrowserLogin": "Tarayıcıyla oturum açmayı başlat",
+    "loginExpired": "Oturum açma süresi doldu. Lütfen yeniden deneyin."
   },
   "xaiOauth": {
     "authStatus": "xAI OAuth kimlik doğrulaması",
@@ -4245,6 +4250,7 @@
     "desktopNotConnected": "Bağlı değil",
     "newVersion": "{{version}} mevcut",
     "notRunnable": "Çalıştırılamıyor",
+    "updateNeedsNode": "{{version}} sürümü Node {{required}} gerektiriyor; bu kurulumda Node {{current}} çalışıyor. Önce Node'u yükseltin.",
     "otherInstalls": "{{count}} daha fazla yükleme",
     "installsFound": "{{count}} kurulum bulundu",
     "wslFlag": "Bayrak",
@@ -4261,10 +4267,9 @@
       "agy": "Resmî kurulum betiğiyle yüklenir",
       "omp": "Resmi komut dosyasıyla yüklenir"
     },
-    "ompDiscoveryDocsLink": "Belgeler: context-files (disabledProviders)",
-    "ompDiscoveryHelpTitle": "Oh My Pi'nin gerçekte yükledikleri",
-    "ompDiscoveryHelp": "Oh My Pi, kendi ~/.omp/agent yapılandırmasının yanı sıra diğer ajanların dizinlerinden (ör. Claude'un ~/.claude, Codex'in ~/.codex) MCP sunucularını, becerileri, komutları, kancaları, kuralları ve ayarları da keşfeder. Oh My Pi'nin gerçekte yüklediklerini CC Switch arayüzüyle uyumlu tutmak için ~/.omp/agent/config.yml içinde disabledProviders ile gereksiz keşif kaynaklarını kapatın (kimlikler belgelerle aynıdır, ör. claude, codex, gemini, opencode, github, agents).",
-    "updateNeedsNode": "{{version}} sürümü Node {{required}} gerektiriyor; bu kurulumda Node {{current}} çalışıyor. Önce Node'u yükseltin."
+    "sectionInstalled": "Yüklü · {{count}}",
+    "sectionNotInstalled": "Yüklü değil · {{count}}",
+    "dragHandle": "Sırasını değiştirmek için {{name}} öğesini sürükleyin"
   },
   "appPage": {
     "moreActions": "{{name}} için diğer işlemler",
@@ -4503,7 +4508,6 @@
     "used": "%{{value}} kullanıldı",
     "usedUp": "Tükendi",
     "balance": "Bakiye {{value}}",
-    "balanceUsedUp": "Bakiye tükendi",
     "planExpired": "Planın süresi doldu",
     "failed": "Kota bilgisi alınamıyor",
     "reason": {
@@ -4562,6 +4566,11 @@
       "on": "{{name}} · {{app}}: etkin",
       "off": "{{name}} · {{app}}: kapalı",
       "fail": "{{name}} · {{app}}: yazma başarısız oldu, yeniden denemek için tıklayın"
+    },
+    "ompDiscovery": {
+      "title": "Oh My Pi'nin gerçekte yükledikleri",
+      "help": "Oh My Pi, kendi ~/.omp/agent yapılandırmasının yanı sıra diğer ajanların dizinlerinden (ör. Claude'un ~/.claude, Codex'in ~/.codex) MCP sunucularını, becerileri, komutları, kancaları, kuralları ve ayarları da keşfeder. Oh My Pi'nin gerçekte yüklediklerini CC Switch arayüzüyle uyumlu tutmak için ~/.omp/agent/config.yml içinde disabledProviders ile gereksiz keşif kaynaklarını kapatın (kimlikler belgelerle aynıdır, ör. claude, codex, gemini, opencode, github, agents).",
+      "docsLink": "Oh My Pi'nin diğer ajanların yapılandırmasını yüklemesi nasıl engellenir"
     }
   },
   "mcpPage": {
@@ -5055,35 +5064,45 @@
     }
   },
   "omp": {
-    "current": {
-      "stateUnavailableHint": "Oh My Pi yapılandırması okunana kadar sağlayıcı değişiklikleri devre dışıdır.",
-      "readFailed": "Oh My Pi sağlayıcı yapılandırması okunamadı"
-    },
-    "errors": {
-      "fileTooLarge": "Oh My Pi yapılandırması 1 MiB sınırını aşıyor.",
-      "duplicateProvider": "Bu Oh My Pi sağlayıcı anahtarı zaten var.",
-      "externalChange": "Oh My Pi yapılandırması dışarıdan değiştirildi. Yenileyip tekrar deneyin.",
-      "invalidYaml": "Geçersiz Oh My Pi YAML. Kök ve providers birer eşleme olmalıdır.",
-      "providerMissing": "Bu Oh My Pi sağlayıcısı artık kayıtlı değil.",
-      "invalidMcp": "Oh My Pi MCP JSON geçersiz. Kök ve mcpServers nesne olmalıdır.",
-      "invalidProvider": "Geçersiz Oh My Pi sağlayıcısı. Gerekli alanları, API biçimini ve alan türlerini kontrol edin.",
-      "manualEdit": "Bu YAML yapısını CC Switch güvenle düzenleyemiyor. models.yml dosyasını elle düzenleyin.",
-      "rollbackConflict": "Veritabanı kaydı başarısız oldu ve Oh My Pi yapılandırması dışarıdan değiştirildi. Elle geri yükleyin.",
-      "renameProvider": "Oh My Pi sağlayıcı anahtarları yeniden adlandırılamaz."
-    },
-    "provider": {
-      "removed": "Oh My Pi içinden kaldırıldı",
-      "enabled": "Oh My Pi içinde etkinleştirildi",
-      "enableFailed": "Sağlayıcı Oh My Pi içinde etkinleştirilemedi"
-    },
-    "form": {
-      "discoveryHint": "Oh My Pi model listesini uç noktadan düzenli olarak alır ve bağlam penceresi gibi meta verileri uygular. Elle eklenen modeller geçerliliğini korur; keşif açıkken model listesi boş bırakılabilir.",
-      "discoveryOff": "Kapalı",
-      "discoveryType": "Model keşfi"
-    },
     "empty": {
       "title": "Henüz API anahtarı sağlayıcısı yok",
       "description": "Ön ayar veya özel sağlayıcı eklemek için sağ üstteki + düğmesini kullanın."
+    },
+    "provider": {
+      "enabled": "Oh My Pi içinde etkinleştirildi",
+      "enableFailed": "Sağlayıcı Oh My Pi içinde etkinleştirilemedi",
+      "removed": "Oh My Pi içinden kaldırıldı"
+    },
+    "current": {
+      "readFailed": "Oh My Pi sağlayıcı yapılandırması okunamadı",
+      "stateUnavailableHint": "Oh My Pi yapılandırması okunana kadar sağlayıcı değişiklikleri devre dışıdır."
+    },
+    "form": {
+      "discoveryType": "Model keşfi",
+      "discoveryOff": "Kapalı",
+      "discoveryHint": "Açıkken Oh My Pi uç noktaya hangi modelleri sunduğunu sorar; modelleri tek tek yazmanız gerekmez ve yeni modeller kendiliğinden görünür. Çevrimiçi servislerin çoğunda “OpenAI model list”, kendi bilgisayarınızda çalışan modellerde ilgili uygulamayı seçin. Anthropic biçimli uç noktalarda genellikle model listesi yoktur, kapalı bırakın. Elle eklenen modeller geçerliliğini korur.",
+      "discoveryTypes": {
+        "openaiModelsList": "OpenAI model listesi (çoğu çevrimiçi hizmet)",
+        "proxy": "Vekil (her model kendi biçimini belirler)",
+        "ollama": "Ollama (yerel)",
+        "llamaCpp": "llama.cpp (yerel)",
+        "lmStudio": "LM Studio (yerel)",
+        "litellm": "LiteLLM ağ geçidi",
+        "appleFoundationModels": "Apple aygıt içi modeller (macOS)"
+      }
+    },
+    "errors": {
+      "fileTooLarge": "Oh My Pi yapılandırması 1 MiB sınırını aşıyor.",
+      "externalChange": "Oh My Pi yapılandırması dışarıdan değiştirildi. Yenileyip tekrar deneyin.",
+      "rollbackConflict": "Veritabanı kaydı başarısız oldu ve Oh My Pi yapılandırması dışarıdan değiştirildi. Elle geri yükleyin.",
+      "invalidMcp": "Oh My Pi MCP JSON geçersiz. Kök ve mcpServers nesne olmalıdır.",
+      "invalidYaml": "Geçersiz Oh My Pi YAML. Kök ve providers birer eşleme olmalıdır.",
+      "invalidProvider": "Geçersiz Oh My Pi sağlayıcısı. Gerekli alanları, API biçimini ve alan türlerini kontrol edin.",
+      "manualEdit": "Bu YAML yapısını CC Switch güvenle düzenleyemiyor. models.yml dosyasını elle düzenleyin.",
+      "duplicateProvider": "Bu Oh My Pi sağlayıcı anahtarı zaten var.",
+      "renameProvider": "Oh My Pi sağlayıcı anahtarları yeniden adlandırılamaz.",
+      "providerMissing": "Bu Oh My Pi sağlayıcısı artık kayıtlı değil.",
+      "legacyModelsJson": "Oh My Pi hâlâ eski bir models.json kullanıyor; omp bir sonraki başlangıçta bunu models.yml dosyasına taşır. omp’yi bir kez çalıştırın, ardından sağlayıcıyı yeniden ekleyin."
     }
   }
 }

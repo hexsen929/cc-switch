@@ -1,6 +1,6 @@
 //! Codex OAuth Authentication Module
 //!
-//! 实现 OpenAI ChatGPT Plus/Pro 订阅的 OAuth Device Code 流程。
+//! 实现 OpenAI ChatGPT Plus/Pro 订阅的 OAuth Device Code 与浏览器 PKCE 流程。
 //! 支持多账号管理，每个 Provider 可关联不同的 ChatGPT 账号。
 //!
 //! ## 认证流程
@@ -31,6 +31,8 @@ use tokio::sync::{Mutex, RwLock};
 use uuid::Uuid;
 
 use super::copilot_auth::{GitHubAccount, GitHubDeviceCodeResponse};
+
+mod browser;
 
 /// OpenAI OAuth 客户端 ID（OpenCode 使用，与官方 Codex CLI 相同）
 const CODEX_CLIENT_ID: &str = "app_EMoamEEZ73f0CkXaXp7hrann";
@@ -394,6 +396,8 @@ pub struct CodexOAuthManager {
     /// 进行中的 Device Code 流程：device_auth_id -> {user_code, expires_at_ms}
     /// 过期条目会在 start_device_flow 时被清理，防止放弃的登录流程导致无界增长
     pending_device_codes: Arc<RwLock<HashMap<String, PendingDeviceCode>>>,
+    browser_flows: Arc<RwLock<HashMap<String, Arc<browser::BrowserFlow>>>>,
+    browser_start_lock: Mutex<()>,
     /// 清除全部认证时递增，使已经在网络请求中的登录流程无法重新登记。
     login_epoch: AtomicU64,
     /// 每个目标账号最新一次定向重新认证的 generation。
@@ -417,6 +421,8 @@ impl CodexOAuthManager {
             refresh_locks: Arc::new(RwLock::new(HashMap::new())),
             lifecycle_lock: Arc::new(RwLock::new(())),
             pending_device_codes: Arc::new(RwLock::new(HashMap::new())),
+            browser_flows: Arc::new(RwLock::new(HashMap::new())),
+            browser_start_lock: Mutex::new(()),
             login_epoch: AtomicU64::new(0),
             target_login_generations: Arc::new(RwLock::new(HashMap::new())),
             next_target_login_generation: AtomicU64::new(0),
@@ -444,30 +450,8 @@ impl CodexOAuthManager {
         target_account_id: Option<&str>,
     ) -> Result<GitHubDeviceCodeResponse, CodexOAuthError> {
         log::info!("[CodexOAuth] 启动 Device Code 流程");
-        let login_epoch = self.login_epoch.load(Ordering::Acquire);
-        let target_account_id = target_account_id
-            .map(str::trim)
-            .filter(|account_id| !account_id.is_empty())
-            .map(str::to_string);
-        let target_generation = if let Some(account_id) = target_account_id.as_deref() {
-            let accounts = self.accounts.read().await;
-            if !accounts.contains_key(account_id) {
-                return Err(CodexOAuthError::AccountNotFound(account_id.to_string()));
-            }
-            drop(accounts);
-            let generation = self
-                .next_target_login_generation
-                .fetch_add(1, Ordering::AcqRel)
-                .wrapping_add(1);
-            let mut generations = self.target_login_generations.write().await;
-            generations
-                .entry(account_id.to_string())
-                .and_modify(|current| *current = (*current).max(generation))
-                .or_insert(generation);
-            Some(generation)
-        } else {
-            None
-        };
+        let (login_epoch, target_account_id, target_generation) =
+            self.prepare_login_target(target_account_id).await?;
 
         let response = crate::proxy::http_client::get()
             .post(DEVICE_AUTH_USERCODE_URL)
@@ -519,6 +503,38 @@ impl CodexOAuthManager {
         })
     }
 
+    async fn prepare_login_target(
+        &self,
+        target_account_id: Option<&str>,
+    ) -> Result<(u64, Option<String>, Option<u64>), CodexOAuthError> {
+        let login_epoch = self.login_epoch.load(Ordering::Acquire);
+        let target_account_id = target_account_id
+            .map(str::trim)
+            .filter(|account_id| !account_id.is_empty())
+            .map(str::to_string);
+        let target_generation = if let Some(account_id) = target_account_id.as_deref() {
+            let accounts = self.accounts.read().await;
+            if !accounts.contains_key(account_id) {
+                return Err(CodexOAuthError::AccountNotFound(account_id.to_string()));
+            }
+            drop(accounts);
+            let generation = self
+                .next_target_login_generation
+                .fetch_add(1, Ordering::AcqRel)
+                .wrapping_add(1);
+            let mut generations = self.target_login_generations.write().await;
+            generations
+                .entry(account_id.to_string())
+                .and_modify(|current| *current = (*current).max(generation))
+                .or_insert(generation);
+            Some(generation)
+        } else {
+            None
+        };
+
+        Ok((login_epoch, target_account_id, target_generation))
+    }
+
     async fn register_pending_device_code(
         &self,
         device_auth_id: String,
@@ -548,11 +564,17 @@ impl CodexOAuthManager {
     }
 
     pub async fn cancel_device_flow(&self, device_code: &str) -> bool {
-        self.pending_device_codes
+        let cancelled = self
+            .pending_device_codes
             .write()
             .await
             .remove(device_code)
-            .is_some()
+            .is_some();
+        let browser = self.browser_flows.write().await.remove(device_code);
+        if let Some(browser) = browser {
+            browser.stop().await;
+        }
+        cancelled
     }
 
     /// 轮询 Device Code 状态
@@ -582,6 +604,9 @@ impl CodexOAuthManager {
         BeforeCommit: FnOnce() -> CommitFuture,
         CommitFuture: std::future::Future<Output = CommitGuard>,
     {
+        if device_code.starts_with("browser:") {
+            return self.poll_browser_flow(device_code, before_commit).await;
+        }
         let entry = {
             let pending = self.pending_device_codes.read().await;
             pending.get(device_code).cloned()
@@ -642,9 +667,29 @@ impl CodexOAuthManager {
 
         // 用 authorization_code + code_verifier 换 token
         let tokens = self
-            .exchange_code_for_tokens(&success.authorization_code, &success.code_verifier)
+            .exchange_code_for_tokens(
+                &success.authorization_code,
+                &success.code_verifier,
+                DEVICE_REDIRECT_URI,
+            )
             .await?;
 
+        self.commit_login_tokens(tokens, device_code, &entry, before_commit)
+            .await
+            .map(Some)
+    }
+
+    async fn commit_login_tokens<BeforeCommit, CommitFuture, CommitGuard>(
+        &self,
+        tokens: OAuthTokenResponse,
+        device_code: &str,
+        entry: &PendingDeviceCode,
+        before_commit: BeforeCommit,
+    ) -> Result<(GitHubAccount, serde_json::Value, CommitGuard), CodexOAuthError>
+    where
+        BeforeCommit: FnOnce() -> CommitFuture,
+        CommitFuture: std::future::Future<Output = CommitGuard>,
+    {
         let refresh_token = tokens.refresh_token.clone().ok_or_else(|| {
             CodexOAuthError::TokenFetchFailed("响应缺少 refresh_token".to_string())
         })?;
@@ -675,7 +720,9 @@ impl CodexOAuthManager {
         let obtained_at_ms = chrono::Utc::now().timestamp_millis();
         // Provider switching and managed live-auth writes use the same guard.
         // Acquire it only after the network exchange succeeds so ordinary
-        // authorization-pending polls never block provider operations.
+        // authorization-pending polls never block provider operations. Return
+        // the guard with the bundle so CLI auth projection and route refresh
+        // remain serialized for browser login as well as device-code login.
         let commit_guard = before_commit().await;
         // 登录提交与该账号的 refresh/adopt 共用一把 generation 锁；账号和
         // access cache 一次写入，旧刷新响应因此不能覆盖新登录链。
@@ -698,7 +745,7 @@ impl CodexOAuthManager {
             )
             .await?;
 
-        Ok(Some((account, codex_live_auth, commit_guard)))
+        Ok((account, codex_live_auth, commit_guard))
     }
 
     /// 探测本机原生 ChatGPT 登录是否已被 cc-switch 托管（用户身份与 workspace 必须同时匹配）。
@@ -871,6 +918,7 @@ impl CodexOAuthManager {
         &self,
         code: &str,
         code_verifier: &str,
+        redirect_uri: &str,
     ) -> Result<OAuthTokenResponse, CodexOAuthError> {
         let response = crate::proxy::http_client::get()
             .post(OAUTH_TOKEN_URL)
@@ -880,7 +928,7 @@ impl CodexOAuthManager {
             .form(&[
                 ("grant_type", "authorization_code"),
                 ("code", code),
-                ("redirect_uri", DEVICE_REDIRECT_URI),
+                ("redirect_uri", redirect_uri),
                 ("client_id", CODEX_CLIENT_ID),
                 ("code_verifier", code_verifier),
             ])
@@ -1698,6 +1746,17 @@ impl CodexOAuthManager {
             let mut pending = self.pending_device_codes.write().await;
             self.login_epoch.fetch_add(1, Ordering::AcqRel);
             pending.clear();
+        }
+
+        let browsers: Vec<_> = self
+            .browser_flows
+            .write()
+            .await
+            .drain()
+            .map(|(_, flow)| flow)
+            .collect();
+        for browser in browsers {
+            browser.stop().await;
         }
 
         if self.storage_path.exists() {

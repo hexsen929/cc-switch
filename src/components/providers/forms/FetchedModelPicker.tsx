@@ -31,6 +31,8 @@ interface FetchedModelPickerProps {
   models: FetchedModel[];
   /** 列表里已有的模型 ID（调用方按自己的规则归一，如去掉 [1m]） */
   configuredModelIds: string[];
+  /** 默认去掉两端空白；原生 ID 是不透明字符串的应用可显式保留原值。 */
+  normalizeConfiguredModelId?: (id: string) => string;
   onApply: (selection: FetchedModelSelection) => void;
   onFetch: () => void;
   isFetching: boolean;
@@ -40,6 +42,8 @@ interface FetchedModelPickerProps {
    */
   metadataSource?: ModelMetadataSourceProps;
 }
+
+const trimConfiguredModelId = (id: string) => id.trim();
 
 /** 窗口按 2 的幂整除时用 1024 进位（262144 → 256K），否则按 1000（200000 → 200K）。 */
 function formatContextWindow(tokens: number): string {
@@ -61,6 +65,7 @@ function formatContextWindow(tokens: number): string {
 export function FetchedModelPicker({
   models,
   configuredModelIds,
+  normalizeConfiguredModelId,
   onApply,
   onFetch,
   isFetching,
@@ -111,6 +116,7 @@ export function FetchedModelPicker({
         <FetchedModelPickerBody
           models={models}
           configuredModelIds={configuredModelIds}
+          normalizeConfiguredModelId={normalizeConfiguredModelId}
           onApply={(selection) => {
             if (selection.add.length > 0 || selection.remove.length > 0) {
               onApply(selection);
@@ -130,6 +136,7 @@ export function FetchedModelPicker({
 function FetchedModelPickerBody({
   models,
   configuredModelIds,
+  normalizeConfiguredModelId = trimConfiguredModelId,
   onApply,
   onCancel,
   onFetch,
@@ -141,7 +148,9 @@ function FetchedModelPickerBody({
 }) {
   const { t } = useTranslation();
   const configured = [
-    ...new Set(configuredModelIds.map((id) => id.trim()).filter(Boolean)),
+    ...new Set(
+      configuredModelIds.map(normalizeConfiguredModelId).filter(Boolean),
+    ),
   ];
   const [query, setQuery] = useState("");
   const [onlySelected, setOnlySelected] = useState(false);
