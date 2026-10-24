@@ -424,6 +424,13 @@ export const handlers = [
     }),
   ),
 
+  http.post(`${TAURI_ENDPOINT}/get_omp_current_state`, () =>
+    success({
+      enabledProviderIds: [],
+      defaultProviderId: null,
+    }),
+  ),
+
   // Proxy status (for SettingsPage / ProxyPanel hooks)
   http.post(`${TAURI_ENDPOINT}/get_proxy_status`, () =>
     success({

@@ -86,6 +86,7 @@ pub async fn save_settings(
         (&merged.openclaw_config_dir, &existing.openclaw_config_dir),
         (&merged.hermes_config_dir, &existing.hermes_config_dir),
         (&merged.pi_config_dir, &existing.pi_config_dir),
+        (&merged.omp_config_dir, &existing.omp_config_dir),
     ]
     .into_iter()
     .any(|(next, previous)| next != previous);

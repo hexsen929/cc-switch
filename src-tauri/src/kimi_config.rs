@@ -312,20 +312,33 @@ fn apply_provider(
     config: Option<Value>,
     create: bool,
 ) -> Result<Value, AppError> {
-    if before
+    // An official node is created by signing in. Edits may change its models,
+    // but the connection (endpoint and login reference) stays as signed in.
+    // Removing it keeps the credential, so the card can be added back.
+    let official = before
         .get("providers")
         .and_then(|providers| providers.get(id))
-        .is_some_and(|provider| is_official_provider(&json!({"provider": provider})))
-    {
-        return Err(AppError::InvalidInput(
-            "Manage Kimi official accounts in the Authorization Center".into(),
-        ));
-    }
+        .filter(|provider| is_official_provider(&json!({"provider": provider})))
+        .cloned();
+    let config = match (&official, config) {
+        (Some(node), Some(mut config)) => {
+            config
+                .as_object_mut()
+                .ok_or_else(|| {
+                    AppError::InvalidInput("Kimi Code provider settings must be an object".into())
+                })?
+                .insert("provider".into(), node.clone());
+            Some(config)
+        }
+        (_, config) => config,
+    };
+    // Removing a card keeps its login, including any service sharing that
+    // credential. Do not silently switch search/fetch to another account.
     apply_provider_unchecked(before, id, config, create)
 }
 
-/// [`apply_provider`] without the official-account guard; only the account
-/// manager may remove an official node this way.
+/// [`apply_provider`] without pinning an official node's connection; only the
+/// account manager writes official nodes this way.
 fn apply_provider_unchecked(
     before: &Value,
     id: &str,

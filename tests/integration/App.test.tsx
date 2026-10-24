@@ -971,48 +971,97 @@ describe("App integration with MSW", () => {
     expect(currentRequests).toBeGreaterThan(requestsBeforeRemoval);
   });
 
-  it("warns without blocking when removing Pi's global default provider", async () => {
-    localStorage.setItem("cc-switch-last-app", "pi");
-    setProviders("pi", {
+  it.each(["pi", "omp"] as const)(
+    "warns without blocking when removing %s's global default provider",
+    async (app) => {
+      localStorage.setItem("cc-switch-last-app", app);
+      setProviders(app, {
+        custom: {
+          id: "custom",
+          name: "Custom Pi",
+          settingsConfig: {
+            baseUrl: "https://api.example.com/v1",
+            apiKey: "test-key",
+            api: "openai-completions",
+            models: [{ id: "model-a" }],
+          },
+          category: "custom",
+          sortIndex: 0,
+          createdAt: Date.now(),
+        },
+      });
+      server.use(
+        http.post(`http://tauri.local/get_${app}_current_state`, () =>
+          HttpResponse.json({
+            enabledProviderIds: ["custom"],
+            defaultProviderId: "custom",
+          }),
+        ),
+      );
+
+      const { default: App } = await import("@/App");
+      renderApp(App);
+
+      await waitFor(() =>
+        expect(screen.getByTestId("provider-list").textContent).toContain(
+          "Custom Pi",
+        ),
+      );
+      fireEvent.click(screen.getByText("remove"));
+
+      expect(screen.getByTestId("confirm-message")).toHaveTextContent(
+        app === "omp"
+          ? "confirm.ompDefaultProviderWarning"
+          : "confirm.piDefaultProviderWarning",
+      );
+      fireEvent.click(screen.getByText("confirm-delete"));
+      await waitFor(() =>
+        expect(screen.queryByTestId("confirm-dialog")).not.toBeInTheDocument(),
+      );
+    },
+  );
+
+  it("refreshes Oh My Pi default state after a tray provider event", async () => {
+    localStorage.setItem("cc-switch-last-app", "omp");
+    setProviders("omp", {
       custom: {
         id: "custom",
-        name: "Custom Pi",
-        settingsConfig: {
-          baseUrl: "https://api.example.com/v1",
-          apiKey: "test-key",
-          api: "openai-completions",
-          models: [{ id: "model-a" }],
-        },
-        category: "custom",
-        sortIndex: 0,
-        createdAt: Date.now(),
+        name: "Custom Oh My Pi",
+        settingsConfig: { models: [{ id: "model-a" }] },
       },
     });
+    let currentRequests = 0;
+    let defaultProviderId = "other";
     server.use(
-      http.post("http://tauri.local/get_pi_current_state", () =>
-        HttpResponse.json({
+      http.post("http://tauri.local/get_omp_current_state", () => {
+        currentRequests += 1;
+        return HttpResponse.json({
           enabledProviderIds: ["custom"],
-          defaultProviderId: "custom",
-        }),
-      ),
+          defaultProviderId,
+        });
+      }),
     );
 
     const { default: App } = await import("@/App");
     renderApp(App);
-
+    await waitFor(() => expect(currentRequests).toBeGreaterThan(0));
     await waitFor(() =>
-      expect(screen.getByTestId("provider-list").textContent).toContain(
-        "Custom Pi",
+      expect(screen.getByTestId("provider-list")).toHaveTextContent(
+        "Custom Oh My Pi",
       ),
     );
+    const before = currentRequests;
+    defaultProviderId = "custom";
+    emitTauriEvent("provider-switched", {
+      appType: "omp",
+      providerId: "custom",
+    });
+    await waitFor(() => expect(currentRequests).toBeGreaterThan(before));
     fireEvent.click(screen.getByText("remove"));
-
-    expect(screen.getByTestId("confirm-message")).toHaveTextContent(
-      "confirm.piDefaultProviderWarning",
-    );
-    fireEvent.click(screen.getByText("confirm-delete"));
     await waitFor(() =>
-      expect(screen.queryByTestId("confirm-dialog")).not.toBeInTheDocument(),
+      expect(screen.getByTestId("confirm-message")).toHaveTextContent(
+        "confirm.ompDefaultProviderWarning",
+      ),
     );
   });
 

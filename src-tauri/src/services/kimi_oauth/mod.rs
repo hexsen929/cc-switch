@@ -657,6 +657,12 @@ impl KimiOAuthManager {
         account::quota(&home, &self.store(), account_id, &device).await
     }
 
+    /// The account's current model catalog, keyed and shaped as signing in
+    /// would write it, for the card editor. Nothing is saved here.
+    pub async fn models(&self, account_id: &str) -> Result<Map<String, Value>, String> {
+        models_at(&kimi_config::data_dir(), &self.store(), account_id).await
+    }
+
     pub async fn start(
         &self,
         region: KimiRegion,
@@ -960,6 +966,51 @@ impl KimiOAuthManager {
     }
 }
 
+async fn models_at(
+    home: &Path,
+    store: &Path,
+    account_id: &str,
+) -> Result<Map<String, Value>, String> {
+    let device = device_id(home)?;
+    let config = read_config(home)?;
+    let provider = account_provider(&config, account_id)?;
+    let base_url = provider["base_url"]
+        .as_str()
+        .ok_or("Kimi account has no base URL")?;
+    let token = match account::access_token(home, provider, &device).await? {
+        account::Access::Token(token) => token,
+        account::Access::Expired => {
+            return Err("Use this account once in Kimi Code, then try again".into())
+        }
+        account::Access::NeedsReauth => {
+            return Err("Sign in to this Kimi account again in the Authorization Center".into())
+        }
+    };
+    let response = identify(
+        crate::proxy::http_client::get().get(format!("{base_url}/models")),
+        &device,
+    )
+    .bearer_auth(token)
+    .send()
+    .await
+    .map_err(|e| network_error("Kimi model discovery failed", base_url, e))?;
+    let (status, payload) = response_json(response).await?;
+    if status != 200 {
+        return Err(format!("Kimi model discovery failed (HTTP {status})"));
+    }
+    let slot = account::slot_name(&credential_path(home, &provider["oauth"])?);
+    let nickname = account::Store::load(store)
+        .accounts
+        .get(account_id)
+        .and_then(|identity| identity.nickname.clone());
+    Ok(scope_models(
+        parse_models(&payload)?,
+        account_id,
+        &slot,
+        nickname.as_deref(),
+    ))
+}
+
 async fn remove_at(
     home: &Path,
     store: &Path,
@@ -1200,7 +1251,10 @@ mod tests {
                 let user = auth.rsplit('-').next().unwrap().to_string();
                 (StatusCode::OK, Json(json!({"user_id":format!("user-{user}"), "nickname":format!("Nick{user}"), "phone":"private-phone"})))
             }))
-            .route("/usages", get(|| async {
+            .route("/usages", get(|State(state): State<Arc<MockState>>| async move {
+                if state.mode.load(Ordering::SeqCst) == 6 {
+                    return Json(json!({}));
+                }
                 Json(json!({"usage":{"limit":"100","remaining":"40","resetTime":"2030-01-01T00:00:00Z"}}))
             }))
             .route("/models", get(|State(state): State<Arc<MockState>>| async move {
@@ -1771,6 +1825,58 @@ mod tests {
         )
         .unwrap();
         read_config(dir).unwrap()["providers"]["kimi-code-ccs-test"].clone()
+    }
+
+    #[tokio::test]
+    async fn model_catalog_for_the_editor_uses_the_accounts_slot_and_saves_nothing() {
+        let server = server(0).await;
+        let dir = tempfile::tempdir().unwrap();
+        let store = dir.path().join("accounts.json");
+        let valid = json!({"access_token":"a","refresh_token":"r","expires_at":4_102_444_800i64});
+        separate_account(&server, dir.path(), valid);
+        account::remember(
+            &store,
+            "kimi-code-ccs-test",
+            account::Identity {
+                user_id: "u".into(),
+                nickname: Some("Nick".into()),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        let before = fs::read(dir.path().join("config.toml")).unwrap();
+        let catalog = models_at(dir.path(), &store, "kimi-code-ccs-test")
+            .await
+            .unwrap();
+        let model = &catalog["kimi-code-ccs-test/k3"];
+        assert_eq!(model["provider"], "kimi-code-ccs-test");
+        assert_eq!(model["display_name"], "k3 (Nick)");
+        assert_eq!(model["max_context_size"], 1048576);
+        assert_eq!(fs::read(dir.path().join("config.toml")).unwrap(), before);
+        assert!(models_at(dir.path(), &store, "custom").await.is_err());
+    }
+
+    #[tokio::test]
+    async fn official_account_without_subscription_has_a_successful_empty_quota() {
+        let server = server(6).await;
+        let dir = tempfile::tempdir().unwrap();
+        let store = dir.path().join("accounts.json");
+        separate_account(
+            &server,
+            dir.path(),
+            json!({"access_token":"a","refresh_token":"r","expires_at":4_102_444_800i64}),
+        );
+        let quota = account::quota(dir.path(), &store, "kimi-code-ccs-test", "test-device")
+            .await
+            .unwrap();
+        assert_eq!(quota.tool, "kimi_oauth");
+        assert!(matches!(
+            quota.credential_status,
+            crate::services::subscription::CredentialStatus::Valid
+        ));
+        assert!(quota.success);
+        assert!(quota.tiers.is_empty());
+        assert!(quota.error.is_none());
     }
 
     #[cfg(unix)]

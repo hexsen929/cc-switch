@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   isAdditiveAppId,
+  isPiFamilyApp,
   SKILLS_APP_IDS,
   MCP_APP_IDS,
   isProxyAppId,
@@ -13,7 +14,7 @@ import { PROMPT_APP_IDS, promptAppOf } from "@/lib/query/prompts";
 import { promptFileName } from "@/components/prompts/promptUtils";
 
 describe("appConfig provider lifecycle", () => {
-  it.each(["opencode", "openclaw", "hermes", "pi", "mcode", "kimi"])(
+  it.each(["opencode", "openclaw", "hermes", "pi", "mcode", "kimi", "omp"])(
     "classifies %s as additive",
     (appId) => {
       expect(isAdditiveAppId(appId)).toBe(true);
@@ -59,5 +60,25 @@ describe("Kimi Code capabilities", () => {
     expect(isStackAppId("kimi")).toBe(false);
     expect(usesEditorView("kimi")).toBe(false);
     expect(APP_PROFILE_SCOPE.kimi).toBeUndefined();
+  });
+});
+
+// Oh My Pi shares Pi's catalog UI, but keeps independent native files and capability boundaries.
+describe("Oh My Pi capabilities", () => {
+  it("supports native global resources without enabling proxy, Stack, or Profile modes", () => {
+    expect(isPiFamilyApp("omp")).toBe(true);
+    expect(isPiFamilyApp("pi")).toBe(true);
+    expect(isPiFamilyApp("kimi")).toBe(false);
+    expect(isAdditiveAppId("omp")).toBe(true);
+    expect(SKILLS_APP_IDS).toContain("omp");
+    expect(MCP_APP_IDS).toContain("omp");
+    expect(PROMPT_APP_IDS).toContain("omp");
+    expect(promptAppOf("omp")).toBe("omp");
+    expect(promptFileName("omp")).toBe("AGENTS.md");
+    expect(isProxyAppId("omp")).toBe(false);
+    expect(isModeAppId("omp")).toBe(false);
+    expect(isStackAppId("omp")).toBe(false);
+    expect(usesEditorView("omp")).toBe(false);
+    expect(APP_PROFILE_SCOPE.omp).toBeUndefined();
   });
 });

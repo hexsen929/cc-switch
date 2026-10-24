@@ -3,6 +3,7 @@
 
 use super::*;
 use crate::database::Database;
+use crate::omp_config::test_support::TestAgentDir as OmpTestAgentDir;
 use crate::pi_config::test_support::TestAgentDir;
 use crate::provider::{ProviderMeta, ProviderPromptOverrides, ProviderResourceOverrides};
 use crate::settings::{get_settings, reload_settings, update_settings, AppSettings};
@@ -38,6 +39,7 @@ struct TempHome {
     dir: tempfile::TempDir,
     previous_env: Vec<(&'static str, Option<OsString>)>,
     _pi: TestAgentDir,
+    _omp: OmpTestAgentDir,
 }
 
 impl TempHome {
@@ -61,10 +63,12 @@ impl TempHome {
         // Pi also has a test-only override, which wins over both settings and
         // PI_CODING_AGENT_DIR. Isolate all three resolution paths explicitly.
         let pi = TestAgentDir::at(&dir.path().join("pi"));
+        let omp = OmpTestAgentDir::at(&dir.path().join("omp"));
         let home = Self {
             dir,
             previous_env,
             _pi: pi,
+            _omp: omp,
         };
         reload_settings().expect("reload settings under isolated home");
         let path = |name: &str| Some(home.dir.path().join(name).to_string_lossy().into_owned());
@@ -77,6 +81,7 @@ impl TempHome {
             openclaw_config_dir: path("openclaw"),
             hermes_config_dir: path("hermes"),
             pi_config_dir: path("pi"),
+            omp_config_dir: path("omp"),
             ..AppSettings::default()
         })
         .expect("isolate every shared instruction target");
@@ -92,6 +97,7 @@ impl TempHome {
             AppType::Mcode,
             AppType::Kimi,
             AppType::Agy,
+            AppType::Omp,
         ] {
             assert!(prompt_file_path(&app)
                 .expect("isolated agent path")
@@ -297,16 +303,25 @@ fn agy_shared_overlay_is_opt_in_refreshes_and_preserves_ordinary_prompt() {
 #[test]
 #[serial]
 fn kimi_keeps_shared_instructions_and_ordinary_prompt_global_in_additive_mode() {
+    assert_native_additive_global_prompt(AppType::Kimi);
+}
+
+#[test]
+#[serial]
+fn omp_keeps_shared_instructions_and_ordinary_prompt_global_in_additive_mode() {
+    assert_native_additive_global_prompt(AppType::Omp);
+}
+
+fn assert_native_additive_global_prompt(app: AppType) {
     let home = TempHome::new();
     let state = home.state();
-    let app = AppType::Kimi;
     let path = live_path(&app);
-    assert_eq!(path, home.dir.path().join("kimi/AGENTS.md"));
+    assert_eq!(path, home.dir.path().join(app.as_str()).join("AGENTS.md"));
     sync_from_settings().unwrap();
     assert!(!path.exists(), "an unset shared source must remain opt-in");
 
     // Even a stale/imported provider carrying an override must not hijack the
-    // global prompt: additive Kimi has no single current provider projection.
+    // global prompt: native additive apps have no single current provider projection.
     let mut provider = Provider::with_id(
         "native".into(),
         "Native".into(),
@@ -329,24 +344,24 @@ fn kimi_keeps_shared_instructions_and_ordinary_prompt_global_in_additive_mode() 
         .db
         .set_current_provider(app.as_str(), &provider.id)
         .unwrap();
-    let ordinary = "# Kimi global rules\nKeep this body unchanged.\n";
+    let ordinary = "# Native global rules\nKeep this body unchanged.\n";
     state
         .db
-        .save_prompt(app.as_str(), &preset("kimi-main", ordinary, false))
+        .save_prompt(app.as_str(), &preset("native-main", ordinary, false))
         .unwrap();
-    PromptService::enable_prompt(&state, app.clone(), "kimi-main").unwrap();
+    PromptService::enable_prompt(&state, app.clone(), "native-main").unwrap();
     assert_eq!(live(&app), ordinary);
 
-    home.shared(Some("SHARED_KIMI_RULE"));
-    assert_overlay(&app, ordinary, "SHARED_KIMI_RULE");
-    home.shared(Some("UPDATED_KIMI_RULE"));
+    home.shared(Some("SHARED_NATIVE_RULE"));
+    assert_overlay(&app, ordinary, "SHARED_NATIVE_RULE");
+    home.shared(Some("UPDATED_NATIVE_RULE"));
     PromptService::sync_to_live(&state, app.clone()).unwrap();
-    assert_overlay(&app, ordinary, "UPDATED_KIMI_RULE");
-    assert!(!live(&app).contains("SHARED_KIMI_RULE"));
+    assert_overlay(&app, ordinary, "UPDATED_NATIVE_RULE");
+    assert!(!live(&app).contains("SHARED_NATIVE_RULE"));
     home.shared(None);
     assert_eq!(live(&app), ordinary);
     assert_eq!(
-        state.db.get_prompts(app.as_str()).unwrap()["kimi-main"].content,
+        state.db.get_prompts(app.as_str()).unwrap()["native-main"].content,
         ordinary
     );
     assert_database_is_ordinary(&state, &app);
@@ -398,6 +413,7 @@ fn a_shared_only_file_is_not_imported_as_an_ordinary_prompt() {
         AppType::Mcode,
         AppType::Kimi,
         AppType::Agy,
+        AppType::Omp,
     ] {
         assert_eq!(
             PromptService::get_current_file_content(app.clone()).unwrap(),

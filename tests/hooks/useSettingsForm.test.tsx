@@ -36,6 +36,7 @@ describe("useSettingsForm Hook", () => {
         enableClaudePluginIntegration: undefined,
         claudeConfigDir: "  /Users/demo  ",
         codexConfigDir: "   ",
+        ompConfigDir: "  /omp-initial  ",
         language: "en",
       },
       isLoading: false,
@@ -53,6 +54,7 @@ describe("useSettingsForm Hook", () => {
     expect(settings.enableClaudePluginIntegration).toBe(false);
     expect(settings.claudeConfigDir).toBe("/Users/demo");
     expect(settings.codexConfigDir).toBeUndefined();
+    expect(settings.ompConfigDir).toBe("/omp-initial");
     expect(settings.language).toBe("en");
     expect(result.current.initialLanguage).toBe("en");
     expect(changeLanguageSpy).toHaveBeenCalledWith("en");
@@ -182,6 +184,7 @@ describe("useSettingsForm Hook", () => {
         claudeConfigDir: "  /reset  ",
         codexConfigDir: "   ",
         piConfigDir: "  /pi-reset  ",
+        ompConfigDir: "  /omp-reset  ",
         language: "zh",
       });
     });
@@ -193,6 +196,7 @@ describe("useSettingsForm Hook", () => {
     expect(settings.claudeConfigDir).toBe("/reset");
     expect(settings.codexConfigDir).toBeUndefined();
     expect(settings.piConfigDir).toBe("/pi-reset");
+    expect(settings.ompConfigDir).toBe("/omp-reset");
     expect(settings.language).toBe("zh");
     expect(result.current.initialLanguage).toBe("en");
     expect(changeLanguageSpy).toHaveBeenCalledWith("en");

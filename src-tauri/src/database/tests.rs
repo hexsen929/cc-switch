@@ -1503,3 +1503,103 @@ fn incremental_vacuum_reclaims_entire_freelist() {
     Database::incremental_vacuum_on_conn(&conn).expect("incremental vacuum");
     assert_eq!(freelist(&conn), 0, "all free pages should be reclaimed");
 }
+
+/// v22 已随 v4.0.19 发布：从它升级必须补上 `mcp_servers.enabled_omp`，否则读 MCP 列表报
+/// `no such column`。Skills 没有 omp 列（启用状态按原生目录现算）。
+#[test]
+fn migration_v22_to_v23_adds_enabled_omp_to_mcp_servers_only() {
+    let conn = Connection::open_in_memory().expect("open memory db");
+    Database::create_tables_on_conn(&conn).expect("create tables");
+    conn.execute_batch("ALTER TABLE mcp_servers DROP COLUMN enabled_omp;")
+        .expect("rewind mcp_servers to v22 shape");
+    conn.execute(
+        "INSERT INTO mcp_servers (id, name, server_config, enabled_pi) VALUES ('mcp-1', 'm', '{}', 1)",
+        [],
+    )
+    .expect("seed mcp row");
+    Database::set_user_version(&conn, 22).expect("set user_version=22");
+
+    Database::apply_schema_migrations_on_conn(&conn).expect("apply migrations");
+
+    assert_eq!(Database::get_user_version(&conn).unwrap(), SCHEMA_VERSION);
+    assert!(Database::has_column(&conn, "mcp_servers", "enabled_omp").unwrap());
+    assert!(!Database::has_column(&conn, "skills", "enabled_omp").unwrap());
+    let (pi, omp): (i64, i64) = conn
+        .query_row(
+            "SELECT enabled_pi, enabled_omp FROM mcp_servers WHERE id = 'mcp-1'",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .expect("read mcp row");
+    assert_eq!((pi, omp), (1, 0));
+}
+
+#[test]
+fn migration_v22_to_v23_preserves_existing_omp_and_other_app_flags() {
+    let conn = Connection::open_in_memory().expect("open memory db");
+    Database::create_tables_on_conn(&conn).expect("create tables");
+    conn.execute(
+        "INSERT INTO mcp_servers (id, name, server_config, enabled_pi, enabled_omp, enabled_kimi, enabled_mcode)
+         VALUES ('mcp-1', 'm', '{}', 1, 1, 1, 1)",
+        [],
+    )
+    .expect("seed mcp row");
+    Database::set_user_version(&conn, 22).expect("set old schema version");
+
+    for _ in 0..2 {
+        Database::apply_schema_migrations_on_conn(&conn).expect("apply migrations");
+        assert_eq!(Database::get_user_version(&conn).unwrap(), SCHEMA_VERSION);
+        let flags: (bool, bool, bool, bool) = conn
+            .query_row(
+                "SELECT enabled_pi, enabled_omp, enabled_kimi, enabled_mcode FROM mcp_servers WHERE id = 'mcp-1'",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+            )
+            .expect("read app flags");
+        assert_eq!(flags, (true, true, true, true));
+    }
+}
+
+#[test]
+fn migration_v22_to_v23_rolls_back_omp_column_and_version_then_can_retry() {
+    use rusqlite::hooks::{AuthAction, AuthContext, Authorization};
+
+    fn deny_proxy_config_alter(context: AuthContext<'_>) -> Authorization {
+        match context.action {
+            AuthAction::AlterTable {
+                table_name: "proxy_config",
+                ..
+            } => Authorization::Deny,
+            _ => Authorization::Allow,
+        }
+    }
+
+    let conn = Connection::open_in_memory().expect("open memory db");
+    conn.execute_batch(
+        "CREATE TABLE mcp_servers (id TEXT PRIMARY KEY, enabled_pi BOOLEAN, enabled_kimi BOOLEAN);
+         CREATE TABLE skills (id TEXT PRIMARY KEY);
+         CREATE TABLE proxy_config (app_type TEXT PRIMARY KEY);
+         INSERT INTO mcp_servers VALUES ('m', 1, 1);",
+    )
+    .expect("seed v22 fixture");
+    Database::set_user_version(&conn, 22).expect("set old schema version");
+    // Reject fork-column repair after enabled_omp and user_version=23 were set.
+    conn.authorizer(Some(deny_proxy_config_alter));
+    Database::apply_schema_migrations_on_conn(&conn).expect_err("schema repair must fail");
+    conn.authorizer(None::<fn(AuthContext<'_>) -> Authorization>);
+    assert!(conn.is_autocommit());
+    assert_eq!(Database::get_user_version(&conn).unwrap(), 22);
+    assert!(!Database::has_column(&conn, "mcp_servers", "enabled_omp").unwrap());
+
+    Database::apply_schema_migrations_on_conn(&conn).expect("retry migrations");
+    assert_eq!(Database::get_user_version(&conn).unwrap(), SCHEMA_VERSION);
+    let flags: (bool, bool, bool) = conn
+        .query_row(
+            "SELECT enabled_pi, enabled_kimi, enabled_omp FROM mcp_servers WHERE id = 'm'",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        )
+        .expect("read migrated flags");
+    assert_eq!(flags, (true, true, false));
+    assert!(!Database::has_column(&conn, "skills", "enabled_omp").unwrap());
+}

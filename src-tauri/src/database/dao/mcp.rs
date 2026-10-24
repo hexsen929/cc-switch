@@ -9,7 +9,7 @@ use indexmap::IndexMap;
 use rusqlite::{params, OptionalExtension, Row};
 
 const MCP_SERVER_SELECT: &str =
-    "SELECT id, name, server_config, description, homepage, docs, tags, enabled_claude, enabled_codex, enabled_gemini, enabled_grokbuild, enabled_opencode, enabled_hermes, enabled_mcode, enabled_pi, enabled_agy, enabled_kimi FROM mcp_servers";
+    "SELECT id, name, server_config, description, homepage, docs, tags, enabled_claude, enabled_codex, enabled_gemini, enabled_grokbuild, enabled_opencode, enabled_hermes, enabled_mcode, enabled_pi, enabled_agy, enabled_kimi, enabled_omp FROM mcp_servers";
 
 fn row_to_mcp_server(row: &Row<'_>) -> rusqlite::Result<(String, McpServer)> {
     let id: String = row.get(0)?;
@@ -46,6 +46,7 @@ fn row_to_mcp_server(row: &Row<'_>) -> rusqlite::Result<(String, McpServer)> {
                 pi: row.get(14)?,
                 agy: row.get(15)?,
                 kimi: row.get(16)?,
+                omp: row.get(17)?,
             },
             description,
             homepage,
@@ -98,6 +99,7 @@ impl Database {
             AppType::Mcode => Some("enabled_mcode"),
             AppType::Kimi => Some("enabled_kimi"),
             AppType::Pi => Some("enabled_pi"),
+            AppType::Omp => Some("enabled_omp"),
             AppType::ClaudeDesktop | AppType::OpenClaw => None,
             AppType::Agy => Some("enabled_agy"),
         };
@@ -128,8 +130,8 @@ impl Database {
         conn.execute(
             "INSERT OR REPLACE INTO mcp_servers (
                 id, name, server_config, description, homepage, docs, tags,
-                enabled_claude, enabled_codex, enabled_gemini, enabled_grokbuild, enabled_opencode, enabled_hermes, enabled_mcode, enabled_pi, enabled_agy, enabled_kimi
-            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17)",
+                enabled_claude, enabled_codex, enabled_gemini, enabled_grokbuild, enabled_opencode, enabled_hermes, enabled_mcode, enabled_pi, enabled_agy, enabled_kimi, enabled_omp
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18)",
             params![
                 server.id,
                 server.name,
@@ -151,6 +153,7 @@ impl Database {
                 server.apps.pi,
                 server.apps.agy,
                 server.apps.kimi,
+                server.apps.omp,
             ],
         )
         .map_err(|e| AppError::Database(e.to_string()))?;
@@ -217,6 +220,33 @@ mod tests {
             .shift_remove("shared-server")
             .expect("stored server");
         assert_eq!(stored.apps, after_codex.apps);
+    }
+
+    #[test]
+    fn omp_mcp_flag_round_trips_and_toggles_without_changing_other_apps() {
+        let db = Database::memory().expect("create memory db");
+        let mut original = test_server();
+        original.apps.pi = true;
+        original.apps.omp = true;
+        original.apps.kimi = true;
+        db.save_mcp_server(&original).expect("seed server");
+        let stored = db.get_all_mcp_servers().expect("read servers");
+        assert_eq!(stored[&original.id].apps, original.apps);
+
+        for enabled in [false, true] {
+            let updated = db
+                .update_mcp_server_app_enabled(&original.id, &AppType::Omp, enabled)
+                .expect("toggle Omp flag")
+                .expect("server exists");
+            let mut expected = original.apps.clone();
+            expected.omp = enabled;
+            assert_eq!(updated.apps, expected);
+            assert_eq!(updated.server, original.server);
+            assert_eq!(updated.description, original.description);
+            assert_eq!(updated.tags, original.tags);
+            let stored = db.get_all_mcp_servers().expect("read toggled servers");
+            assert_eq!(stored[&original.id].apps, expected);
+        }
     }
 
     #[test]

@@ -256,6 +256,11 @@ impl Provider {
                 );
                 (base_url, api_key)
             }
+            // Oh My Pi custom providers use the models.yml
+            AppType::Omp => (
+                crate::omp_config::provider_base_url(settings).unwrap_or_default(),
+                str_at(settings.get("apiKey")),
+            ),
         };
 
         // Normalize like the JS-script path (extract_base_url_from_provider) so a
@@ -1904,6 +1909,26 @@ mod tests {
                 "sk-pi".to_string()
             )
         );
+    }
+
+    #[test]
+    fn resolve_credentials_omp_uses_native_models_without_proxy_adapter() {
+        let p = provider_with(json!({
+            "apiKey": "sk-omp",
+            "models": [{
+                "id": "model-a",
+                "api": "openai-completions",
+                "baseUrl": "https://api.example.com/v1/"
+            }]
+        }));
+        assert_eq!(
+            p.resolve_usage_credentials(&AppType::Omp),
+            (
+                "https://api.example.com/v1".to_string(),
+                "sk-omp".to_string()
+            )
+        );
+        assert!(crate::proxy::providers::get_adapter(&AppType::Omp).is_none());
     }
 
     #[test]

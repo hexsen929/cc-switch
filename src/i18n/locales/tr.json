@@ -399,7 +399,8 @@
       "title": "Otomatik Eşitlemeu Etkinleştir",
       "message": "Otomatik eşitleme etkinleştirildiğinde, her veritabanı değişikliği otomatik olarak WebDAV sunucusuna yüklenecektir.\n\nBu, önemli miktarda ağ trafiğine neden olabilir. Lütfen ağınızın ve WebDAV hizmetinizin sık veri aktarımlarını gerçekleştirebildiğinden emin olun.",
       "confirm": "Anladım, etkinleştir"
-    }
+    },
+    "ompDefaultProviderWarning": "Oh My Pi'nin genel varsayılanı şu anda bu sağlayıcıyı işaret ediyor. Devam ederseniz varsayılan model kullanılamayabilir. Oh My Pi içinde /model ile başka bir model seçin veya /login ile başka bir sağlayıcıda oturum açın."
   },
   "settings": {
     "title": "Ayarlar",
@@ -1121,7 +1122,9 @@
       "serviceUnavailable": "Arama MCP etkin; vekil durmuş",
       "pendingEnabled": "Etkinleştirme ayarında kaydedilmemiş değişiklik var. Uygulamak için kaydedin.",
       "proxyStatusUnknown": "Ortak yerel vekil durumu yenilenmeyi bekliyor"
-    }
+    },
+    "ompConfigDir": "Oh My Pi Yapılandırma Dizini",
+    "browsePlaceholderOmp": "ör. /home/<your-username>/.omp/agent"
   },
   "apps": {
     "claude": "Claude",
@@ -1136,7 +1139,8 @@
     "hermes": "Hermes",
     "pi": "Pi",
     "mcode": "MiniMax Code",
-    "agy": "Antigravity"
+    "agy": "Antigravity",
+    "omp": "Oh My Pi"
   },
   "mcode": {
     "empty": {
@@ -4224,8 +4228,12 @@
       "hermes": "Resmi komut dosyasıyla yüklenir",
       "pi": "Npm ile yüklenir",
       "mcode": "Resmi komut dosyasıyla yüklenir, npm'ye geri döner",
-      "agy": "Resmî kurulum betiğiyle yüklenir"
-    }
+      "agy": "Resmî kurulum betiğiyle yüklenir",
+      "omp": "Resmi komut dosyasıyla yüklenir"
+    },
+    "ompDiscoveryDocsLink": "Belgeler: context-files (disabledProviders)",
+    "ompDiscoveryHelpTitle": "Oh My Pi'nin gerçekte yükledikleri",
+    "ompDiscoveryHelp": "Oh My Pi, kendi ~/.omp/agent yapılandırmasının yanı sıra diğer ajanların dizinlerinden (ör. Claude'un ~/.claude, Codex'in ~/.codex) MCP sunucularını, becerileri, komutları, kancaları, kuralları ve ayarları da keşfeder. Oh My Pi'nin gerçekte yüklediklerini CC Switch arayüzüyle uyumlu tutmak için ~/.omp/agent/config.yml içinde disabledProviders ile gereksiz keşif kaynaklarını kapatın (kimlikler belgelerle aynıdır, ör. claude, codex, gemini, opencode, github, agents)."
   },
   "appPage": {
     "moreActions": "{{name}} için diğer işlemler",
@@ -4958,7 +4966,7 @@
       "cancelled": "Bu giriş iptal edildi veya değiştirildi. Yeniden giriş yapın.",
       "success": "Kimi Code girişi yapıldı ve resmî modeller eklendi.",
       "manageAccounts": "Kimi hesaplarını yönet",
-      "managedHint": "Resmî Kimi hesaplarını Yetkilendirme Merkezi'nde yönetin.",
+      "managedHint": "Önce bu resmî hesabı kaldırın veya Yetkilendirme Merkezi'nde oturumuyla birlikte silin.",
       "removeAccount": "Hesabı kaldır",
       "dismissAccount": "Listeden gizle",
       "removeConfirm": "{{name}} kaldırılsın mı? Sağlayıcısı, modelleri ve yerel kartı kaldırılır. Başka bir sağlayıcı veya hizmet tarafından kullanılmayan bağımsız kimlik bilgileri de silinir. Diğer hesaplar etkilenmez.",
@@ -4968,7 +4976,9 @@
       "current": "Kimi tarafından kullanılıyor",
       "primaryShort": "Kimi Code'un kendi oturumu",
       "empty": "Henüz Kimi hesabı yok. Kimi Code'da oturum açmış hesap burada otomatik görünür.",
-      "help": "Birden fazla Kimi kodlama planı hesabı ekleyin; her hesabın Kimi Code içinde ayrı sağlayıcısı ve modelleri olur. Bu hesabı kullan seçeneği varsayılan modeli o hesaba geçirir ve yeni oturumlar onu kullanır. Kimi Code'un kendi oturumu otomatik görünür; web araması ve sayfa getirme her zaman bu oturumu kullanır. Buradan kaldırmak yalnızca listeden gizler, Kimi Code oturumunu kapatmaz."
+      "help": "Birden fazla Kimi kodlama planı hesabı ekleyin; her hesabın Kimi Code içinde ayrı sağlayıcısı ve modelleri olur. Bu hesabı kullan seçeneği varsayılan modeli o hesaba geçirir ve yeni oturumlar onu kullanır. Kimi Code'un kendi oturumu otomatik görünür; web araması ve sayfa getirme her zaman bu oturumu kullanır. Buradan kaldırmak yalnızca listeden gizler, Kimi Code oturumunu kapatmaz.",
+      "noSubscription": "Abonelik yok",
+      "connectionManaged": "Bağlantı ve oturum Yetkilendirme Merkezi üzerinden yönetilir; burada yalnızca modelleri düzenleyin. Modelleri getirme işlemi, bu hesabın şu anda kullanabildiği resmî modelleri okur."
     },
     "modelSelectionHint": "Sağlayıcıyı seçmek için karttaki geçiş düğmesini kullanın. Başka bir model seçmek için Kimi Code içinde /model komutunu kullanın.",
     "contextSize": "Bağlam uzunluğu",
@@ -4991,6 +5001,38 @@
     "error": {
       "defaultModelInUse": "Kimi Code bu sağlayıcının bir modelini kullanıyor. Önce Kimi Code içinde /model ile başka bir modele geçin.",
       "secondaryModelInUse": "Kimi Code'un alt ajan modeli bu sağlayıcının bir modelini kullanıyor. Önce Kimi Code içinde /secondary-model ile değiştirin."
+    }
+  },
+  "omp": {
+    "current": {
+      "stateUnavailableHint": "Oh My Pi yapılandırması okunana kadar sağlayıcı değişiklikleri devre dışıdır.",
+      "readFailed": "Oh My Pi sağlayıcı yapılandırması okunamadı"
+    },
+    "errors": {
+      "fileTooLarge": "Oh My Pi yapılandırması 1 MiB sınırını aşıyor.",
+      "duplicateProvider": "Bu Oh My Pi sağlayıcı anahtarı zaten var.",
+      "externalChange": "Oh My Pi yapılandırması dışarıdan değiştirildi. Yenileyip tekrar deneyin.",
+      "invalidYaml": "Geçersiz Oh My Pi YAML. Kök ve providers birer eşleme olmalıdır.",
+      "providerMissing": "Bu Oh My Pi sağlayıcısı artık kayıtlı değil.",
+      "invalidMcp": "Oh My Pi MCP JSON geçersiz. Kök ve mcpServers nesne olmalıdır.",
+      "invalidProvider": "Geçersiz Oh My Pi sağlayıcısı. Gerekli alanları, API biçimini ve alan türlerini kontrol edin.",
+      "manualEdit": "Bu YAML yapısını CC Switch güvenle düzenleyemiyor. models.yml dosyasını elle düzenleyin.",
+      "rollbackConflict": "Veritabanı kaydı başarısız oldu ve Oh My Pi yapılandırması dışarıdan değiştirildi. Elle geri yükleyin.",
+      "renameProvider": "Oh My Pi sağlayıcı anahtarları yeniden adlandırılamaz."
+    },
+    "provider": {
+      "removed": "Oh My Pi içinden kaldırıldı",
+      "enabled": "Oh My Pi içinde etkinleştirildi",
+      "enableFailed": "Sağlayıcı Oh My Pi içinde etkinleştirilemedi"
+    },
+    "form": {
+      "discoveryHint": "Oh My Pi model listesini uç noktadan düzenli olarak alır ve bağlam penceresi gibi meta verileri uygular. Elle eklenen modeller geçerliliğini korur; keşif açıkken model listesi boş bırakılabilir.",
+      "discoveryOff": "Kapalı",
+      "discoveryType": "Model keşfi"
+    },
+    "empty": {
+      "title": "Henüz API anahtarı sağlayıcısı yok",
+      "description": "Ön ayar veya özel sağlayıcı eklemek için sağ üstteki + düğmesini kullanın."
     }
   }
 }

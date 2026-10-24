@@ -221,15 +221,29 @@ fn test_parse_rejects_config_url_up_front() {
     assert!(err.to_string().contains("configUrl"), "{err}");
 }
 
-/// 下游 parse_mcp_apps 与 McpService 都支持 Pi / MiniMax Code，解析层不能先把它们拦掉
+/// 下游 parse_mcp_apps 与 McpService 都支持 Pi / MiniMax Code / Oh My Pi，解析层不能先把它们拦掉
 #[test]
-fn test_parse_mcp_deeplink_accepts_pi_and_mcode() {
+fn test_parse_mcp_deeplink_accepts_pi_mcode_and_omp() {
     let config = BASE64_URL_SAFE_NO_PAD.encode(r#"{"mcpServers":{"fetch":{"command":"uvx"}}}"#);
-    let url = format!("ccswitch://v1/import?resource=mcp&apps=claude,pi,mcode&config={config}");
+    let url = format!("ccswitch://v1/import?resource=mcp&apps=claude,pi,mcode,omp&config={config}");
 
-    let request = parse_deeplink_url(&url).expect("pi and mcode are valid MCP targets");
+    let request = parse_deeplink_url(&url).expect("pi, mcode and ohmpi are valid MCP targets");
     let apps = parse_mcp_apps(request.apps.as_deref().unwrap()).unwrap();
-    assert!(apps.claude && apps.pi && apps.mcode);
+    assert!(apps.claude && apps.pi && apps.mcode && apps.omp);
+}
+
+/// 供应商链接对 Oh My Pi 明确拒绝，而不是落到「Invalid provider app type」。
+#[test]
+fn test_parse_provider_deeplink_refuses_omp_with_guidance() {
+    for app in ["omp", "ohmypi", "oh-my-pi", "oh_my_pi"] {
+        let url =
+            format!("ccswitch://v1/import?resource=provider&app={app}&name=Test&endpoint=https%3A%2F%2Fapi.example.com");
+        let err = parse_deeplink_url(&url).unwrap_err().to_string();
+        assert!(
+            err.contains("Oh My Pi provider page"),
+            "{app} should be sent to the Oh My Pi page, got: {err}"
+        );
+    }
 }
 
 #[test]
@@ -238,6 +252,15 @@ fn test_parse_prompt_deeplink_accepts_mcode() {
 
     let request = parse_deeplink_url(url).expect("MiniMax Code has a prompt panel");
     assert_eq!(request.app.as_deref(), Some("mcode"));
+}
+
+#[test]
+fn test_parse_prompt_deeplink_accepts_omp_without_provider_link_support() {
+    let url = "ccswitch://v1/import?resource=prompt&app=omp&name=Rules&content=IyBoaQ%3D%3D";
+
+    let request = parse_deeplink_url(url).expect("Oh My Pi has a global prompt panel");
+    assert_eq!(request.app.as_deref(), Some("omp"));
+    assert_eq!(request.resource, "prompt");
 }
 
 /// 读取不清除，按编号确认才清除：前端读到后、显示前被打断（effect 重建、窗口销毁），

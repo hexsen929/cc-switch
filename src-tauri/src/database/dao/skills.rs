@@ -47,6 +47,7 @@ impl Database {
                         opencode: row.get(12)?,
                         hermes: row.get(13)?,
                         pi: false,
+                        omp: false,
                         mcode: row.get(17)?,
                         agy: row.get(18)?,
                         kimi: row.get(19)?,
@@ -96,6 +97,7 @@ impl Database {
                     opencode: row.get(12)?,
                     hermes: row.get(13)?,
                     pi: false,
+                    omp: false,
                     mcode: row.get(17)?,
                     agy: row.get(18)?,
                     kimi: row.get(19)?,
@@ -375,6 +377,24 @@ mod tests {
 
         db.save_skill(&expected).expect("seed skill");
 
+        assert_stored_skill_matches(&db, &expected);
+    }
+
+    #[test]
+    fn native_pi_and_omp_flags_are_not_persisted_by_save_or_toggle() {
+        let db = Database::memory().expect("memory db");
+        let mut original = skill("local:native", "native", all_persisted_apps());
+        original.apps.pi = true;
+        original.apps.omp = true;
+        db.save_skill(&original).expect("seed native skill");
+        let mut expected = original.clone();
+        expected.apps.pi = false;
+        expected.apps.omp = false;
+        assert_stored_skill_matches(&db, &expected);
+
+        assert!(db
+            .update_skill_apps(&original.id, &original.apps)
+            .expect("update desired flags"));
         assert_stored_skill_matches(&db, &expected);
     }
 

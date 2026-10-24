@@ -468,4 +468,120 @@ mod tests {
             .is_err());
         }
     }
+
+    #[test]
+    #[serial_test::serial]
+    fn omp_resume_requires_a_fresh_native_source_command_and_cwd() {
+        use crate::omp_config::test_support::TestAgentDir;
+        use session_manager::providers::omp::{self, test_support::SessionDirEnv};
+
+        let _agent = TestAgentDir::new();
+        let _env = SessionDirEnv::set(None);
+        let root = omp::session_roots().remove(0);
+        let file = root.join("project/session's native.jsonl");
+        let other = root.join("project/other.jsonl");
+        std::fs::create_dir_all(file.parent().unwrap()).unwrap();
+        let write_header = |path: &std::path::Path, id: &str, cwd: &str| {
+            std::fs::write(
+                path,
+                format!(
+                    "{}\n{}\n",
+                    serde_json::json!({"type":"title","title":"Native OMP session"}),
+                    serde_json::json!({"type":"session","version":3,"id":id,"cwd":cwd}),
+                ),
+            )
+            .unwrap();
+        };
+        write_header(&file, "session-main", "/native/project");
+        write_header(&other, "different-id", "/native/project");
+        let source = file.to_string_lossy().into_owned();
+        let other_source = other.to_string_lossy().into_owned();
+        let (command, cwd) =
+            session_manager::resume_session_target("omp", "session-main", &source).unwrap();
+        assert!(command.contains(" omp --resume "));
+        assert_eq!(cwd.as_deref(), Some("/native/project"));
+        assert_eq!(
+            validated_resume_target(
+                &command,
+                cwd.as_deref(),
+                "omp",
+                "session-main",
+                Some(&source),
+            )
+            .unwrap(),
+            (command.clone(), cwd.clone())
+        );
+        for (candidate, candidate_cwd, id, candidate_source) in [
+            (
+                format!("{command}; echo injected"),
+                cwd.as_deref(),
+                "session-main",
+                Some(source.as_str()),
+            ),
+            (command.clone(), None, "session-main", Some(source.as_str())),
+            (
+                command.clone(),
+                Some("/different/project"),
+                "session-main",
+                Some(source.as_str()),
+            ),
+            (
+                command.clone(),
+                cwd.as_deref(),
+                "different-id",
+                Some(source.as_str()),
+            ),
+            (
+                command.clone(),
+                cwd.as_deref(),
+                "session-main",
+                Some(other_source.as_str()),
+            ),
+            (command.clone(), cwd.as_deref(), "session-main", None),
+        ] {
+            assert!(validated_resume_target(
+                &candidate,
+                candidate_cwd,
+                "omp",
+                id,
+                candidate_source,
+            )
+            .is_err());
+        }
+
+        let outside = tempfile::NamedTempFile::new().unwrap();
+        write_header(outside.path(), "session-main", "/native/project");
+        assert!(session_manager::resume_session_target(
+            "omp",
+            "session-main",
+            &outside.path().to_string_lossy(),
+        )
+        .is_err());
+
+        // File existence is insufficient: a native cwd or ID changed after
+        // listing must invalidate the old renderer request without launching.
+        for (id, native_cwd) in [
+            ("session-main", "/new/project"),
+            ("replacement-id", "/native/project"),
+        ] {
+            write_header(&file, id, native_cwd);
+            assert!(validated_resume_target(
+                &command,
+                cwd.as_deref(),
+                "omp",
+                "session-main",
+                Some(&source),
+            )
+            .is_err());
+        }
+        std::fs::remove_file(&file).unwrap();
+        assert!(validated_resume_target(
+            &command,
+            cwd.as_deref(),
+            "omp",
+            "session-main",
+            Some(&source),
+        )
+        .is_err());
+    }
 }

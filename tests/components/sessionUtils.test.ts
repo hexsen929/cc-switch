@@ -29,7 +29,7 @@ describe("session utils", () => {
     },
   );
 
-  it.each(["claude", "codex", "opencode", "agy", "kimi"])(
+  it.each(["claude", "codex", "opencode", "agy", "kimi", "pi", "omp"])(
     "retains subagent read-only protection for %s",
     (providerId) => {
       const session: SessionMeta = {
@@ -56,18 +56,43 @@ describe("session utils", () => {
     expect(canDeleteSession(session)).toBe(false);
   });
 
-  it.each(["claude", "codex", "gemini", "opencode", "mcode", "kimi"])(
-    "requires a transcript source to resume %s",
-    (providerId) => {
-      expect(
-        canResumeSession({
-          providerId,
-          sessionId: "missing-source",
-          resumeCommand: `${providerId} resume missing-source`,
-        }),
-      ).toBe(false);
-    },
-  );
+  it("keeps an OMP main session resumable and deletable only with its native source", () => {
+    const session: SessionMeta = {
+      providerId: "omp",
+      sessionId: "omp-main",
+      sourcePath: "/sessions/omp-main.jsonl",
+      resumeCommand: "omp --resume '/sessions/omp-main.jsonl'",
+    };
+    expect(canResumeSession(session)).toBe(true);
+    expect(canDeleteSession(session)).toBe(true);
+    for (const marker of [
+      { readOnly: true },
+      { role: "subagent" as const },
+      { parentSessionId: "parent" },
+    ]) {
+      expect(canResumeSession({ ...session, ...marker })).toBe(false);
+      expect(canDeleteSession({ ...session, ...marker })).toBe(false);
+    }
+  });
+
+  it.each([
+    "claude",
+    "codex",
+    "gemini",
+    "opencode",
+    "mcode",
+    "kimi",
+    "pi",
+    "omp",
+  ])("requires a transcript source to resume %s", (providerId) => {
+    expect(
+      canResumeSession({
+        providerId,
+        sessionId: "missing-source",
+        resumeCommand: `${providerId} resume missing-source`,
+      }),
+    ).toBe(false);
+  });
 
   it.each([
     { readOnly: true },

@@ -872,7 +872,7 @@ describe("UnifiedSkillsPanel", () => {
 
   it("imports with apps chosen from where each Skill was found", async () => {
     m.installed = [makeSkill()];
-    m.visibleApps = ["claude", "codex", "grokbuild", "pi"];
+    m.visibleApps = ["claude", "codex", "grokbuild", "pi", "omp"];
     m.importSkills.mockResolvedValueOnce([makeSkill({ id: "shared" })]);
     renderPanel();
     await userEvent.click(
@@ -881,9 +881,10 @@ describe("UnifiedSkillsPanel", () => {
     await waitFor(() =>
       expect(screen.getByText("skillsPage.import.title")).toBeInTheDocument(),
     );
-    // Pi 按目录判断，导入时不提供勾选
+    // Pi / Oh My Pi 按原生目录判断，导入时不提供勾选，也不隐式启用。
     const dialog = screen.getByRole("dialog");
     expect(within(dialog).queryByText("Pi")).not.toBeInTheDocument();
+    expect(within(dialog).queryByText("Oh My Pi")).not.toBeInTheDocument();
     await userEvent.click(
       within(dialog).getByRole("button", { name: "skillsPage.import.submit" }),
     );
@@ -900,6 +901,7 @@ describe("UnifiedSkillsPanel", () => {
           openclaw: false,
           hermes: false,
           pi: false,
+          omp: false,
           mcode: false,
           kimi: false,
           agy: false,

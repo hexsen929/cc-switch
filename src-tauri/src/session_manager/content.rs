@@ -652,7 +652,7 @@ fn project_dir_for(source: &ValidatedSource) -> Option<PathBuf> {
     }
 
     use super::providers::{
-        claude, codex, gemini, grokbuild, hermes, kimi, mcode, openclaw, opencode, pi,
+        claude, codex, gemini, grokbuild, hermes, kimi, mcode, omp, openclaw, opencode, pi,
     };
     let sessions = match source.provider_id.as_str() {
         "codex" => codex::scan_sessions(),
@@ -665,6 +665,7 @@ fn project_dir_for(source: &ValidatedSource) -> Option<PathBuf> {
         "pi" => pi::scan_sessions(),
         "mcode" => mcode::scan_sessions(),
         "kimi" => kimi::scan_sessions(),
+        "omp" => omp::scan_sessions(),
         "agy" => super::providers::agy::scan_sessions(),
         _ => return None,
     };
@@ -1413,5 +1414,89 @@ mod tests {
             );
             assert!(load_image(&source, &image(&outside)).is_err());
         }
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn omp_images_match_canonical_native_sources_and_keep_project_boundaries() {
+        use crate::omp_config::test_support::TestAgentDir;
+        use crate::session_manager::providers::omp::{self, test_support::SessionDirEnv};
+
+        let _agent = TestAgentDir::new();
+        let _env = SessionDirEnv::set(None);
+        let tmp = tempdir().unwrap();
+        let project = tmp.path().join("project");
+        std::fs::create_dir(&project).unwrap();
+        let root = omp::session_roots().remove(0);
+        let file = root.join("project/native.jsonl");
+        std::fs::create_dir_all(file.parent().unwrap()).unwrap();
+        std::fs::write(
+            &file,
+            format!(
+                "{}\n{}\n",
+                serde_json::json!({"type":"title","title":"Image session"}),
+                serde_json::json!({"type":"session","version":3,"id":"native-id","cwd":project.to_string_lossy()}),
+            ),
+        )
+        .unwrap();
+        let image = |path: &Path| ImageRef {
+            source: ImageSource::LocalFile {
+                path: path.to_string_lossy().into_owned(),
+            },
+            media_type: "image/png".into(),
+            size: 16,
+            alt: None,
+        };
+        let allowed = project.join("result.png");
+        std::fs::write(&allowed, vec![7u8; 16]).unwrap();
+        let outside = tmp.path().join("outside.png");
+        std::fs::write(&outside, vec![8u8; 16]).unwrap();
+
+        // The alias comes first so the project cache cannot hide a regression
+        // to raw sourcePath comparison. Windows canonicalization supplies the
+        // verbatim spelling while the scanner and caller may use plain paths.
+        let requested_sources = vec![file.clone(), file.canonicalize().unwrap()];
+        #[cfg(not(windows))]
+        let requested_sources = std::iter::once(root.join("project/../project/native.jsonl"))
+            .chain(requested_sources)
+            .collect::<Vec<_>>();
+        for requested in requested_sources {
+            let source = validate_source("omp", &requested.to_string_lossy()).unwrap();
+            assert_eq!(
+                project_dir_for(&source),
+                Some(project.canonicalize().unwrap()),
+                "project lookup must use canonical native source identity: {}",
+                requested.display(),
+            );
+            assert_eq!(
+                load_image(&source, &image(&allowed)).unwrap(),
+                vec![7u8; 16]
+            );
+            assert!(load_image(&source, &image(&outside)).is_err());
+            #[cfg(unix)]
+            {
+                let alias = project.join("outside-alias.png");
+                if !alias.exists() {
+                    std::os::unix::fs::symlink(&outside, &alias).unwrap();
+                }
+                assert!(load_image(&source, &image(&alias)).is_err());
+            }
+        }
+
+        // A native cwd at the filesystem root must not allow arbitrary local
+        // images. Use a different source identity to avoid the project cache.
+        let filesystem_root = project.ancestors().last().unwrap();
+        let root_source = root.join("project/root-cwd.jsonl");
+        std::fs::write(
+            &root_source,
+            format!(
+                "{}\n",
+                serde_json::json!({"type":"session","version":3,"id":"root-id","cwd":filesystem_root.to_string_lossy()}),
+            ),
+        )
+        .unwrap();
+        let source = validate_source("omp", &root_source.to_string_lossy()).unwrap();
+        assert!(project_dir_for(&source).is_none());
+        assert!(load_image(&source, &image(&outside)).is_err());
     }
 }
