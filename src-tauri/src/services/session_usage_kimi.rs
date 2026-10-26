@@ -629,7 +629,16 @@ mod tests {
     fn kimi_usage_upgrades_unchanged_v2_dates_once_without_rebilling_pruned_history() {
         let db = Database::memory().unwrap();
         let root = tempfile::tempdir().unwrap();
-        let path = root.path().join("workspace/session/agents/main/wire.jsonl");
+        // Match read_dir's native path spelling on Windows too: joining a single
+        // slash-separated string preserves mixed separators in PathBuf's text,
+        // while production builds this cursor key from individual directory entries.
+        let path = root
+            .path()
+            .join("workspace")
+            .join("session")
+            .join("agents")
+            .join("main")
+            .join("wire.jsonl");
         let start = 1_700_000_000_000i64;
         let commit = start + 2 * 86_400_000;
         let mut records = request("v2", "fixture-model", start, 1_000, 2_000, 700);
