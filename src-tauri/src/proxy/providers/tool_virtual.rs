@@ -306,7 +306,11 @@ fn extract_first_json_object(text: &str) -> Option<String> {
     None
 }
 
-pub fn apply_virtual_tool_response_to_openai_chat_response(mut body: Value) -> Value {
+pub fn apply_virtual_tool_response_to_openai_chat_response(body: Value) -> Value {
+    // Inspect the same completion the downstream protocol converters see. Some
+    // compatible gateways wrap it in `data`, which otherwise hides virtual
+    // tool calls until after this bridge has already returned.
+    let mut body = super::transform::unwrap_chat_completion_envelope(body);
     let Some(choice) = body
         .get_mut("choices")
         .and_then(Value::as_array_mut)
@@ -413,5 +417,58 @@ mod tests {
         assert!(message["content"].is_null());
         assert_eq!(message["tool_calls"][0]["function"]["name"], "run");
         assert_eq!(out["choices"][0]["finish_reason"], "tool_calls");
+    }
+
+    #[test]
+    fn wrapped_completion_restores_virtual_tool_calls_before_protocol_conversion() {
+        let input = json!({
+            "success": true,
+            "data": {
+                "id": "chatcmpl-wrapped-virtual",
+                "model": "fixture-model",
+                "choices": [{
+                    "index": 0,
+                    "message": {
+                        "role": "assistant",
+                        "content": "{\"tool_calls\":[{\"name\":\"get_weather\",\"arguments\":{\"city\":\"Shanghai\"}}]}"
+                    },
+                    "finish_reason": "stop"
+                }],
+                "usage": {"prompt_tokens": 12, "completion_tokens": 3}
+            }
+        });
+        let out = apply_virtual_tool_response_to_openai_chat_response(input);
+        assert_eq!(out["id"], "chatcmpl-wrapped-virtual");
+        assert_eq!(out["model"], "fixture-model");
+        assert_eq!(out["usage"]["prompt_tokens"], 12);
+        assert_eq!(out["choices"][0]["finish_reason"], "tool_calls");
+        let call = &out["choices"][0]["message"]["tool_calls"][0];
+        assert_eq!(call["function"]["name"], "get_weather");
+        assert_eq!(call["function"]["arguments"], "{\"city\":\"Shanghai\"}");
+
+        let anthropic = super::super::transform::openai_to_anthropic(out.clone()).unwrap();
+        assert_eq!(anthropic["content"][0]["type"], "tool_use");
+        assert_eq!(anthropic["content"][0]["name"], "get_weather");
+        assert_eq!(anthropic["usage"]["input_tokens"], 12);
+
+        let responses =
+            super::super::transform_codex_chat::chat_completion_to_response(out).unwrap();
+        assert_eq!(responses["output"][0]["type"], "function_call");
+        assert_eq!(responses["output"][0]["name"], "get_weather");
+        assert_eq!(responses["usage"]["input_tokens"], 12);
+    }
+
+    #[test]
+    fn standard_completion_keeps_priority_over_nested_data() {
+        let input = json!({
+            "choices": [],
+            "data": {
+                "choices": [{"message": {"role": "assistant", "content": "nested"}}]
+            }
+        });
+        assert_eq!(
+            apply_virtual_tool_response_to_openai_chat_response(input.clone()),
+            input
+        );
     }
 }

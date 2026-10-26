@@ -75,8 +75,9 @@ const TERMINAL_APP_NAMES: Partial<Record<AppId, string>> = {
 
 /**
  * Claude Code：终端经 `claude --settings <临时文件>` 启动，临时文件只放这张卡的 env，没写的
- * 键仍从 ~/.claude/settings.json 读。卡上同时有地址和凭据才压得住全局配置；官方登录卡 env
- * 为空，会跟着全局走（账号凭据也是全局一份），不能说它隔离。
+ * 键仍从 ~/.claude/settings.json 读。卡上同时有地址和凭据才压得住全局配置。官方卡绑号时，
+ * 后端 `claude_official::terminal_account` 会在账号目录与可变的默认槽位之间选择；切卡还会
+ * 搬动登录位置，因此仅凭绑定信息不宣称这个终端始终与后续切卡隔离。
  *
  * Antigravity：带 Key 的卡用自己的私有 `--gemini_dir` 启动，Key 只给这个 agy 进程；官方
  * 登录卡直接跑原生 agy，跟着全局设置和登录走。
@@ -85,6 +86,7 @@ export function terminalIsIsolated(
   provider: Provider,
   appId: AppId = "claude",
 ): boolean {
+  if (provider.category === "official") return false;
   const env = (provider.settingsConfig as { env?: unknown } | undefined)?.env;
   if (!env || typeof env !== "object") return false;
   const filled = (key: string) => {
@@ -92,7 +94,7 @@ export function terminalIsIsolated(
     return typeof value === "string" && value.trim() !== "";
   };
   if (appId === "agy") {
-    return provider.category !== "official" && filled("GEMINI_API_KEY");
+    return filled("GEMINI_API_KEY");
   }
   return (
     filled("ANTHROPIC_BASE_URL") &&

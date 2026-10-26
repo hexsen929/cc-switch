@@ -264,6 +264,71 @@ describe("OpenTerminalDialog", () => {
     ).not.toBeInTheDocument();
   });
 
+  // 绑定信息不代表专用槽位：后端也可能用当前默认登录，后续切卡会搬动它。
+  it.each([
+    ["no env", {}],
+    ["empty env", { env: {} }],
+    [
+      "legacy env",
+      {
+        env: {
+          ANTHROPIC_BASE_URL: "https://api.anthropic.com",
+          ANTHROPIC_AUTH_TOKEN: "legacy-key",
+        },
+      },
+    ],
+  ] as const)(
+    "does not promise isolation for a bound official account with %s",
+    (_label, settingsConfig) => {
+      renderDialog(vi.fn(), {
+        id: "official",
+        name: "Claude Official",
+        category: "official",
+        settingsConfig,
+        meta: {
+          authBinding: {
+            source: "managed_account",
+            authProvider: "claude_official",
+            accountId: "acct-1",
+          },
+        },
+      } as Provider);
+      expect(
+        screen.queryByText("provider.openTerminalDialog.isolationTitle"),
+      ).not.toBeInTheDocument();
+    },
+  );
+
+  it("still opens a bound official account in the selected folder", async () => {
+    window.localStorage.setItem(
+      STORAGE_KEY,
+      JSON.stringify(["/work/official"]),
+    );
+    const onClose = vi.fn();
+    renderDialog(onClose, {
+      id: "official",
+      name: "Claude Official",
+      category: "official",
+      settingsConfig: {},
+      meta: {
+        authBinding: {
+          source: "managed_account",
+          authProvider: "claude_official",
+          accountId: "acct-1",
+        },
+      },
+    } as Provider);
+    fireEvent.click(
+      screen.getByRole("button", {
+        name: "provider.openTerminalDialog.confirm",
+      }),
+    );
+    await waitFor(() => expect(onClose).toHaveBeenCalled());
+    expect(openTerminalMock).toHaveBeenCalledWith("official", "claude", {
+      cwd: "/work/official",
+    });
+  });
+
   // agy 带 Key 的卡用自己的私有目录启动；官方登录卡跟着全局登录走
   it("treats only Antigravity key cards as isolated", () => {
     renderDialog(
