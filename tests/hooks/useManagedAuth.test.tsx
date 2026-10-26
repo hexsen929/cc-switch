@@ -188,7 +188,7 @@ describe("useManagedAuth", () => {
     },
   );
 
-  describe.each(["codex_oauth", "agy_oauth"] as const)(
+  describe.each(["codex_oauth", "agy_oauth", "claude_official"] as const)(
     "%s browser login",
     (provider) => {
       const browserResponse = {
@@ -320,6 +320,48 @@ describe("useManagedAuth", () => {
       );
     },
   );
+
+  it("does not reopen a Claude login page already opened by the backend", async () => {
+    const { copyText } = await import("@/lib/clipboard");
+    const { settingsApi } = await import("@/lib/api");
+    vi.mocked(copyText).mockClear();
+    vi.mocked(settingsApi.openExternal).mockClear();
+    apiMocks.authStartLogin.mockResolvedValue({
+      provider: "claude_official",
+      device_code: "claude:flow",
+      user_code: "",
+      verification_uri: "https://claude.ai/oauth/authorize?state=fixture",
+      expires_in: 600,
+      interval: 1,
+      browser_opened: true,
+    });
+    const { result, unmount } = renderHook(
+      () => useManagedAuth("claude_official"),
+      { wrapper: createWrapper() },
+    );
+    try {
+      await waitFor(() => expect(result.current.isStatusSuccess).toBe(true));
+      act(() => result.current.startAuth());
+      await waitFor(() =>
+        expect(apiMocks.authPollForAccount).toHaveBeenCalledWith(
+          "claude_official",
+          "claude:flow",
+          undefined,
+        ),
+      );
+      expect(settingsApi.openExternal).not.toHaveBeenCalled();
+      expect(copyText).not.toHaveBeenCalled();
+      act(() => result.current.cancelAuth());
+      await waitFor(() =>
+        expect(apiMocks.authCancelLogin).toHaveBeenCalledWith(
+          "claude_official",
+          "claude:flow",
+        ),
+      );
+    } finally {
+      unmount();
+    }
+  });
 
   it.each([
     [1, 8000],

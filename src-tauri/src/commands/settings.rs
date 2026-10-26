@@ -54,6 +54,8 @@ fn merge_settings_for_save(
     // Search credentials and source ordering are edited through their dedicated
     // command. Ordinary settings saves contain only the redacted frontend view.
     incoming.search_mcp = existing.search_mcp.clone();
+    // 轻量模式状态只由进入 / 退出轻量模式时写，前端缓存里的值总是旧的。
+    incoming.lightweight_mode = existing.lightweight_mode;
     incoming
 }
 
@@ -471,6 +473,18 @@ mod tests {
         assert!(merged.search_mcp.enabled);
         assert_eq!(merged.search_mcp.sources[0].keys, ["fixture-search-key"]);
         assert_eq!(merged.language.as_deref(), Some("zh"));
+    }
+
+    #[test]
+    fn save_settings_should_keep_the_existing_lightweight_mode() {
+        let existing = AppSettings {
+            lightweight_mode: true,
+            ..AppSettings::default()
+        };
+
+        let merged = merge_settings_for_save(AppSettings::default(), &existing);
+
+        assert!(merged.lightweight_mode);
     }
 
     #[test]

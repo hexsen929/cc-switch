@@ -4162,7 +4162,7 @@ impl CommandDeadline {
 }
 
 #[cfg(target_os = "windows")]
-fn terminate_child_tree(child: &mut std::process::Child) -> bool {
+pub(crate) fn terminate_child_tree(child: &mut std::process::Child) -> bool {
     use std::os::windows::process::CommandExt;
     use std::process::{Command, Stdio};
 
@@ -4176,7 +4176,7 @@ fn terminate_child_tree(child: &mut std::process::Child) -> bool {
 }
 
 #[cfg(not(target_os = "windows"))]
-fn terminate_child_tree(child: &mut std::process::Child) -> bool {
+pub(crate) fn terminate_child_tree(child: &mut std::process::Child) -> bool {
     let process_group = -(child.id() as libc::pid_t);
     // SAFETY: runtime commands are placed in a dedicated process group before spawn.
     (unsafe { libc::kill(process_group, libc::SIGKILL) == 0 }) || child.kill().is_ok()
@@ -4386,6 +4386,54 @@ pub(crate) fn run_detected_tool_command_with_timeout(
             .spawn()
             .map_err(|e| format!("Failed to run {tool}: {e}"))?;
         wait_child_output(child, deadline)
+    }
+}
+
+/// 构造运行本机工具默认入口的命令（定位规则和 PATH 补全同 [`run_detected_tool_command_with_timeout`]），
+/// 不设 stdio、不等待：给要自己管子进程的调用方用（比如长时间运行、要往 stdin 写东西的登录）。
+/// `timeout` 只约束定位工具这一步。工具配置在 WSL 里时报错。
+pub(crate) fn detected_tool_command(
+    tool: &str,
+    args: &[&str],
+    timeout: std::time::Duration,
+) -> Result<std::process::Command, String> {
+    if !VALID_TOOLS.contains(&tool) {
+        return Err(format!("Unsupported tool: {tool}"));
+    }
+    let deadline = CommandDeadline::from_timeout(Some(timeout));
+
+    #[cfg(target_os = "windows")]
+    if wsl_distro_for_tool(tool).is_some() {
+        return Err(format!(
+            "{tool} runs in WSL; this action needs it on Windows"
+        ));
+    }
+
+    let tool_path = locate_default_tool(tool, deadline)?;
+    let dir = tool_path
+        .parent()
+        .ok_or_else(|| format!("Invalid {tool} executable path"))?;
+
+    #[cfg(target_os = "windows")]
+    {
+        let new_path = format!("{};{}", dir.display(), effective_path_string());
+        Ok(build_windows_tool_command(&tool_path, args, &new_path))
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    {
+        let inherited = std::env::var_os("PATH")
+            .map(|value| value.to_string_lossy().into_owned())
+            .unwrap_or_default();
+        let current_path = match login_shell_path(deadline) {
+            Some(login_path) => merge_path_segments(&login_path, &inherited),
+            None => inherited,
+        };
+        let mut cmd = std::process::Command::new(&tool_path);
+        cmd.args(args)
+            .env("PATH", format!("{}:{current_path}", dir.display()));
+        isolate_child_process_group(&mut cmd);
+        Ok(cmd)
     }
 }
 
@@ -4942,6 +4990,27 @@ pub async fn open_provider_terminal(
             switch_agy_to_bound_account(&agy_accounts.0, provider).await?;
             agy_terminal_launch(provider)?
         }
+        AppType::Claude => {
+            use crate::services::provider::claude_official::{terminal_account, AccountTerminal};
+            match terminal_account(provider).map_err(|e| e.to_string())? {
+                Some(AccountTerminal::Dir(config_dir)) => {
+                    crate::services::claude_account::sync_shared(&config_dir);
+                    claude_account_terminal_launch(Some(config_dir), provider)?
+                }
+                Some(AccountTerminal::Default) => {
+                    crate::services::provider::claude_official::ensure_default_terminal_is_official(
+                        &state.db,
+                    )
+                    .map_err(|e| e.to_string())?;
+                    claude_account_terminal_launch(None, provider)?
+                }
+                None => {
+                    let env_vars =
+                        extract_env_vars_from_config(&provider.settings_config, &app_type);
+                    claude_terminal_launch(&env_vars, &providerId)?
+                }
+            }
+        }
         _ => {
             let env_vars = extract_env_vars_from_config(&provider.settings_config, &app_type);
             claude_terminal_launch(&env_vars, &providerId)?
@@ -5084,6 +5153,98 @@ fn claude_terminal_launch(
         batch_vars: Vec::new(),
         cleanup: vec![config_file],
     })
+}
+
+/// Claude 官方卡绑了账号：`CLAUDE_CONFIG_DIR` 放在启动环境里（不用 `--settings`）。
+/// 变量在进程启动前就设好，Claude Code 一开始预取钥匙串读的就是这个账号的条目
+/// （写在 settings 里的话 macOS 上前 30 秒会用默认登录的令牌）。会把它指向别处的变量一并清掉。
+/// 绑号卡的终端：清掉会改走别家服务或别的登录的变量，再指定账号目录；`None` 是账号正在默认
+/// 槽位里，去掉 `CLAUDE_CONFIG_DIR` 用默认目录。
+fn claude_account_terminal_launch(
+    config_dir: Option<PathBuf>,
+    provider: &crate::provider::Provider,
+) -> Result<ProviderLaunch, String> {
+    let mut env: Vec<(&'static str, Option<String>)> =
+        crate::services::claude_account::login::CLAUDE_ACCOUNT_UNSET
+            .iter()
+            .map(|name| (*name, None))
+            .collect();
+    env.push((
+        "CLAUDE_CONFIG_DIR",
+        config_dir
+            .as_ref()
+            .map(|dir| dir.to_string_lossy().into_owned()),
+    ));
+    let mut launch = ProviderLaunch {
+        title: if config_dir.is_some() {
+            "Using this Claude account's config directory:"
+        } else {
+            "Using this Claude account via Claude Code's current sign-in."
+        },
+        detail: config_dir,
+        program: "claude",
+        args: Vec::new(),
+        batch_command: "claude".to_string(),
+        env,
+        batch_vars: Vec::new(),
+        cleanup: Vec::new(),
+    };
+    // The account's env launcher runs the executable directly, not the user's
+    // claude() shell wrapper. Keep runtime instructions explicit and private to
+    // this launch, so another card being selected cannot replace them midway.
+    if let Err(error) = add_claude_account_runtime_prompts(&mut launch, provider) {
+        for file in &launch.cleanup {
+            let _ = std::fs::remove_file(file);
+        }
+        return Err(error);
+    }
+    Ok(launch)
+}
+
+fn add_claude_account_runtime_prompts(
+    launch: &mut ProviderLaunch,
+    provider: &crate::provider::Provider,
+) -> Result<(), String> {
+    use crate::claude_append_instructions::{provider_config, read_file, system_provider_config};
+
+    for (flag, active_file, stem) in [
+        (
+            "--system-prompt-file",
+            system_provider_config(provider).active_file,
+            "claude_account_system",
+        ),
+        (
+            "--append-system-prompt-file",
+            provider_config(provider).active_file,
+            "claude_account_append",
+        ),
+    ] {
+        let Some(configured_path) = active_file else {
+            continue;
+        };
+        let Some(content) = read_file(&configured_path).map_err(|error| error.to_string())? else {
+            continue;
+        };
+        if content.trim().is_empty() {
+            continue;
+        }
+        let snapshot = unique_temp_path(stem, "md");
+        launch.cleanup.push(snapshot.clone());
+        crate::config::atomic_write_private(&snapshot, content.as_bytes())
+            .map_err(|error| format!("写入 Claude 运行时指令快照失败: {error}"))?;
+        launch.args.push(flag.to_string());
+        launch.args.push(snapshot.to_string_lossy().into_owned());
+        // Like the settings snapshot, the file lives beside the launcher .bat.
+        // Keep its Unicode parent path out of batch source.
+        let name = snapshot
+            .file_name()
+            .ok_or_else(|| "Claude 运行时指令快照缺少文件名".to_string())?;
+        launch.batch_command.push_str(&format!(
+            " {flag} \"%~dp0{}\"",
+            escape_windows_batch_value(&name.to_string_lossy())
+        ));
+    }
+    Ok(())
 }
 
 /// 官方卡绑了授权中心的账号时，先把 agy 的全局登录切到它（已经是它就不写）。没绑的卡跟着
@@ -5900,10 +6061,10 @@ fn launch_windows_terminal(launch: &ProviderLaunch, cwd: Option<&Path>) -> Resul
         .iter()
         .map(|(name, _)| format!("Remove-Item 'Env:{name}' -ErrorAction SilentlyContinue; "))
         .collect();
-    let command = if launch.program == "agy" {
+    let command = if needs_windows_env_launcher(launch) {
         format!(
             "powershell -NoProfile -ExecutionPolicy Bypass -EncodedCommand {}",
-            powershell_encoded_command(&windows_agy_launch_script(launch))
+            powershell_encoded_command(&windows_env_launch_script(launch))
         )
     } else {
         launch.batch_command.clone()
@@ -5925,7 +6086,7 @@ fn launch_windows_terminal(launch: &ProviderLaunch, cwd: Option<&Path>) -> Resul
         })
         .collect();
 
-    // Credential values never enter batch syntax. The AGY PowerShell child
+    // Credential values never enter batch syntax. The PowerShell child
     // sets its own environment; clear inherited carriers after it exits.
     let content = format!(
         "@echo off\r\n{cwd_command}setlocal DisableDelayedExpansion\r\n{set_lines}echo {title}\r\n{command}\r\nendlocal\r\n{clear_carriers}{cleanup}del \"%~f0\" >nul 2>&1\r\n",
@@ -5983,7 +6144,7 @@ fn is_windows_unc_path(path: &str) -> bool {
 
 /// Values travel only through process-environment carriers. In particular an
 /// ASCII quote or ampersand must never become batch syntax after `%VAR%` expansion.
-/// The AGY PowerShell child reads carriers as data, sets its own environment, and
+/// The account/AGY PowerShell child reads carriers as data, sets its own environment, and
 /// invokes the native program with an argument array, not a command string.
 #[cfg_attr(not(target_os = "windows"), allow(dead_code))]
 fn build_windows_launch_env(launch: &ProviderLaunch) -> (String, Vec<(String, String)>) {
@@ -6009,7 +6170,12 @@ fn build_windows_launch_env(launch: &ProviderLaunch) -> (String, Vec<(String, St
 }
 
 #[cfg_attr(not(target_os = "windows"), allow(dead_code))]
-fn windows_agy_launch_script(launch: &ProviderLaunch) -> String {
+fn needs_windows_env_launcher(launch: &ProviderLaunch) -> bool {
+    launch.program == "agy" || (launch.program == "claude" && !launch.env.is_empty())
+}
+
+#[cfg_attr(not(target_os = "windows"), allow(dead_code))]
+fn windows_env_launch_script(launch: &ProviderLaunch) -> String {
     fn literal(value: &str) -> String {
         format!("'{}'", value.replace('\'', "''"))
     }
@@ -6057,7 +6223,10 @@ fn windows_agy_launch_script(launch: &ProviderLaunch) -> String {
             "[Environment]::SetEnvironmentVariable('CC_SWITCH_INTERNAL_ENV_{index}', $null, 'Process')\n"
         ));
     }
-    script.push_str("& 'agy' @ccsArgs\nif ($null -ne $LASTEXITCODE) { exit $LASTEXITCODE }\n");
+    script.push_str(&format!(
+        "& {} @ccsArgs\nif ($null -ne $LASTEXITCODE) {{ exit $LASTEXITCODE }}\n",
+        literal(launch.program)
+    ));
     script
 }
 
@@ -7261,7 +7430,7 @@ mod tests {
                     r"C:\Users\张三\.cc-switch\agy\relay".to_string()
                 )
             );
-            let script = windows_agy_launch_script(&launch);
+            let script = windows_env_launch_script(&launch);
             assert!(!script.contains(value));
             assert!(!script.contains("C:/profile"));
             assert!(!script.contains("%CC_SWITCH_INTERNAL_ENV_"));
@@ -7314,7 +7483,7 @@ mod tests {
                 &batch,
                 format!(
                     "@echo off\r\nsetlocal DisableDelayedExpansion\r\n{set_lines}powershell -NoProfile -ExecutionPolicy Bypass -EncodedCommand {}\r\nendlocal\r\n",
-                    powershell_encoded_command(&windows_agy_launch_script(&launch))
+                    powershell_encoded_command(&windows_env_launch_script(&launch))
                 ),
             ).unwrap();
             let mut command = std::process::Command::new("cmd");
@@ -7367,6 +7536,235 @@ mod tests {
             ]
         );
         std::fs::remove_file(file).unwrap();
+    }
+
+    fn claude_runtime_test_provider(
+        system: Option<&Path>,
+        append: Option<&Path>,
+    ) -> crate::provider::Provider {
+        let mut provider = crate::provider::Provider::with_id(
+            "runtime-fixture".into(),
+            "Official Claude".into(),
+            serde_json::json!({}),
+            None,
+        );
+        provider.meta = Some(crate::provider::ProviderMeta {
+            claude_system_instructions: Some(crate::provider::ClaudeSystemInstructionsConfig {
+                files: Vec::new(),
+                active_file: system.map(|path| path.to_string_lossy().into_owned()),
+            }),
+            claude_append_instructions: Some(crate::provider::ClaudeAppendInstructionsConfig {
+                files: Vec::new(),
+                active_file: append.map(|path| path.to_string_lossy().into_owned()),
+            }),
+            ..Default::default()
+        });
+        provider
+    }
+
+    #[test]
+    fn claude_account_terminal_keeps_provider_runtime_instructions_in_private_snapshots() {
+        let root = tempfile::tempdir().unwrap();
+        let system = root.path().join("系统指令.md");
+        let append = root.path().join("追加指令.md");
+        std::fs::write(&system, "system for selected account\n").unwrap();
+        std::fs::write(&append, "append for selected account\n").unwrap();
+        let provider = claude_runtime_test_provider(Some(&system), Some(&append));
+        let account = root.path().join("账号目录");
+        let launch = claude_account_terminal_launch(Some(account.clone()), &provider).unwrap();
+
+        assert_eq!(launch.args.len(), 4);
+        assert_eq!(launch.args[0], "--system-prompt-file");
+        assert_eq!(launch.args[2], "--append-system-prompt-file");
+        assert_eq!(launch.cleanup.len(), 2);
+        for (snapshot, source, expected) in [
+            (&launch.cleanup[0], &system, "system for selected account\n"),
+            (&launch.cleanup[1], &append, "append for selected account\n"),
+        ] {
+            assert_ne!(snapshot, source);
+            assert_eq!(std::fs::read_to_string(snapshot).unwrap(), expected);
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                assert_eq!(
+                    std::fs::metadata(snapshot).unwrap().permissions().mode() & 0o777,
+                    0o600
+                );
+            }
+        }
+        assert_eq!(
+            launch.env.last(),
+            Some(&(
+                "CLAUDE_CONFIG_DIR",
+                Some(account.to_string_lossy().into_owned())
+            ))
+        );
+        assert!(launch
+            .batch_command
+            .contains(r#"--system-prompt-file "%~dp0"#));
+        assert!(launch
+            .batch_command
+            .contains(r#"--append-system-prompt-file "%~dp0"#));
+        assert!(!launch
+            .batch_command
+            .contains(root.path().to_string_lossy().as_ref()));
+        std::fs::write(&system, "a later provider's system\n").unwrap();
+        std::fs::write(&append, "a later provider's append\n").unwrap();
+        assert_eq!(
+            std::fs::read_to_string(&launch.cleanup[0]).unwrap(),
+            "system for selected account\n"
+        );
+        assert_eq!(
+            std::fs::read_to_string(&launch.cleanup[1]).unwrap(),
+            "append for selected account\n"
+        );
+        for snapshot in launch.cleanup {
+            std::fs::remove_file(snapshot).unwrap();
+        }
+    }
+
+    #[test]
+    fn claude_account_terminal_does_not_inject_unselected_empty_or_missing_runtime_files() {
+        let root = tempfile::tempdir().unwrap();
+        let empty = root.path().join("empty.md");
+        std::fs::write(&empty, " \n\t").unwrap();
+        let missing = root.path().join("missing.md");
+        for provider in [
+            claude_runtime_test_provider(None, None),
+            claude_runtime_test_provider(Some(&empty), Some(&missing)),
+        ] {
+            let launch = claude_account_terminal_launch(None, &provider).unwrap();
+            assert!(launch.args.is_empty());
+            assert!(launch.cleanup.is_empty());
+            assert_eq!(launch.batch_command, "claude");
+            assert_eq!(launch.env.last(), Some(&("CLAUDE_CONFIG_DIR", None)));
+        }
+    }
+
+    #[test]
+    fn windows_claude_account_launch_sets_unicode_env_and_preserves_argument_arrays() {
+        let provider = claude_runtime_test_provider(None, None);
+        let account = r"C:\Users\张三\Official & subscription\config";
+        let mut launch =
+            claude_account_terminal_launch(Some(PathBuf::from(account)), &provider).unwrap();
+        launch.args = vec![
+            "--system-prompt-file".into(),
+            r"C:\Users\张三\Temp\runtime system.md".into(),
+        ];
+        assert!(needs_windows_env_launcher(&launch));
+        let (lines, carried) = build_windows_launch_env(&launch);
+        assert!(!lines.contains(account));
+        let index = launch
+            .env
+            .iter()
+            .position(|(name, _)| *name == "CLAUDE_CONFIG_DIR")
+            .unwrap();
+        assert!(carried.contains(&(
+            format!("CC_SWITCH_INTERNAL_ENV_{index}"),
+            account.to_string()
+        )));
+        let script = windows_env_launch_script(&launch);
+        assert!(script.contains(&format!(
+            "SetEnvironmentVariable('CLAUDE_CONFIG_DIR', [Environment]::GetEnvironmentVariable('CC_SWITCH_INTERNAL_ENV_{index}', 'Process'), 'Process')"
+        )));
+        assert!(script.contains(&format!(
+            "SetEnvironmentVariable('CC_SWITCH_INTERNAL_ENV_{index}', $null, 'Process')"
+        )));
+        assert!(script.contains("SetEnvironmentVariable('ANTHROPIC_API_KEY', $null, 'Process')"));
+        assert!(script.contains("$ccsArgs += '--system-prompt-file'"));
+        assert!(script.contains(r"$ccsArgs += 'C:\Users\张三\Temp\runtime system.md'"));
+        assert!(script.contains("& 'claude' @ccsArgs"));
+        assert!(!script.contains(account));
+        assert!(!script.contains("Invoke-Expression"));
+
+        launch.env.clear();
+        assert!(!needs_windows_env_launcher(&launch));
+        launch.program = "other";
+        launch.env.push(("CLAUDE_CONFIG_DIR", Some(account.into())));
+        assert!(!needs_windows_env_launcher(&launch));
+        assert!(needs_windows_env_launcher(&agy_key_launch()));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_claude_account_cmd_launch_uses_the_selected_account_and_runtime_args() {
+        let root = tempfile::tempdir().unwrap();
+        let bin = root.path().join("bin");
+        std::fs::create_dir(&bin).unwrap();
+        let capture = root.path().join("capture.json");
+        let account = r"C:\Users\张三\Official & subscription\config";
+        let provider = claude_runtime_test_provider(None, None);
+        let mut launch =
+            claude_account_terminal_launch(Some(PathBuf::from(account)), &provider).unwrap();
+        launch.args = vec![
+            "--system-prompt-file".into(),
+            r"C:\Users\张三\Temp\runtime system.md".into(),
+        ];
+        let index = launch
+            .env
+            .iter()
+            .position(|(name, _)| *name == "CLAUDE_CONFIG_DIR")
+            .unwrap();
+        // A mock command records only fixture environment and argv. Never run
+        // the installed Claude executable or touch an actual account directory.
+        let capture_script = format!(
+            "$v = @{{ account = $env:CLAUDE_CONFIG_DIR; key = $env:ANTHROPIC_API_KEY; token = $env:ANTHROPIC_AUTH_TOKEN; carrier = [Environment]::GetEnvironmentVariable('CC_SWITCH_INTERNAL_ENV_{index}', 'Process'); args = @($env:CC_SWITCH_TEST_ARG_1, $env:CC_SWITCH_TEST_ARG_2) }}; $v | ConvertTo-Json -Compress | Set-Content -LiteralPath $env:CC_SWITCH_TEST_CAPTURE -Encoding UTF8"
+        );
+        std::fs::write(
+            bin.join("claude.cmd"),
+            format!(
+                "@echo off\r\nsetlocal DisableDelayedExpansion\r\nset \"CC_SWITCH_TEST_ARG_1=%~1\"\r\nset \"CC_SWITCH_TEST_ARG_2=%~2\"\r\npowershell -NoProfile -EncodedCommand {}\r\n",
+                powershell_encoded_command(&capture_script)
+            ),
+        )
+        .unwrap();
+        let path = std::env::join_paths(std::iter::once(bin.clone()).chain(std::env::split_paths(
+            &std::env::var_os("PATH").unwrap_or_default(),
+        )))
+        .unwrap();
+        let (set_lines, carried) = build_windows_launch_env(&launch);
+        let batch = root.path().join("launch.bat");
+        std::fs::write(
+            &batch,
+            format!(
+                "@echo off\r\nsetlocal DisableDelayedExpansion\r\n{set_lines}powershell -NoProfile -ExecutionPolicy Bypass -EncodedCommand {}\r\nendlocal\r\n",
+                powershell_encoded_command(&windows_env_launch_script(&launch))
+            ),
+        )
+        .unwrap();
+        let mut command = std::process::Command::new("cmd");
+        command
+            .args(["/D", "/V:OFF", "/C"])
+            .arg(batch)
+            .current_dir(root.path())
+            .env("PATH", path)
+            .env("CC_SWITCH_TEST_CAPTURE", &capture)
+            .env("CLAUDE_CONFIG_DIR", "wrong-inherited-account")
+            .env("ANTHROPIC_API_KEY", "fixture-key-to-clear")
+            .env("ANTHROPIC_AUTH_TOKEN", "fixture-token-to-clear");
+        for (name, value) in carried {
+            command.env(name, value);
+        }
+        let output = command.output().unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let raw = std::fs::read_to_string(capture).unwrap();
+        let result: serde_json::Value =
+            serde_json::from_str(raw.trim_start_matches('\u{feff}')).unwrap();
+        assert_eq!(result["account"], account);
+        assert!(result["key"].is_null());
+        assert!(result["token"].is_null());
+        assert!(result["carrier"].is_null());
+        assert_eq!(
+            result["args"],
+            serde_json::json!([
+                "--system-prompt-file",
+                r"C:\Users\张三\Temp\runtime system.md"
+            ])
+        );
     }
 
     #[test]

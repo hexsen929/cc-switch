@@ -214,6 +214,27 @@
         "oauthTitle": "OAuth Kimlik Doğrulama Modu",
         "oauthHint": "Google’ın resmî hizmeti kişisel OAuth kimlik doğrulaması kullanır; API anahtarı girmeniz gerekmez. İlk kullanımda oturum açmanız için tarayıcı otomatik açılır.",
         "apiKeyPlaceholder": "Gemini API Anahtarını girin"
+      },
+      "claudeAccount": {
+        "label": "Hesap",
+        "default": "Varsayılan oturum (~/.claude)",
+        "missing": "Bu bilgisayarda bulunmayan hesap",
+        "add": "Yeni bir hesapta oturum aç",
+        "pending": "Claude oturum açma sayfası tarayıcınızda açıldı. Oturum açıp yetki verdikten sonra hesap otomatik olarak seçilir.",
+        "helpTerminal": "Ayarlar bölümünde Claude yapılandırma klasörü değiştirilmiş; bu karta geçmek Claude Code oturumunu değiştirmez. Seçilen hesabı kullanmak için karttaki Terminal Aç seçeneğini kullanın.",
+        "help": "Bu karta geçmek Claude Code oturumunu seçilen hesaba geçirir; daha sonra herhangi bir yerde başlatılan claude bu hesabı kullanır. Birden fazla hesabı aynı anda kullanmak için karttaki Terminal Aç seçeneğini kullanın.",
+        "claudeAccount": "Claude hesabı",
+        "reauthBadge": "Yeniden oturum açılmalı",
+        "terminalHint": "Terminal Aç ile kullanın",
+        "plan": {
+          "pro": "Pro",
+          "max": "Max",
+          "max5x": "Max 5x",
+          "max20x": "Max 20x",
+          "team": "Team",
+          "teamPremium": "Team Premium",
+          "enterprise": "Enterprise"
+        }
       }
     },
     "duplicateLiveIdsLoadFailed": "Sağlayıcı tanımlayıcıları yapılandırmadan okunamadı. Lütfen yapılandırmayı düzeltip tekrar deneyin.",
@@ -1881,7 +1902,6 @@
   "codexOauth": {
     "authStatus": "Kimlik doğrulama durumu",
     "notAuthenticated": "Kimliği doğrulanmadı",
-    "loginWithChatGPT": "ChatGPT ile oturum açın",
     "loginRequired": "Lütfen önce ChatGPT'de oturum açın",
     "statusLoading": "Hesap durumu yükleniyor...",
     "statusUnavailable": "Durum kullanılamıyor",
@@ -4419,7 +4439,8 @@
       "edit": "{{name}}'yi düzenleyin",
       "more": "{{name}} için diğer işlemler",
       "moveUp": "{{name}}'yi yukarı taşı",
-      "moveDown": "{{name}}'yi aşağı taşı"
+      "moveDown": "{{name}}'yi aşağı taşı",
+      "openTerminal": "{{name}} ile bir terminal aç"
     },
     "chip": {
       "official": "Resmi",
@@ -4930,12 +4951,12 @@
       "copilotHelp": "Claude Code ve Claude Desktop'deki GitHub Copilot ön ayarları tarafından kullanılır. Seçilmiş bir hesaba sahip olmayan sağlayıcılar Varsayılan hesabı kullanır.",
       "chatgptHelp": "Claude Code ve Claude Desktop'deki ChatGPT ön ayarları ve Codex'nin resmi oturum açma bağlaması tarafından kullanılır. Seçilmiş bir hesaba sahip olmayan sağlayıcılar Varsayılan hesabı kullanır.",
       "xaiHelp": "Claude Code, Claude Desktop ve Codex'deki xAI ön ayarları tarafından kullanılır. Seçilmiş bir hesaba sahip olmayan sağlayıcılar Varsayılan hesabı kullanır.",
-      "agyHelp": "Antigravity CLI (agy) için resmî oturum açma yöntemi. agy aynı anda yalnızca tek bir hesapta oturum açabilir. Hesabı Değiştir seçeneği agy'nin oturumunu seçilen hesapla değiştirir ve bundan sonra başlatılan agy oturumları bu hesabı kullanır. agy'nin hâlihazırda oturum açtığı hesap buraya otomatik olarak eklenir; böylece başka hesaba geçerken önceki hesabı kaybetmezsiniz."
+      "agyHelp": "Antigravity CLI (agy) için resmî oturum açma yöntemi. agy aynı anda yalnızca tek bir hesapta oturum açabilir. Hesabı Değiştir seçeneği agy'nin oturumunu seçilen hesapla değiştirir ve bundan sonra başlatılan agy oturumları bu hesabı kullanır. agy'nin hâlihazırda oturum açtığı hesap buraya otomatik olarak eklenir; böylece başka hesaba geçerken önceki hesabı kaybetmezsiniz.",
+      "claudeHelpTerminal": "Resmî Claude Code abonelik hesapları (Pro / Max / Team). Ayarlar bölümünde Claude yapılandırma klasörü değiştirilmiş (örneğin WSL için); kart değiştirmek Claude Code oturumunu değiştirmez. Resmî kartta bir hesap seçip karttaki Terminal Aç seçeneğini kullanın.",
+      "claudeHelp": "Resmî Claude Code abonelik hesapları (Pro / Max / Team). Resmî Claude kartında bir hesap seçin: karta geçmek Claude Code oturumunu bu hesaba geçirir; daha sonra herhangi bir terminalde veya IDE eklentisinde başlatılan claude bu hesabı kullanır. Birden fazla hesabı aynı anda kullanmak için karttaki Terminal Aç seçeneğini kullanın. Geçiş, oturum belirteçlerini Claude Code’un kendi oturum konumları arasında taşır; belirteçler bu bilgisayarda kalır, yüklenmez, yenilenmez ve oturumları kapatılmaz. Anthropic koşulları üçüncü taraf araçların oturum belirteçlerini saklamasına izin vermediğinden bu kullanım gri bir alandır; kararı siz verin. Bir kartın oturumu değiştirmesini istemiyorsanız hesabını \"Varsayılan oturum\" olarak ayarlayın. İlk geçiş Claude Code’un mevcut hesabını kaydeder; geçiş açık Remote Control oturumunu sonlandırır ve sonraki ilk mesaj istem önbelleğini yeniden oluşturur."
     },
     "addAccount": "Hesap ekle",
-    "groupMenu": "{{service}} için daha fazla eylem",
     "accountMenu": "{{login}} için daha fazla eylem",
-    "removeAll": "Tüm hesapları sil",
     "removeAccount": "Hesabı sil",
     "setDefault": "Varsayılan olarak ayarla",
     "reauth": "Tekrar oturum açın",
@@ -4955,7 +4976,6 @@
     "loginFailed": "Oturum açma işlemi tamamlanmadı",
     "pending": {
       "add": "{{service}} hesabı ekleniyor · Yetkilendirme bekleniyor…",
-      "login": "{{service}}'de oturum açılıyor · Yetkilendirme bekleniyor…",
       "reauth": "{{login}} olarak tekrar oturum açılıyor · Yetkilendirme bekleniyor…",
       "enterCode": "Bu kodu tarayıcıya girin:",
       "copy": "Kodu kopyala",
@@ -4980,12 +5000,25 @@
       "addedOn": "{{date}} tarihinde eklendi",
       "statusLoadFailed": "Antigravity hesapları okunamadı. Yeniden deneyin.",
       "empty": "Henüz Antigravity hesabı yok. agy'nin oturum açtığı hesap burada otomatik olarak görünür.",
-      "login": "Google ile oturum aç",
       "current": "agy tarafından kullanılıyor",
       "switchTo": "agy'yi bu hesaba geçir",
       "removeNote": "agy'nin oturumu açık kalır: agy bu hesabı kullanıyorsa kaldırdıktan sonra da çalışmaya devam eder.",
       "switched": "Hesap değiştirildi. Yeni agy oturumları bu hesabı kullanacak.",
       "switchedWhileRunning": "Hesap değiştirildi. agy çalışıyor: açık agy oturumları önceki hesabı kullanmaya devam eder ve hesabı yeniden kaydedebilir. agy'yi kapatıp yeniden açın."
+    },
+    "claude": {
+      "pasteSubmitted": "Gönderildi. Oturum açma tamamlanıyor…",
+      "pasteToggle": "Yetki verdikten sonra buraya dönmedi mi?",
+      "pasteHint": "Yetki verdikten sonra tarayıcının adres çubuğundaki adresi veya sayfada gösterilen kodu yapıştırın.",
+      "pasteLabel": "Yetkilendirme kodu veya adresi",
+      "pasteSubmit": "Gönder",
+      "reauthNote": "Oturumun süresi doldu. Yeniden oturum açın.",
+      "addedOn": "{{date}} tarihinde eklendi",
+      "loginExpiresOn": "Oturum yaklaşık {{date}} tarihinde sona erer; ardından yeniden oturum açın",
+      "loginMaybeExpired": "Oturumun süresi dolmuş olabilir. Bu hesaba geçmeden önce yeniden oturum açın.",
+      "statusLoadFailed": "Claude hesapları okunamadı. Yeniden deneyin.",
+      "empty": "Henüz Claude hesabı yok. Birden fazla abonelik hesabı arasında geçiş yapmak için burada oturum açın.",
+      "removeNote": "Yalnızca CC Switch’in bu hesap için kaydettiği oturumu kaldırır; başka yerdeki oturum kapatılmaz ve Claude Code’un mevcut oturumuna (~/.claude) dokunulmaz. Bu hesaba bağlı kartlar Claude Code’un mevcut oturumunu kullanır."
     }
   },
   "requestDiagnostics": {

@@ -2783,6 +2783,60 @@ mod tests {
     }
 
     #[test]
+    fn remote_compaction_usage_record_survives_a_sync_pass_before_its_token_count(
+    ) -> Result<(), AppError> {
+        // The usage record and its compensating zero-last token_count can land
+        // in different sync passes (the token_count may lag by the whole tool
+        // execution window). The first pass has nothing billable and advances
+        // the cursor past the record; the compensating event must still be
+        // imported by the pass that finally sees the token_count.
+        let db = Database::memory()?;
+        let temp = tempdir().unwrap();
+        let path = rollout_path(temp.path(), PARENT_ID);
+        write_jsonl(
+            &path,
+            &[
+                session_meta(PARENT_ID),
+                turn_context(),
+                token_usage_record_at("resp_compact", 26_705, 0, 491, "2026-07-10T03:00:02Z"),
+            ],
+        );
+
+        let first = sync_test_file(&db, &path, &[&path])?;
+        assert_eq!(first.imported, 0, "nothing billable yet");
+
+        append_jsonl(
+            &path,
+            token_count_with_last_at(0, 0, 0, 0, 0, 0, "default", "2026-07-10T03:05:02Z"),
+        );
+
+        let second = sync_test_file(&db, &path, &[&path])?;
+        assert_eq!(
+            second.imported, 1,
+            "compaction usage must be imported once its token_count arrives"
+        );
+        let rows = codex_usage_rows(&db)?;
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].1, 26_705);
+        assert_eq!(rows[0].2, 491);
+        assert!(rows[0].0.ends_with(":usage:resp_compact"));
+
+        // A later pass that reparses the file (any new content) must not bill
+        // the compensating event again: the record is re-discovered on every
+        // reparse, so the line-offset gate plus the `usage:<key>` request id
+        // are what keep it at exactly one row.
+        append_jsonl(
+            &path,
+            token_count_with_last_at(0, 0, 0, 0, 0, 0, "default", "2026-07-10T03:06:02Z"),
+        );
+        let third = sync_test_file(&db, &path, &[&path])?;
+        assert_eq!(third.imported, 0, "compensating event must not re-import");
+        let rows = codex_usage_rows(&db)?;
+        assert_eq!(rows.len(), 1);
+        Ok(())
+    }
+
+    #[test]
     fn usage_record_covered_by_token_count_is_not_imported_twice() -> Result<(), AppError> {
         let db = Database::memory()?;
         let temp = tempdir().unwrap();
