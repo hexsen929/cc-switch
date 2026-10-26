@@ -8,6 +8,7 @@ use super::{default_owner, identity, load_state, update_state, Ctx, Journal, Ste
 use crate::error::AppError;
 
 /// 补完上一次没做完的切换（启动时、每次切换前）。补完的切换停在 [`Step::Done`]，等调用方确认。
+#[cfg(test)]
 pub fn recover(ctx: &Ctx<'_>) -> Result<(), AppError> {
     recover_receipted(ctx).map(|_| ())
 }

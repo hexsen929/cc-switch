@@ -4,7 +4,7 @@
 //! 官方卡时，把 T 的登录「移」进默认槽位：之后任何地方新启动的 `claude`（终端、
 //! IDE 插件、脚本）都是 T，不用设环境变量。
 //!
-//! 一次切换（[`check_out`]）：
+//! 一次切换（[`check_out_receipted`]）：
 //! 1. 收回：默认槽位里现在是谁（O），就把它的账号键写回 O 的账号槽位；O 还不是 CC Switch
 //!    管的账号时，先给它建一个账号目录（[`Adopter`]）。
 //! 2. 放入：默认槽位 = 原来的共享键（MCP 的 OAuth 等，属于这台电脑）+ T 的账号键。这一步
@@ -17,7 +17,7 @@
 //! 切换会改用它的备份。
 //!
 //! 全程持有 Claude Code 自己的刷新锁（挡住它这时刷新令牌）。每一步之前先把进度写进切换日志
-//! （[`Journal`]，只有指纹，没有令牌），崩溃后下次启动或下次切换时补完（[`recover`]）。
+//! （[`Journal`]，只有指纹，没有令牌），崩溃后下次启动或下次切换时补完（[`recover_receipted`]）。
 //!
 //! 不联网、不刷新令牌、不登出；令牌只在 Claude Code 的槽位格式里（钥匙串 / `.credentials.json`）
 //! 移动，CC Switch 自己的文件里只有指纹和过期时间。
@@ -40,11 +40,16 @@ use crate::error::AppError;
 use store::{CredentialStore, Slot};
 
 pub use files::backup_dir;
-pub use recover::{recover, recover_receipted};
-pub use state::{confirm, confirm_receipt, load_state, update_state, Journal, State, Step};
-pub use switch::{
-    check_out, check_out_receipted, replace_live, replace_live_receipted, vacate, vacate_receipted,
-};
+pub use recover::recover_receipted;
+pub use state::{confirm_receipt, load_state, update_state, Journal, State, Step};
+pub use switch::{check_out_receipted, replace_live_receipted, vacate_receipted};
+
+#[cfg(test)]
+pub use recover::recover;
+#[cfg(test)]
+pub use state::confirm;
+#[cfg(test)]
+pub use switch::{check_out, replace_live, vacate};
 
 #[cfg(test)]
 use creds::{account_fingerprint, login_expiry, merge};
@@ -116,15 +121,6 @@ pub fn is_live(account: &str) -> bool {
 pub fn default_owner(default: &Slot) -> Option<String> {
     let profile = files::read_profile(&default.global_config())?;
     identity::identity_from_profile(&profile).map(|found| found.key)
-}
-
-/// 账号 `account` 现在的登录在哪个槽位，查额度用：它在默认槽位里就是默认槽位，否则是它自己
-/// 的账号目录。本机没有这个账号时为 `None`。
-pub fn account_slot(data_dir: &Path, account: &str) -> Option<Slot> {
-    if is_live(account) {
-        return Some(Slot::default_slot());
-    }
-    crate::services::claude_account::config_dir_on_disk(data_dir, account).map(Slot::Account)
 }
 
 /// Read account-local state while account switching is excluded. The callback

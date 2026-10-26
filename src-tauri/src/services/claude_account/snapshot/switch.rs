@@ -41,6 +41,7 @@ enum Mode {
 }
 
 /// 把账号 `target`（目录 `target_dir`）移进默认槽位。
+#[cfg(test)]
 pub fn check_out(ctx: &Ctx<'_>, target: &str, target_dir: &Path) -> Result<Outcome, AppError> {
     check_out_receipted(ctx, target, target_dir).map(|(outcome, _)| outcome)
 }
@@ -57,6 +58,7 @@ pub fn check_out_receipted(
 
 /// 账号 `target` 刚重新登录（新登录在 `target_dir`）、默认槽位里又正是它：用新登录换掉默认槽位
 /// 里的旧登录（旧的可能已经过期或被吊销）。默认槽位不是它时不动。返回换了没有。
+#[cfg(test)]
 pub fn replace_live(ctx: &Ctx<'_>, target: &str, target_dir: &Path) -> Result<bool, AppError> {
     replace_live_receipted(ctx, target, target_dir).map(|(replaced, _)| replaced)
 }
@@ -328,6 +330,7 @@ pub(super) fn finish(
 
 /// 把 `target` 从默认槽位移回它自己的槽位，默认槽位回到没有登录：切换前默认槽位本来就是
 /// 空的、后面写卡片失败时用。默认槽位里已经不是 `target`（用户期间登了别的号）就不动。
+#[cfg(test)]
 pub fn vacate(ctx: &Ctx<'_>, target: &str, target_dir: &Path) -> Result<(), AppError> {
     vacate_receipted(ctx, target, target_dir).map(|_| ())
 }

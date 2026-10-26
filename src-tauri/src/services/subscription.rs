@@ -1638,12 +1638,11 @@ pub async fn get_claude_account_quota(
                 let plan = secret.as_ref().map(snapshot::credential_plan);
                 Ok((secret, plan))
             })
-            .map(|found| {
+            .inspect(|found| {
                 // 前后身份核对都成功后才记录捕获的套餐；拒绝错误账号时不落错误元数据。
-                if let Some((_, Some(plan))) = &found {
+                if let Some((_, Some(plan))) = found {
                     note_plan(&data_dir, &account, plan);
                 }
-                found
             })
         })
         .await

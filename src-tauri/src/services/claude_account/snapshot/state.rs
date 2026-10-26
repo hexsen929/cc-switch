@@ -87,6 +87,7 @@ pub fn update_state(data_dir: &Path, f: impl FnOnce(&mut State)) -> Result<State
 }
 
 /// 调用方写完卡片（或已决定回滚方向）后调用：删掉做完的切换日志。没做完的留着给恢复。
+#[cfg(test)]
 pub fn confirm(data_dir: &Path) {
     let done = |state: &State| {
         state
