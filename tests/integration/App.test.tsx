@@ -457,6 +457,7 @@ describe("App integration with MSW", () => {
       await waitFor(() =>
         expect(open).toHaveBeenLastCalledWith("claude-1", "claude", {
           cwd: "/work/project",
+          skipPermissions: false,
         }),
       );
       await waitFor(() =>
@@ -493,6 +494,7 @@ describe("App integration with MSW", () => {
       await waitFor(() =>
         expect(open).toHaveBeenLastCalledWith("claude-1", "agy", {
           cwd: "/work/project",
+          skipPermissions: false,
         }),
       );
       await waitFor(() =>
