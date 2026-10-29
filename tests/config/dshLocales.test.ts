@@ -13,9 +13,9 @@ const paths = [
   "provider.form.claudeAccount.wslHint",
   "authCenter.group.claudeHelpWsl",
   "authCenter.claude.wslUnsupported",
-  "skills.openDir",
-  "skills.toast.copiedName",
-  "skills.toast.openDirFailed",
+  "skillsPage.openDir",
+  "skillsPage.toast.copiedName",
+  "skillsPage.toast.openDirFailed",
 ];
 
 function textAt(locale: unknown, path: string): unknown {
