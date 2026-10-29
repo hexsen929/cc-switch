@@ -316,7 +316,15 @@ describe("McpFormModal (drawer)", () => {
           id: "remote",
           name: "remote",
           server: { type: "sse", url: "http://127.0.0.1:60002/sse" },
-          apps: { claude: true, codex: true, [app]: true } as McpServer["apps"],
+          apps: {
+            claude: true,
+            codex: true,
+            gemini: false,
+            opencode: false,
+            openclaw: false,
+            hermes: false,
+            [app]: true,
+          },
         },
       });
       expect(
