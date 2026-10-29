@@ -101,15 +101,39 @@ const COMMIT_DEADLINE: Duration = Duration::from_secs(30);
 /// 同一进程里的切换串行。
 static SWITCH: Mutex<()> = Mutex::new(());
 
-/// 切卡时为什么不能切换登录：设了 Claude 配置目录覆盖（默认槽位不在 `~/.claude`，例如指向
-/// WSL）。这时绑号卡只能从卡片「打开终端」使用。
+/// 切卡时为什么不能切换登录：
+/// - `"wsl"`：Claude 配置目录指向 WSL（Windows）。登录、查额度、打开终端都跑在 Windows 上，
+///   用不到 WSL 里的 Claude Code，账号功能整体不可用。
+/// - `"overrideDir"`：设了别的 Claude 配置目录覆盖（默认槽位不在 `~/.claude`）。这时绑号卡
+///   只能从卡片「打开终端」使用。
 pub fn blocked_reason() -> Option<&'static str> {
+    if crate::commands::tool_runs_in_wsl("claude") {
+        return Some("wsl");
+    }
     crate::settings::get_claude_override_dir().map(|_| "overrideDir")
 }
 
 /// 切卡时会不会切换登录。
 pub fn active() -> bool {
     blocked_reason().is_none()
+}
+
+/// Account commands use Windows-native Claude Code and credential locations.
+/// A regular config-directory override still supports isolated account terminals;
+/// a WSL override does not, so reject before touching a local credential slot.
+pub fn ensure_accounts_supported() -> Result<(), AppError> {
+    ensure_accounts_supported_for(blocked_reason())
+}
+
+fn ensure_accounts_supported_for(blocked: Option<&str>) -> Result<(), AppError> {
+    if blocked == Some("wsl") {
+        return Err(AppError::localized(
+            "claude.account.wsl_unsupported",
+            "Claude 配置目录在 WSL 里，暂不支持添加、切换或查询本机 Claude 账号",
+            "The Claude config directory is in WSL. Adding, switching or querying local Claude accounts isn't supported.",
+        ));
+    }
+    Ok(())
 }
 
 /// 默认槽位现在登的是不是账号 `account`（被移进去以后它的账号目录是空的，用它要走默认目录）。
@@ -136,6 +160,7 @@ pub fn with_account_slot<T>(
     account: &str,
     read: impl FnOnce(&Slot) -> Result<T, AppError>,
 ) -> Result<Option<T>, AppError> {
+    ensure_accounts_supported()?;
     let accounts = crate::services::claude_account::DiskAccounts {
         data_dir: data_dir.to_path_buf(),
     };
@@ -279,3 +304,15 @@ pub enum Outcome {
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod availability_tests {
+    use super::ensure_accounts_supported_for;
+
+    #[test]
+    fn wsl_blocks_local_account_operations_but_regular_overrides_keep_terminals() {
+        assert!(ensure_accounts_supported_for(Some("wsl")).is_err());
+        assert!(ensure_accounts_supported_for(Some("overrideDir")).is_ok());
+        assert!(ensure_accounts_supported_for(None).is_ok());
+    }
+}

@@ -165,6 +165,7 @@ fn target_paths() -> Result<Vec<(AppType, PathBuf)>, AppError> {
         AppType::Pi,
         AppType::Mcode,
         AppType::Kimi,
+        AppType::Dsh,
         AppType::Agy,
         AppType::Omp,
     ]

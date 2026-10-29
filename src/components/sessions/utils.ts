@@ -5,7 +5,7 @@ import type { SessionMeta } from "@/types";
 
 export const UNKNOWN_PROJECT_DIR_KEY = "__unknown_project_dir__";
 
-/** 会话来源：12 个应用（Claude Desktop 没有自己的会话记录，用 Claude Code 的）。 */
+/** 会话来源：13 个应用（Claude Desktop 没有自己的会话记录，用 Claude Code 的）。 */
 export const SESSION_APP_IDS = [
   "claude",
   "codex",
@@ -18,6 +18,7 @@ export const SESSION_APP_IDS = [
   "openclaw",
   "mcode",
   "kimi",
+  "dsh",
   "agy",
 ] as const satisfies readonly AppId[];
 
@@ -39,6 +40,7 @@ export const SESSION_SOURCE_PATHS: Record<SessionAppId, string[]> = {
   omp: ["~/.omp/agent/sessions"],
   mcode: ["~/.minimax"],
   kimi: ["~/.kimi-code/sessions"],
+  dsh: ["~/.dsh/sessions/<project>/<session>/session.v*.jsonl[.zstd]"],
   agy: [
     "~/.gemini/antigravity-cli/brain/<conversation>/.system_generated/logs",
   ],
@@ -55,10 +57,10 @@ export const canResumeSession = (session: SessionMeta) =>
   Boolean(session.resumeCommand?.trim()) &&
   (Boolean(session.sourcePath) || session.providerId === "agy");
 
-/** 子代理只读；MiniMax Code / Kimi Code / Antigravity 的会话需在对应客户端中删除。 */
+/** 子代理只读；MiniMax Code / Kimi Code / DeepSeek Harness / Antigravity 的会话需在原客户端中删除。 */
 export const canDeleteSession = (session: SessionMeta) =>
   Boolean(session.sourcePath) &&
-  !["mcode", "agy", "kimi"].includes(session.providerId) &&
+  !["mcode", "agy", "kimi", "dsh"].includes(session.providerId) &&
   !isReadOnlySession(session);
 
 export interface SessionProjectGroup {

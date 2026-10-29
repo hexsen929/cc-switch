@@ -73,6 +73,7 @@ export const useAddProviderMutation = (appId: AppId) => {
         appId === "pi" ||
         appId === "mcode" ||
         appId === "kimi" ||
+        appId === "dsh" ||
         appId === "omp"
       ) {
         if (
@@ -500,6 +501,11 @@ export const useSaveSettingsMutation = () => {
     },
     onSuccess: async () => {
       await queryClient.invalidateQueries({ queryKey: ["settings"] });
+      // Directory changes can enable/disable native Claude account support.
+      // Refresh this lightweight local status instead of keeping its 30s cache.
+      await queryClient.invalidateQueries({
+        queryKey: ["claude-login-switch"],
+      });
       await queryClient.invalidateQueries({
         queryKey: ["opencode", "runtime-models"],
       });

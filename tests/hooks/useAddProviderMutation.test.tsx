@@ -139,6 +139,54 @@ describe("useAddProviderMutation", () => {
     expect(apiMocks.add).not.toHaveBeenCalled();
   });
 
+  it.each([undefined, false, true])(
+    "preserves DSH native keys and explicit live choice (%s)",
+    async (addToLive) => {
+      const { wrapper } = createWrapper();
+      const { result } = renderHook(() => useAddProviderMutation("dsh"), {
+        wrapper,
+      });
+      const settingsConfig = {
+        kind: "custom",
+        api: "openai-responses",
+        options: { baseURL: "https://example.com/v1", apiKey: "fixture" },
+        models: { "native-model": { name: "Native model" } },
+      };
+      const provider = await act(async () =>
+        result.current.mutateAsync({
+          name: "DSH native profile",
+          providerKey: "dsh-native",
+          addToLive,
+          settingsConfig,
+        }),
+      );
+      expect(provider.id).toBe("dsh-native");
+      expect(provider.settingsConfig).toEqual(settingsConfig);
+      expect(provider).not.toHaveProperty("providerKey");
+      expect(uuidMocks.generateUUID).not.toHaveBeenCalled();
+      expect(apiMocks.add).toHaveBeenCalledWith(
+        expect.objectContaining({ id: "dsh-native", settingsConfig }),
+        "dsh",
+        addToLive,
+        undefined,
+      );
+    },
+  );
+
+  it("rejects DSH provider creation without its native key", async () => {
+    const { wrapper } = createWrapper();
+    const { result } = renderHook(() => useAddProviderMutation("dsh"), {
+      wrapper,
+    });
+    await act(async () => {
+      await expect(
+        result.current.mutateAsync({ name: "Missing key", settingsConfig: {} }),
+      ).rejects.toThrow("Provider key is required for dsh");
+    });
+    expect(apiMocks.add).not.toHaveBeenCalled();
+    expect(uuidMocks.generateUUID).not.toHaveBeenCalled();
+  });
+
   it("duplicates Claude Desktop official providers with a fresh id", async () => {
     const { wrapper } = createWrapper();
     const { result } = renderHook(

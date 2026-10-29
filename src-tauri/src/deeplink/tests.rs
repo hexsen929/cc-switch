@@ -263,6 +263,28 @@ fn test_parse_prompt_deeplink_accepts_omp_without_provider_link_support() {
     assert_eq!(request.resource, "prompt");
 }
 
+#[test]
+fn test_dsh_resource_deeplinks_support_prompt_and_mcp_but_not_provider() {
+    let prompt = parse_deeplink_url(
+        "ccswitch://v1/import?resource=prompt&app=dsh&name=Rules&content=IyBoaQ%3D%3D",
+    )
+    .expect("DeepSeek Harness has a global prompt panel");
+    assert_eq!(prompt.app.as_deref(), Some("dsh"));
+    assert_eq!(prompt.resource, "prompt");
+
+    let config = BASE64_URL_SAFE_NO_PAD.encode(r#"{"mcpServers":{"fetch":{"command":"uvx"}}}"#);
+    let mcp = parse_deeplink_url(&format!(
+        "ccswitch://v1/import?resource=mcp&apps=dsh&config={config}"
+    ))
+    .expect("DeepSeek Harness is a native MCP target");
+    let apps = parse_mcp_apps(mcp.apps.as_deref().unwrap()).unwrap();
+    assert_eq!(apps.enabled_apps(), vec![AppType::Dsh]);
+
+    assert!(
+        parse_deeplink_url("ccswitch://v1/import?resource=provider&app=dsh&name=Native").is_err()
+    );
+}
+
 /// 读取不清除，按编号确认才清除：前端读到后、显示前被打断（effect 重建、窗口销毁），
 /// 下次读取仍能拿到；期间来了新链接，迟到的旧确认不能把新链接清掉
 #[test]

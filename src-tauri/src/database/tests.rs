@@ -1583,7 +1583,7 @@ fn migration_v22_to_v23_rolls_back_omp_column_and_version_then_can_retry() {
     )
     .expect("seed v22 fixture");
     Database::set_user_version(&conn, 22).expect("set old schema version");
-    // Reject fork-column repair after enabled_omp and user_version=23 were set.
+    // Reject fork-column repair after native columns and the schema version advanced.
     conn.authorizer(Some(deny_proxy_config_alter));
     Database::apply_schema_migrations_on_conn(&conn).expect_err("schema repair must fail");
     conn.authorizer(None::<fn(AuthContext<'_>) -> Authorization>);
@@ -1602,4 +1602,97 @@ fn migration_v22_to_v23_rolls_back_omp_column_and_version_then_can_retry() {
         .expect("read migrated flags");
     assert_eq!(flags, (true, true, false));
     assert!(!Database::has_column(&conn, "skills", "enabled_omp").unwrap());
+}
+
+#[test]
+fn migration_v23_to_v24_adds_dsh_flags_without_changing_omp_or_skill_state() {
+    let conn = Connection::open_in_memory().expect("open memory db");
+    Database::create_tables_on_conn(&conn).expect("create tables");
+    conn.execute_batch(
+        "ALTER TABLE mcp_servers DROP COLUMN enabled_dsh;
+         ALTER TABLE skills DROP COLUMN enabled_dsh;
+         INSERT INTO mcp_servers (id, name, server_config, enabled_omp)
+         VALUES ('shared', 'Shared MCP', '{}', 1);
+         INSERT INTO skills (id, name, directory, enabled_kimi)
+         VALUES ('skill', 'Skill', 'skill', 1);",
+    )
+    .expect("seed v23 database");
+    Database::set_user_version(&conn, 23).expect("set user_version=23");
+
+    Database::apply_schema_migrations_on_conn(&conn).expect("upgrade v23 database");
+    assert_eq!(Database::get_user_version(&conn).unwrap(), SCHEMA_VERSION);
+    let mcp_flags: (bool, bool) = conn
+        .query_row(
+            "SELECT enabled_omp, enabled_dsh FROM mcp_servers WHERE id = 'shared'",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .expect("read migrated MCP flags");
+    let skill_flags: (bool, bool) = conn
+        .query_row(
+            "SELECT enabled_kimi, enabled_dsh FROM skills WHERE id = 'skill'",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .expect("read migrated skill flags");
+    assert_eq!(mcp_flags, (true, false));
+    assert_eq!(skill_flags, (true, false));
+
+    conn.execute("UPDATE mcp_servers SET enabled_dsh = 1", [])
+        .unwrap();
+    Database::apply_schema_migrations_on_conn(&conn).expect("reopen migrated database");
+    assert!(conn
+        .query_row("SELECT enabled_dsh FROM mcp_servers", [], |row| row
+            .get::<_, bool>(0))
+        .unwrap());
+}
+
+#[test]
+fn migration_v23_to_v24_rolls_back_both_dsh_columns_and_version_then_can_retry() {
+    use rusqlite::hooks::{AuthAction, AuthContext, Authorization};
+
+    fn deny_skill_alter(context: AuthContext<'_>) -> Authorization {
+        match context.action {
+            AuthAction::AlterTable {
+                table_name: "skills",
+                ..
+            } => Authorization::Deny,
+            _ => Authorization::Allow,
+        }
+    }
+
+    let conn = Connection::open_in_memory().expect("open memory db");
+    Database::create_tables_on_conn(&conn).expect("create tables");
+    conn.execute_batch(
+        "ALTER TABLE mcp_servers DROP COLUMN enabled_dsh;
+         ALTER TABLE skills DROP COLUMN enabled_dsh;
+         INSERT INTO mcp_servers (id,name,server_config,enabled_omp)
+         VALUES ('m','m','{}',1);
+         INSERT INTO skills (id,name,directory,enabled_kimi)
+         VALUES ('s','s','s',1);",
+    )
+    .expect("seed v23 database");
+    Database::set_user_version(&conn, 23).expect("set old schema version");
+    // The MCP column is added first. A later failed ALTER must undo it too.
+    conn.authorizer(Some(deny_skill_alter));
+    Database::apply_schema_migrations_on_conn(&conn).expect_err("DSH migration must fail");
+    conn.authorizer(None::<fn(AuthContext<'_>) -> Authorization>);
+    assert!(conn.is_autocommit());
+    assert_eq!(Database::get_user_version(&conn).unwrap(), 23);
+    for table in ["mcp_servers", "skills"] {
+        assert!(!Database::has_column(&conn, table, "enabled_dsh").unwrap());
+    }
+
+    Database::apply_schema_migrations_on_conn(&conn).expect("retry DSH migration");
+    assert_eq!(Database::get_user_version(&conn).unwrap(), SCHEMA_VERSION);
+    for (table, flag) in [("mcp_servers", "enabled_omp"), ("skills", "enabled_kimi")] {
+        let flags: (bool, bool) = conn
+            .query_row(
+                &format!("SELECT {flag},enabled_dsh FROM {table}"),
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .expect("read preserved and migrated flags");
+        assert_eq!(flags, (true, false));
+    }
 }

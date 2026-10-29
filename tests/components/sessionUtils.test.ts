@@ -14,7 +14,7 @@ import {
 import type { SessionMeta } from "@/types";
 
 describe("session utils", () => {
-  it.each(["agy", "mcode", "kimi"])(
+  it.each(["agy", "mcode", "kimi", "dsh"])(
     "keeps %s main sessions resumable but prevents CCS deletion",
     (providerId) => {
       const session: SessionMeta = {
@@ -29,7 +29,7 @@ describe("session utils", () => {
     },
   );
 
-  it.each(["claude", "codex", "opencode", "agy", "kimi", "pi", "omp"])(
+  it.each(["claude", "codex", "opencode", "agy", "kimi", "dsh", "pi", "omp"])(
     "retains subagent read-only protection for %s",
     (providerId) => {
       const session: SessionMeta = {
@@ -82,6 +82,7 @@ describe("session utils", () => {
     "opencode",
     "mcode",
     "kimi",
+    "dsh",
     "pi",
     "omp",
   ])("requires a transcript source to resume %s", (providerId) => {

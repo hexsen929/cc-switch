@@ -306,34 +306,38 @@ describe("McpFormModal (drawer)", () => {
     });
   });
 
-  it("warns when an SSE server is written to apps without SSE support", async () => {
-    renderForm({
-      editingId: "remote",
-      visibleAppIds: ["claude", "codex", "pi"],
-      initialData: {
-        id: "remote",
-        name: "remote",
-        server: { type: "sse", url: "http://127.0.0.1:60002/sse" },
-        apps: { claude: true, codex: true, pi: true } as McpServer["apps"],
-      },
-    });
-    expect(
-      screen.getByText("mcpPage.drawer.sseAsHttpTitle"),
-    ).toBeInTheDocument();
-    expect(
-      screen.getByText("mcpPage.drawer.sseRejectedTitle"),
-    ).toBeInTheDocument();
+  it.each(["pi", "agy", "dsh"] as const)(
+    "warns when an SSE server is written to %s without SSE support",
+    async (app) => {
+      renderForm({
+        editingId: "remote",
+        visibleAppIds: ["claude", "codex", app],
+        initialData: {
+          id: "remote",
+          name: "remote",
+          server: { type: "sse", url: "http://127.0.0.1:60002/sse" },
+          apps: { claude: true, codex: true, [app]: true } as McpServer["apps"],
+        },
+      });
+      expect(
+        screen.getByText("mcpPage.drawer.sseAsHttpTitle"),
+      ).toBeInTheDocument();
+      expect(
+        screen.getByText("mcpPage.drawer.sseRejectedTitle"),
+      ).toBeInTheDocument();
+      expect(screen.getByRole("button", { name: "common.save" })).toBeEnabled();
 
-    await userEvent.click(screen.getByRole("checkbox", { name: /Codex/ }));
-    expect(
-      screen.queryByText("mcpPage.drawer.sseAsHttpTitle"),
-    ).not.toBeInTheDocument();
+      await userEvent.click(screen.getByRole("checkbox", { name: /Codex/ }));
+      expect(
+        screen.queryByText("mcpPage.drawer.sseAsHttpTitle"),
+      ).not.toBeInTheDocument();
 
-    await userEvent.click(screen.getByRole("button", { name: "HTTP" }));
-    expect(
-      screen.queryByText("mcpPage.drawer.sseRejectedTitle"),
-    ).not.toBeInTheDocument();
-  });
+      await userEvent.click(screen.getByRole("button", { name: "HTTP" }));
+      expect(
+        screen.queryByText("mcpPage.drawer.sseRejectedTitle"),
+      ).not.toBeInTheDocument();
+    },
+  );
 
   it("follows the JSON tab when checking for SSE", async () => {
     renderForm({ visibleAppIds: ["claude", "codex"] });

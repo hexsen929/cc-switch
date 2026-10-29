@@ -397,6 +397,7 @@ pub fn terminal_account(provider: &Provider) -> Result<Option<AccountTerminal>, 
     let Some(account) = bound_account(provider) else {
         return Ok(None);
     };
+    snapshot::ensure_accounts_supported()?;
     let dir = claude_account::config_dir_on_disk(&crate::config::get_app_config_dir(), &account);
     // 账号目录里有自己的登录就用它；没有、而这个号在默认槽位里（切卡时移进去的）才用默认目录。
     // 只看身份不够：默认目录和账号目录可能各登着同一个号（用户自己在 Claude Code 里登的）

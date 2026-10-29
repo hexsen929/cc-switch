@@ -132,18 +132,22 @@ export function SessionItem({
           defaultValue: "子代理会话仅供阅读，请在主会话中继续操作",
         })
       : t(
-          session.providerId === "kimi"
-            ? "kimi.deleteSessionHint"
-            : session.providerId === "agy"
-              ? "sessionManager.agyDeleteHint"
-              : "sessionManager.mcodeDeleteHint",
+          session.providerId === "dsh"
+            ? "dsh.deleteSessionHint"
+            : session.providerId === "kimi"
+              ? "kimi.deleteSessionHint"
+              : session.providerId === "agy"
+                ? "sessionManager.agyDeleteHint"
+                : "sessionManager.mcodeDeleteHint",
           {
             defaultValue:
-              session.providerId === "kimi"
-                ? "请在 Kimi Code 中删除"
-                : session.providerId === "agy"
-                  ? "请在 Antigravity 中删除"
-                  : "请在 MiniMax Code 中删除",
+              session.providerId === "dsh"
+                ? "请在 DeepSeek Harness 中删除"
+                : session.providerId === "kimi"
+                  ? "请在 Kimi Code 中删除"
+                  : session.providerId === "agy"
+                    ? "请在 Antigravity 中删除"
+                    : "请在 MiniMax Code 中删除",
           },
         )
     : null;

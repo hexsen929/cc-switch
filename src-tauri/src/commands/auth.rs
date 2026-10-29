@@ -243,6 +243,8 @@ pub async fn auth_start_login(
         }
         // 同上：在新账号目录里跑 `claude auth login`，授权页地址是它要打开的那个
         AUTH_PROVIDER_CLAUDE_OFFICIAL => {
+            crate::services::claude_account::snapshot::ensure_accounts_supported()
+                .map_err(|error| error.to_string())?;
             if target_account_id.is_some() {
                 return Err("Targeted re-authentication is only supported for Codex OAuth".into());
             }

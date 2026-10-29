@@ -52,6 +52,7 @@ impl TempHome {
             ("MINIMAX_DATA_DIR", dir.path().join("mcode")),
             ("MAVIS_DATA_DIR", dir.path().join("mcode")),
             ("KIMI_CODE_HOME", dir.path().join("kimi")),
+            ("DSH_HOME", dir.path().join("dsh")),
         ];
         let previous_env = variables
             .iter()
@@ -96,6 +97,7 @@ impl TempHome {
             AppType::Pi,
             AppType::Mcode,
             AppType::Kimi,
+            AppType::Dsh,
             AppType::Agy,
             AppType::Omp,
         ] {
@@ -308,6 +310,12 @@ fn kimi_keeps_shared_instructions_and_ordinary_prompt_global_in_additive_mode() 
 
 #[test]
 #[serial]
+fn dsh_keeps_shared_instructions_and_ordinary_prompt_global_in_additive_mode() {
+    assert_native_additive_global_prompt(AppType::Dsh);
+}
+
+#[test]
+#[serial]
 fn omp_keeps_shared_instructions_and_ordinary_prompt_global_in_additive_mode() {
     assert_native_additive_global_prompt(AppType::Omp);
 }
@@ -412,6 +420,7 @@ fn a_shared_only_file_is_not_imported_as_an_ordinary_prompt() {
         AppType::Pi,
         AppType::Mcode,
         AppType::Kimi,
+        AppType::Dsh,
         AppType::Agy,
         AppType::Omp,
     ] {

@@ -16,12 +16,18 @@ import { PROMPT_APP_IDS, promptAppOf } from "@/lib/query/prompts";
 import { promptFileName } from "@/components/prompts/promptUtils";
 
 describe("appConfig provider lifecycle", () => {
-  it.each(["opencode", "openclaw", "hermes", "pi", "mcode", "kimi", "omp"])(
-    "classifies %s as additive",
-    (appId) => {
-      expect(isAdditiveAppId(appId)).toBe(true);
-    },
-  );
+  it.each([
+    "opencode",
+    "openclaw",
+    "hermes",
+    "pi",
+    "mcode",
+    "kimi",
+    "dsh",
+    "omp",
+  ])("classifies %s as additive", (appId) => {
+    expect(isAdditiveAppId(appId)).toBe(true);
+  });
 
   it.each(["claude", "claude-desktop", "codex", "gemini", "grokbuild"])(
     "does not classify %s as additive",
@@ -85,6 +91,23 @@ describe("Oh My Pi capabilities", () => {
   });
 });
 
+describe("DeepSeek Harness capabilities", () => {
+  it("keeps native resources additive without enabling fork routing modes", () => {
+    expect(isAdditiveAppId("dsh")).toBe(true);
+    expect(isPiFamilyApp("dsh")).toBe(false);
+    expect(SKILLS_APP_IDS).toContain("dsh");
+    expect(MCP_APP_IDS).toContain("dsh");
+    expect(PROMPT_APP_IDS).toContain("dsh");
+    expect(promptAppOf("dsh")).toBe("dsh");
+    expect(promptFileName("dsh")).toBe("AGENTS.md");
+    expect(isProxyAppId("dsh")).toBe(false);
+    expect(isModeAppId("dsh")).toBe(false);
+    expect(isStackAppId("dsh")).toBe(false);
+    expect(usesEditorView("dsh")).toBe(false);
+    expect(APP_PROFILE_SCOPE.dsh).toBeUndefined();
+  });
+});
+
 describe("orderAppIds", () => {
   it("falls back to the default order when nothing is saved", () => {
     expect(orderAppIds(undefined)).toEqual(APP_IDS);
@@ -105,5 +128,12 @@ describe("orderAppIds", () => {
     expect(orderAppIds(APP_IDS.filter((app) => app !== "claude"))[0]).toBe(
       "claude",
     );
+  });
+
+  it("inserts newly managed DSH after Kimi without discarding the saved order", () => {
+    const saved = APP_IDS.filter((app) => app !== "dsh");
+    const result = orderAppIds(saved);
+    expect(result.filter((app) => app !== "dsh")).toEqual(saved);
+    expect(result.indexOf("dsh")).toBe(result.indexOf("kimi") + 1);
   });
 });
