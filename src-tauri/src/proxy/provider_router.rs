@@ -165,9 +165,10 @@ fn now_ms() -> i64 {
 
 /// 读取单个候选 Provider 的额度视图（只读，复用托盘用量来源分类，不做任何失效/网络）。
 ///
-/// 复用 [`crate::tray::tray_usage_source`] 把 Provider 归到「托管 Codex 账号 / 客户端订阅 /
-/// 脚本」三类用量来源，再按对应维度读取 [`UsageCache`](crate::services::usage_cache::UsageCache)：
+/// 复用 [`crate::tray::tray_usage_source`] 按账号、客户端订阅或脚本分类，
+/// 再按对应维度读取 [`UsageCache`](crate::services::usage_cache::UsageCache)：
 /// - 托管 Codex 账号：按 account_id 读 codex_oauth 快照；
+/// - 绑定 Claude 官方账号：按 account_id 读 claude_account 快照；
 /// - 客户端订阅：按 AppType 读 subscription 快照；
 /// - 脚本型（Copilot/xAI/中转自定义脚本等）：当前版本不参与额度感知，返回 `None`（按未知殿后）。
 fn quota_view_for_provider(
@@ -179,6 +180,11 @@ fn quota_view_for_provider(
     match crate::tray::tray_usage_source(app, provider)? {
         crate::tray::TrayUsageSource::ManagedCodex(account_id) => usage_cache
             .with_codex_oauth(&account_id, |quota| {
+                quota_view_from_subscription(quota, now_ms)
+            })
+            .flatten(),
+        crate::tray::TrayUsageSource::ClaudeAccount(account_id) => usage_cache
+            .with_claude_account(&account_id, |quota| {
                 quota_view_from_subscription(quota, now_ms)
             })
             .flatten(),
@@ -931,6 +937,53 @@ mod tests {
                 .is_none()
         );
         assert!(quota_view_from_subscription(&quota_with_tiers(true, vec![]), 0).is_none());
+    }
+
+    #[test]
+    fn bound_claude_quota_view_reads_only_the_bound_account() {
+        let cache = crate::services::usage_cache::UsageCache::new();
+        let provider = serde_json::from_value(json!({
+            "id": "claude-bound",
+            "name": "Claude Official",
+            "settingsConfig": { "env": {} },
+            "category": "official",
+            "meta": {
+                "authBinding": {
+                    "source": "managed_account",
+                    "authProvider": "claude_official",
+                    "accountId": " account-a "
+                }
+            }
+        }))
+        .unwrap();
+
+        // A matching app-wide, Codex or other-account cache never substitutes
+        // for the selected Claude account's own snapshot.
+        let unrelated = quota_with_tiers(true, vec![tier(10.0, None)]);
+        cache.put_subscription(AppType::Claude, unrelated.clone());
+        cache.put_codex_oauth("account-a".to_string(), unrelated.clone());
+        cache.put_claude_account("account-b".to_string(), unrelated);
+        assert!(quota_view_for_provider(&cache, &AppType::Claude, &provider, 0).is_none());
+
+        cache.put_claude_account(
+            "account-a".to_string(),
+            quota_with_tiers(true, vec![tier(80.0, None)]),
+        );
+        let view = quota_view_for_provider(&cache, &AppType::Claude, &provider, 0)
+            .expect("bound account has a quota snapshot");
+        assert!((view.remaining_fraction - 0.2).abs() < 1e-9);
+
+        let mut disabled = provider.clone();
+        disabled.meta.as_mut().unwrap().usage_script = Some(
+            serde_json::from_value(json!({
+                "enabled": false,
+                "language": "javascript",
+                "code": "",
+                "templateType": "official_subscription"
+            }))
+            .unwrap(),
+        );
+        assert!(quota_view_for_provider(&cache, &AppType::Claude, &disabled, 0).is_none());
     }
 
     #[test]

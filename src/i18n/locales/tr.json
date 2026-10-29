@@ -266,6 +266,7 @@
       "recent": "Son kullanılanlar",
       "forget": "Son kullanılanlardan kaldır",
       "confirm": "Terminali Aç",
+      "skipPermissions": "İzin onaylarını atla",
       "agySwitchTitle": "Bu işlem agy'nin oturum açma hesabını değiştirir",
       "agySwitchBody": "Terminal açılmadan önce agy'nin oturumu {{account}} hesabına geçirilir; bundan sonra başlatılan agy oturumları bu hesabı kullanır.",
       "agySwitchRunning": "agy çalışıyor: açık agy oturumları önceki hesabı kullanmaya devam eder ve hesabı yeniden kaydedebilir. Mümkünse önce agy oturumlarını kapatın."

@@ -8,7 +8,7 @@
 //! 门控 & 失败安全（务必保持）：
 //! - 每个 tick 先查「有没有应用启用 smart/pace」。没有 → 一个网络请求都不发，直接睡。
 //!   因此不选额度感知路由时，本 worker 对线上行为零影响（等价于不存在）。
-//! - 只刷路由真正会读的两类来源（客户端订阅 / 托管 Codex 账号）；脚本型来源路由本就
+//! - 只刷路由真正会读的来源（客户端订阅 / 托管 Codex 账号 / 绑定 Claude 官方账号）；脚本型来源路由本就
 //!   忽略（见 `provider_router::quota_view_for_provider`），不在这里刷（托盘另有自己的刷新）。
 //! - 每个键带 TTL 去抖：快照够新（如托盘刚填过）就跳过，避免重复抓取。
 //! - 任一抓取失败只记日志、跳过该项，绝不影响其它项或请求路径。
@@ -98,6 +98,7 @@ async fn run_once(app: &tauri::AppHandle) {
 
         let mut subscription_done = false; // 订阅是 app 级，刷一次即可
         let mut codex_done: HashSet<String> = HashSet::new();
+        let mut claude_done: HashSet<String> = HashSet::new();
 
         for provider in providers.values() {
             match crate::tray::tray_usage_source(&app_type, provider) {
@@ -109,6 +110,15 @@ async fn run_once(app: &tauri::AppHandle) {
                         continue;
                     }
                     refresh_codex(&usage_cache, &codex_mgr, &account_id).await;
+                }
+                Some(crate::tray::TrayUsageSource::ClaudeAccount(account_id)) => {
+                    if !claude_done.insert(account_id.clone()) {
+                        continue;
+                    }
+                    if snapshot_fresh_claude(&usage_cache, &account_id, now) {
+                        continue;
+                    }
+                    refresh_claude(&usage_cache, &account_id).await;
                 }
                 Some(crate::tray::TrayUsageSource::Subscription) => {
                     if subscription_done {
@@ -139,6 +149,12 @@ fn snapshot_fresh_codex(usage_cache: &UsageCache, account_id: &str, now: i64) ->
         .unwrap_or(false)
 }
 
+fn snapshot_fresh_claude(usage_cache: &UsageCache, account_id: &str, now: i64) -> bool {
+    usage_cache
+        .with_claude_account(account_id, |q| snapshot_fresh(q.queried_at, now))
+        .unwrap_or(false)
+}
+
 fn snapshot_fresh(queried_at: Option<i64>, now: i64) -> bool {
     queried_at
         .map(|t| now - t < QUOTA_SNAPSHOT_TTL_MS)
@@ -159,6 +175,20 @@ async fn refresh_codex(usage_cache: &UsageCache, mgr: &Arc<CodexOAuthManager>, a
     }
 }
 
+async fn refresh_claude(usage_cache: &UsageCache, account_id: &str) {
+    // The account service validates WSL support before touching a local slot,
+    // and serializes slot selection/credential reads with account switching.
+    match crate::services::subscription::get_claude_account_quota(
+        crate::config::get_app_config_dir(),
+        account_id.to_string(),
+    )
+    .await
+    {
+        Ok(quota) => usage_cache.put_claude_account(account_id.to_string(), quota.quota),
+        Err(e) => log::debug!("[QuotaRefresh] Claude 账号 {account_id} 额度刷新失败: {e}"),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -175,5 +205,24 @@ mod tests {
         ));
         // 无时间戳 → 视为不新鲜（需刷新）
         assert!(!snapshot_fresh(None, now));
+    }
+
+    #[test]
+    fn claude_snapshot_freshness_is_account_scoped() {
+        let cache = UsageCache::new();
+        let now = 1_000_000;
+        let mut fresh = crate::services::subscription::SubscriptionQuota::not_found("claude");
+        fresh.queried_at = Some(now - 1_000);
+        cache.put_subscription(AppType::Claude, fresh.clone());
+        cache.put_codex_oauth("account-a".to_string(), fresh.clone());
+
+        assert!(!snapshot_fresh_claude(&cache, "account-a", now));
+        cache.put_claude_account("account-a".to_string(), fresh.clone());
+        assert!(snapshot_fresh_claude(&cache, "account-a", now));
+        assert!(!snapshot_fresh_claude(&cache, "account-b", now));
+
+        fresh.queried_at = Some(now - QUOTA_SNAPSHOT_TTL_MS - 1);
+        cache.put_claude_account("account-a".to_string(), fresh);
+        assert!(!snapshot_fresh_claude(&cache, "account-a", now));
     }
 }

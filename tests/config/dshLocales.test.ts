@@ -16,6 +16,7 @@ const paths = [
   "skillsPage.openDir",
   "skillsPage.toast.copiedName",
   "skillsPage.toast.openDirFailed",
+  "provider.openTerminalDialog.skipPermissions",
 ];
 
 function textAt(locale: unknown, path: string): unknown {
@@ -25,7 +26,7 @@ function textAt(locale: unknown, path: string): unknown {
   }, locale);
 }
 
-describe("DeepSeek Harness, WSL and skill action locale parity", () => {
+describe("DeepSeek Harness, WSL, skill and terminal action locale parity", () => {
   it.each(Object.entries({ en, ja, tr, zh, "zh-TW": zhTW }))(
     "%s defines the new UI strings with matching placeholders",
     (_language, locale) => {
