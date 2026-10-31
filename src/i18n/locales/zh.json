@@ -926,6 +926,7 @@
       "title": "首选终端",
       "description": "选择点击终端按钮时使用的终端应用",
       "fallbackHint": "如果选择的终端不可用，将自动使用系统默认终端",
+      "rexHelp": "中文版自带 CLI，无需英文版或 PATH 配置。自动跳转需开启 Rex 设置 → Rex Server → Remote Control；未开启时会话仍正常运行，请从 Rex 侧栏选择 CC-Switch 会话。",
       "options": {
         "macos": {
           "terminal": "Terminal.app",
@@ -936,6 +937,8 @@
           "otty": "Otty",
           "wezterm": "WezTerm",
           "kaku": "Kaku",
+          "rex": "Rex Beta",
+          "rex-zh": "Rex Beta 中文",
           "warp": "Warp"
         },
         "windows": {

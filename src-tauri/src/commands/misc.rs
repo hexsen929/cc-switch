@@ -5639,12 +5639,18 @@ fn launch_provider_terminal(launch: &ProviderLaunch, cwd: Option<&Path>) -> Resu
         let result = launch_macos_terminal(&script_file);
         #[cfg(target_os = "linux")]
         let result = launch_linux_terminal(&script_file);
-        if result.is_err() {
+        #[cfg(target_os = "macos")]
+        let may_have_started = result.as_ref().is_err_and(|error| error.may_have_started);
+        #[cfg(target_os = "linux")]
+        let may_have_started = false;
+        // An unacknowledged Rex request can already be reading these files.
+        // Preserve them until the user checks the session instead of breaking it.
+        if result.is_err() && !may_have_started {
             for file in launch.cleanup.iter().chain([&script_file, &env_file]) {
                 let _ = std::fs::remove_file(file);
             }
         }
-        result
+        result.map_err(|error| error.to_string())
     }
 
     #[cfg(target_os = "windows")]
@@ -5855,10 +5861,18 @@ fn write_claude_config(
 
 /// macOS: 根据用户首选终端启动
 #[cfg(target_os = "macos")]
-fn launch_macos_terminal(script_file: &std::path::Path) -> Result<(), String> {
+fn launch_macos_terminal(
+    script_file: &std::path::Path,
+) -> Result<(), crate::rex_terminal::LaunchError> {
     let preferred = crate::settings::get_preferred_terminal();
     let terminal = preferred.as_deref().unwrap_or("terminal");
     let script_file = script_file.to_path_buf();
+
+    // Rex creates a server-side session before selecting it in the app. Never
+    // retry that command in another terminal after an ambiguous CLI response.
+    if matches!(terminal, "rex" | "rex-zh") {
+        return crate::rex_terminal::launch_script(terminal, &script_file);
+    }
 
     // Try the preferred terminal first, fall back to Terminal.app if it fails
     // Note: Kitty doesn't need the -e flag, others do
@@ -5881,10 +5895,10 @@ fn launch_macos_terminal(script_file: &std::path::Path) -> Result<(), String> {
             terminal,
             result.as_ref().err()
         );
-        return launch_macos_terminal_app(&script_file);
+        return launch_macos_terminal_app(&script_file).map_err(Into::into);
     }
 
-    result
+    result.map_err(Into::into)
 }
 
 /// Escape a value as an AppleScript string literal.
@@ -6640,30 +6654,7 @@ read -r _
         std::fs::set_permissions(&script_file, std::fs::Permissions::from_mode(0o755))
             .map_err(|e| format!("设置脚本权限失败: {e}"))?;
 
-        let preferred = crate::settings::get_preferred_terminal();
-        let terminal = preferred.as_deref().unwrap_or("terminal");
-
-        let result = match terminal {
-            "iterm2" => launch_macos_iterm2(&script_file),
-            "warp" => launch_macos_warp(&script_file),
-            "alacritty" => launch_macos_open_app("Alacritty", &script_file, true),
-            "kitty" => launch_macos_open_app("kitty", &script_file, false),
-            "ghostty" => launch_macos_ghostty(&script_file),
-            "otty" => launch_macos_otty(&script_file),
-            "wezterm" => launch_macos_open_app("WezTerm", &script_file, true),
-            "kaku" => launch_macos_open_app("Kaku", &script_file, true),
-            _ => launch_macos_terminal_app(&script_file),
-        };
-
-        if result.is_err() && terminal != "terminal" {
-            log::warn!(
-                "首选终端 {} 启动失败，回退到 Terminal.app: {:?}",
-                terminal,
-                result.as_ref().err()
-            );
-            return launch_macos_terminal_app(&script_file);
-        }
-        result
+        launch_macos_terminal(&script_file).map_err(|error| error.to_string())
     }
 
     #[cfg(target_os = "linux")]

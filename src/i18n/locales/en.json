@@ -926,6 +926,7 @@
       "title": "Preferred Terminal",
       "description": "Choose which terminal app to use when clicking the terminal button",
       "fallbackHint": "If the selected terminal is unavailable, the system default will be used",
+      "rexHelp": "Rex Beta (Chinese) includes its own CLI; the English app and PATH setup are not required. To show new sessions automatically, enable Settings → Rex Server → Remote Control in Rex. Otherwise, sessions still run; select the CC-Switch session in Rex's sidebar.",
       "options": {
         "macos": {
           "terminal": "Terminal.app",
@@ -936,6 +937,8 @@
           "otty": "Otty",
           "wezterm": "WezTerm",
           "kaku": "Kaku",
+          "rex": "Rex Beta",
+          "rex-zh": "Rex Beta (Chinese)",
           "warp": "Warp"
         },
         "windows": {

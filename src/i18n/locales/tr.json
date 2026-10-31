@@ -914,6 +914,7 @@
       "title": "Tercih edilen terminal",
       "description": "Terminal düğmesine tıklandığında hangi terminal uygulamasının kullanılacağını seçin",
       "fallbackHint": "Seçilen terminal kullanılamıyorsa sistem varsayılanı kullanılacaktır",
+      "rexHelp": "Rex Beta'nın Çince sürümü kendi CLI aracını içerir; İngilizce sürüm veya PATH ayarı gerekmez. Yeni oturumları otomatik göstermek için Rex'te Settings → Rex Server → Remote Control seçeneğini açın. Kapalıyken de oturumlar çalışır; Rex kenar çubuğundan CC-Switch oturumunu seçin.",
       "options": {
         "macos": {
           "terminal": "Terminal.app",
@@ -924,6 +925,8 @@
           "otty": "Otty",
           "wezterm": "WezTerm",
           "kaku": "kaku",
+          "rex": "Rex Beta",
+          "rex-zh": "Rex Beta (Çince)",
           "warp": "Warp"
         },
         "windows": {

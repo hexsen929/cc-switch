@@ -272,7 +272,12 @@ export function GeneralSection({
             label={t("settings.terminal.title")}
             help={{
               title: t("settings.terminal.title"),
-              body: t("settings.general.terminalHelp"),
+              body: t(
+                settings.preferredTerminal === "rex" ||
+                  settings.preferredTerminal === "rex-zh"
+                  ? "settings.terminal.rexHelp"
+                  : "settings.general.terminalHelp",
+              ),
             }}
             control={
               <TerminalSelect

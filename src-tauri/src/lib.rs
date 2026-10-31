@@ -47,6 +47,8 @@ mod prompt;
 mod prompt_files;
 mod provider;
 mod proxy;
+#[cfg(any(target_os = "macos", test))]
+mod rex_terminal;
 mod search_mcp;
 mod services;
 mod session_manager;

@@ -7,6 +7,7 @@ import {
   within,
 } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import i18n from "i18next";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { DEFAULT_VISIBLE_APPS } from "@/config/appConfig";
 import { UNKNOWN_PROJECT_DIR_KEY } from "@/components/sessions/utils";
@@ -651,33 +652,48 @@ describe("SessionManagerPage", () => {
     spy.mockRestore();
   });
 
-  it("launches the resume command in the preferred terminal on macOS", async () => {
-    platform.mac = true;
-    setSettings({ preferredTerminal: "iterm2" });
-    const launch = vi
-      .spyOn(sessionsApi, "launchTerminal")
-      .mockResolvedValue(true);
-    renderPage("codex");
-    await screen.findByText("Alpha Session");
-    openRow("Alpha Session");
+  it.each([
+    ["iterm2", "iTerm2"],
+    ["rex", "Rex Beta"],
+    ["rex-zh", "Rex Beta 中文"],
+  ])(
+    "launches the resume command using the %s preference on macOS",
+    async (terminal, label) => {
+      platform.mac = true;
+      // The shared test setup starts with empty translations. Load the terminal
+      // label so this also verifies that persisted Rex ids display as app names.
+      i18n.addResource(
+        "zh",
+        "translation",
+        `settings.terminal.options.macos.${terminal}`,
+        label,
+      );
+      setSettings({ preferredTerminal: terminal });
+      const launch = vi
+        .spyOn(sessionsApi, "launchTerminal")
+        .mockResolvedValue(true);
+      renderPage("codex");
+      await screen.findByText("Alpha Session");
+      openRow("Alpha Session");
 
-    const resume = await screen.findByRole("button", {
-      name: /中恢复$/,
-    });
-    fireEvent.click(resume);
+      const resume = await screen.findByRole("button", {
+        name: `在 ${label} 中恢复`,
+      });
+      fireEvent.click(resume);
 
-    await waitFor(() =>
-      expect(launch).toHaveBeenCalledWith({
-        command: "codex resume codex-session-1",
-        cwd: "/mock/codex",
-        providerId: "codex",
-        sessionId: "codex-session-1",
-        sourcePath: "/mock/codex/session-1.jsonl",
-      }),
-    );
-    expect(toastSuccessMock).toHaveBeenCalled();
-    launch.mockRestore();
-  });
+      await waitFor(() =>
+        expect(launch).toHaveBeenCalledWith({
+          command: "codex resume codex-session-1",
+          cwd: "/mock/codex",
+          providerId: "codex",
+          sessionId: "codex-session-1",
+          sourcePath: "/mock/codex/session-1.jsonl",
+        }),
+      );
+      expect(toastSuccessMock).toHaveBeenCalled();
+      launch.mockRestore();
+    },
+  );
 
   it("resumes AGY binary-only index sessions from both list and reader without a fake source", async () => {
     platform.mac = true;

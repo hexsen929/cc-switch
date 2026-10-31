@@ -77,3 +77,33 @@ describe("GeneralSection tray style", () => {
     ).not.toBeInTheDocument();
   });
 });
+
+describe("GeneralSection terminal help", () => {
+  beforeEach(() => {
+    platform.linux = false;
+  });
+
+  it.each(["rex", "rex-zh"])(
+    "explains Rex setup when %s is selected",
+    (preferredTerminal) => {
+      renderSection({ preferredTerminal });
+      expect(screen.getByText("settings.terminal.rexHelp")).toBeInTheDocument();
+      expect(
+        screen.queryByText("settings.general.terminalHelp"),
+      ).not.toBeInTheDocument();
+    },
+  );
+
+  it.each([undefined, "iterm2", "ghostty"])(
+    "keeps ordinary terminal help for %s",
+    (preferredTerminal) => {
+      renderSection({ preferredTerminal });
+      expect(
+        screen.getByText("settings.general.terminalHelp"),
+      ).toBeInTheDocument();
+      expect(
+        screen.queryByText("settings.terminal.rexHelp"),
+      ).not.toBeInTheDocument();
+    },
+  );
+});

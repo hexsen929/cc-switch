@@ -23,6 +23,8 @@ pub fn launch_terminal(
         "otty" => launch_otty(command, cwd),
         "wezterm" => launch_wezterm(command, cwd),
         "kaku" => launch_kaku(command, cwd),
+        #[cfg(target_os = "macos")]
+        "rex" | "rex-zh" => crate::rex_terminal::launch_command(target, command, cwd),
         "alacritty" => launch_alacritty(command, cwd),
         #[cfg(unix)]
         "warp" => launch_warp(command, cwd),

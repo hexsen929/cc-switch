@@ -18,6 +18,8 @@ const MACOS_TERMINALS = [
   { value: "otty", labelKey: "settings.terminal.options.macos.otty" },
   { value: "wezterm", labelKey: "settings.terminal.options.macos.wezterm" },
   { value: "kaku", labelKey: "settings.terminal.options.macos.kaku" },
+  { value: "rex", labelKey: "settings.terminal.options.macos.rex" },
+  { value: "rex-zh", labelKey: "settings.terminal.options.macos.rex-zh" },
   { value: "warp", labelKey: "settings.terminal.options.macos.warp" },
 ] as const;
 
