@@ -49,11 +49,11 @@ enum Variant {
 }
 
 impl Variant {
-    fn parse(target: &str) -> Result<Self, String> {
-        match target {
-            "rex" => Ok(Self::Original),
-            "rex-zh" => Ok(Self::Chinese),
-            _ => Err(format!("未知的 Rex 终端选项：{target}")),
+    fn from_bundle_id(bundle_id: &str) -> Result<Self, String> {
+        match bundle_id.trim() {
+            "com.superlogical.rex" => Ok(Self::Original),
+            "com.superlogical.rex.zh-hans" => Ok(Self::Chinese),
+            _ => Err(format!("未知的 Rex 应用标识：{}", bundle_id.trim())),
         }
     }
 
@@ -63,20 +63,20 @@ impl Variant {
             Self::Chinese => "Rex Beta 中文",
         }
     }
-
-    fn app_name(self) -> &'static str {
-        match self {
-            Self::Original => "Rex Beta.app",
-            Self::Chinese => "Rex Beta 中文.app",
-        }
-    }
 }
 
-fn app_candidates(variant: Variant, home: &Path) -> [PathBuf; 2] {
-    [
-        Path::new("/Applications").join(variant.app_name()),
-        home.join("Applications").join(variant.app_name()),
-    ]
+/// Both settings select the same automatically detected app. Keep the old
+/// `rex-zh` setting working, and prefer the Chinese install while both exist.
+fn app_candidates(target: &str, home: &Path) -> Result<[PathBuf; 4], String> {
+    if !matches!(target, "rex" | "rex-zh") {
+        return Err(format!("未知的 Rex 终端选项：{target}"));
+    }
+    Ok([
+        Path::new("/Applications").join("Rex Beta 中文.app"),
+        home.join("Applications").join("Rex Beta 中文.app"),
+        Path::new("/Applications").join("Rex Beta.app"),
+        home.join("Applications").join("Rex Beta.app"),
+    ])
 }
 
 /// Explicitly select the local server, regardless of inherited Rex context or
@@ -187,6 +187,23 @@ fn output_error(output: &std::process::Output) -> String {
 }
 
 #[cfg(target_os = "macos")]
+fn app_variant(app: &Path) -> Result<Variant, String> {
+    // A Finder rename changes only the directory, not Rex's bundle identity or
+    // the name it reports in `client ls`. Do not infer either from the path.
+    let output = std::process::Command::new("/usr/libexec/PlistBuddy")
+        .args(["-c", "Print :CFBundleIdentifier"])
+        .arg(app.join("Contents/Info.plist"))
+        .output()
+        .map_err(|e| format!("读取 Rex 应用标识失败：{e}"))?;
+    if !output.status.success() {
+        return Err(format!("读取 Rex 应用标识失败：{}", output_error(&output)));
+    }
+    let bundle_id =
+        std::str::from_utf8(&output.stdout).map_err(|e| format!("Rex 应用标识格式错误：{e}"))?;
+    Variant::from_bundle_id(bundle_id)
+}
+
+#[cfg(target_os = "macos")]
 fn wait_for_client(cli: &Path, endpoint: &str, variant: Variant) -> Result<String, String> {
     use std::time::{Duration, Instant};
 
@@ -226,9 +243,8 @@ fn launch(
 ) -> Result<(), LaunchError> {
     use std::os::unix::fs::PermissionsExt;
 
-    let variant = Variant::parse(target)?;
     let home = dirs::home_dir().ok_or_else(|| "未找到 Rex 用户目录".to_string())?;
-    let (app, cli) = app_candidates(variant, &home)
+    let (app, cli) = app_candidates(target, &home)?
         .into_iter()
         .find_map(|app| {
             let cli = app.join(CLI_RELATIVE_PATH);
@@ -238,11 +254,9 @@ fn launch(
             executable.then_some((app, cli))
         })
         .ok_or_else(|| {
-            format!(
-                "未找到 {} 的内置 CLI，请将应用安装到 /Applications 或 ~/Applications",
-                variant.name()
-            )
+            "未找到 Rex 的内置 CLI，请将应用安装到 /Applications 或 ~/Applications".to_string()
         })?;
+    let variant = app_variant(&app)?;
     let endpoint = local_server_endpoint(&home)?;
     let opened = std::process::Command::new("/usr/bin/open")
         .arg("-a")
@@ -341,20 +355,47 @@ mod tests {
     use serde_json::json;
 
     #[test]
-    fn variants_never_search_the_other_app_or_path_cli() {
+    fn automatic_selection_prefers_chinese_app_and_keeps_legacy_alias() {
         let home = Path::new("/Users/test user");
-        let original = app_candidates(Variant::parse("rex").unwrap(), home);
-        let chinese = app_candidates(Variant::parse("rex-zh").unwrap(), home);
-        assert_eq!(original[0], Path::new("/Applications/Rex Beta.app"));
-        assert_eq!(chinese[0], Path::new("/Applications/Rex Beta 中文.app"));
-        assert_eq!(original[1], home.join("Applications/Rex Beta.app"));
-        assert_eq!(chinese[1], home.join("Applications/Rex Beta 中文.app"));
-        assert!(original.iter().all(|path| !chinese.contains(path)));
+        let candidates = app_candidates("rex", home).unwrap();
+        assert_eq!(
+            candidates,
+            [
+                PathBuf::from("/Applications/Rex Beta 中文.app"),
+                home.join("Applications/Rex Beta 中文.app"),
+                PathBuf::from("/Applications/Rex Beta.app"),
+                home.join("Applications/Rex Beta.app"),
+            ]
+        );
+        assert_eq!(candidates, app_candidates("rex-zh", home).unwrap());
         assert_eq!(
             CLI_RELATIVE_PATH,
             "Contents/Helpers/Rex Server.rex/Contents/MacOS/rex"
         );
-        assert!(Variant::parse("rex://anything").is_err());
+        assert!(app_candidates("rex://anything", home).is_err());
+    }
+
+    #[test]
+    fn renamed_chinese_app_selects_client_by_bundle_identity_not_directory_name() {
+        let renamed = PathBuf::from("/Applications/Rex Beta.app");
+        assert!(app_candidates("rex", Path::new("/Users/test"))
+            .unwrap()
+            .contains(&renamed));
+        let variant = Variant::from_bundle_id("com.superlogical.rex.zh-hans\n").unwrap();
+        assert_eq!(variant, Variant::Chinese);
+        let clients = json!({"clients": [
+            client("client:original", "Rex Beta"),
+            client("client:renamed-chinese", "Rex Beta 中文")
+        ]});
+        assert_eq!(
+            selected_client(&clients, variant).unwrap().as_deref(),
+            Some("client:renamed-chinese")
+        );
+        assert_eq!(
+            Variant::from_bundle_id("com.superlogical.rex").unwrap(),
+            Variant::Original
+        );
+        assert!(Variant::from_bundle_id("com.example.other").is_err());
     }
 
     #[test]

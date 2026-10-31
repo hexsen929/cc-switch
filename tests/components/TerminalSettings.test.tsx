@@ -45,33 +45,39 @@ describe("TerminalSelect", () => {
     }
   });
 
-  it.each(["rex", "rex-zh"])(
-    "selects the %s app independently without replacing existing terminals",
-    async (terminal) => {
-      const onChange = vi.fn();
-      const user = userEvent.setup();
-      render(<TerminalSelect onChange={onChange} />);
-      const select = screen.getByRole("combobox", {
-        name: "settings.terminal.title",
-      });
-      expect(select).toHaveTextContent(macLabel("terminal"));
-      await user.click(select);
+  it("offers one Rex launcher without replacing existing terminals", async () => {
+    const onChange = vi.fn();
+    const user = userEvent.setup();
+    render(<TerminalSelect onChange={onChange} />);
+    const select = screen.getByRole("combobox", {
+      name: "settings.terminal.title",
+    });
+    expect(select).toHaveTextContent(macLabel("terminal"));
+    await user.click(select);
 
-      for (const existing of ["terminal", "iterm2", "ghostty", "warp"]) {
-        expect(
-          screen.getByRole("option", { name: macLabel(existing) }),
-        ).toBeInTheDocument();
-      }
-      await user.click(
-        await screen.findByRole("option", { name: macLabel(terminal) }),
-      );
-      expect(onChange).toHaveBeenCalledWith(terminal);
-    },
-  );
+    for (const existing of ["terminal", "iterm2", "ghostty", "warp"]) {
+      expect(
+        screen.getByRole("option", { name: macLabel(existing) }),
+      ).toBeInTheDocument();
+    }
+    expect(
+      screen.queryByRole("option", { name: macLabel("rex-zh") }),
+    ).toBeNull();
+    expect(
+      screen.getAllByRole("option", { name: macLabel("rex") }),
+    ).toHaveLength(1);
+    await user.click(
+      await screen.findByRole("option", { name: macLabel("rex") }),
+    );
+    expect(onChange).toHaveBeenCalledWith("rex");
+  });
 
   it.each(["rex", "rex-zh"])("displays the saved %s preference", (terminal) => {
-    render(<TerminalSelect value={terminal} onChange={vi.fn()} />);
-    expect(screen.getByRole("combobox")).toHaveTextContent(macLabel(terminal));
+    const onChange = vi.fn();
+    render(<TerminalSelect value={terminal} onChange={onChange} />);
+    expect(screen.getByRole("combobox")).toHaveTextContent(macLabel("rex"));
+    // Display normalization does not unexpectedly rewrite a user's settings.
+    expect(onChange).not.toHaveBeenCalled();
   });
 
   it.each(["windows", "linux"])(

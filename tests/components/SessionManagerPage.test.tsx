@@ -655,7 +655,7 @@ describe("SessionManagerPage", () => {
   it.each([
     ["iterm2", "iTerm2"],
     ["rex", "Rex Beta"],
-    ["rex-zh", "Rex Beta 中文"],
+    ["rex-zh", "Rex Beta"],
   ])(
     "launches the resume command using the %s preference on macOS",
     async (terminal, label) => {

@@ -19,7 +19,6 @@ const MACOS_TERMINALS = [
   { value: "wezterm", labelKey: "settings.terminal.options.macos.wezterm" },
   { value: "kaku", labelKey: "settings.terminal.options.macos.kaku" },
   { value: "rex", labelKey: "settings.terminal.options.macos.rex" },
-  { value: "rex-zh", labelKey: "settings.terminal.options.macos.rex-zh" },
   { value: "warp", labelKey: "settings.terminal.options.macos.warp" },
 ] as const;
 
@@ -89,7 +88,9 @@ export function TerminalSelect({
 }: TerminalSettingsProps & { className?: string }) {
   const { t } = useTranslation();
   const terminals = getTerminalOptions();
-  const currentValue = value || getDefaultTerminal();
+  // Both app names now share one launcher; keep older saved preferences visible.
+  const currentValue =
+    value === "rex-zh" ? "rex" : value || getDefaultTerminal();
 
   return (
     <Select value={currentValue} onValueChange={onChange}>

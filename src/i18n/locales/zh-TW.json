@@ -926,7 +926,7 @@
       "title": "首選終端機",
       "description": "選擇點擊終端機按鈕時使用的終端機應用程式",
       "fallbackHint": "如果選擇的終端機不可用，將自動使用系統預設終端機",
-      "rexHelp": "中文版內建 CLI，無需英文版或 PATH 設定。自動跳轉需開啟 Rex 設定 → Rex Server → Remote Control；未開啟時工作階段仍正常執行，請從 Rex 側邊欄選擇 CC-Switch 工作階段。",
+      "rexHelp": "自動識別 Rex Beta.app 或 Rex Beta 中文.app 並使用內建 CLI。中文版改名或刪除英文版後仍可使用，無需 PATH 設定。自動跳轉需開啟 Rex 設定 → Rex Server → Remote Control；否則從側邊欄選擇已執行的 CC-Switch 工作階段。",
       "options": {
         "macos": {
           "terminal": "Terminal.app",
@@ -938,7 +938,7 @@
           "wezterm": "WezTerm",
           "kaku": "Kaku",
           "rex": "Rex Beta",
-          "rex-zh": "Rex Beta 中文",
+          "rex-zh": "Rex Beta",
           "warp": "Warp"
         },
         "windows": {

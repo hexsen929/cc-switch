@@ -926,7 +926,7 @@
       "title": "優先ターミナル",
       "description": "ターミナルボタンをクリックした時に使用するターミナルアプリを選択",
       "fallbackHint": "選択したターミナルが利用できない場合、システムのデフォルトが使用されます",
-      "rexHelp": "中国語版 Rex Beta は専用 CLI を内蔵しているため、英語版や PATH の設定は不要です。新しいセッションを自動表示するには、Rex の Settings → Rex Server → Remote Control を有効にしてください。無効でもセッションは実行され、サイドバーから CC-Switch セッションを選択できます。",
+      "rexHelp": "Rex Beta.app または Rex Beta 中文.app を自動検出し、内蔵 CLI を使用します。中国語版の名前変更や英語版の削除後も PATH の設定は不要です。新しいセッションへ自動移動するには、Rex の Settings → Rex Server → Remote Control を有効にしてください。無効でも実行されるため、サイドバーから CC-Switch セッションを選択できます。",
       "options": {
         "macos": {
           "terminal": "Terminal.app",
@@ -938,7 +938,7 @@
           "wezterm": "WezTerm",
           "kaku": "Kaku",
           "rex": "Rex Beta",
-          "rex-zh": "Rex Beta（中国語版）",
+          "rex-zh": "Rex Beta",
           "warp": "Warp"
         },
         "windows": {
