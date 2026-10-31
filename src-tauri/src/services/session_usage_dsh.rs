@@ -207,7 +207,7 @@ fn sync_file(
     }
     // 还没有完整帧（刚创建、正在写第一帧）或没有新内容：这一轮先不动游标，下一轮再看，
     // 别把它当成同步错误。
-    if chunk.text.is_empty() && !chunk.boundaries.last().is_some_and(|(_, end)| *end > start) {
+    if chunk.text.is_empty() && chunk.boundaries.last().is_none_or(|(_, end)| *end <= start) {
         return Ok(SessionSyncResult {
             files_scanned: 1,
             ..Default::default()
@@ -366,8 +366,7 @@ fn read_chunk_limited(
     } else {
         complete_lines(&tail, start)
     };
-    if capped && chunk.boundary_ok && !chunk.boundaries.last().is_some_and(|(_, end)| *end > start)
-    {
+    if capped && chunk.boundary_ok && chunk.boundaries.last().is_none_or(|(_, end)| *end <= start) {
         return Err(AppError::Message(format!(
             "DSH session frame or line exceeds the bounded read limit: {}",
             path.display()
