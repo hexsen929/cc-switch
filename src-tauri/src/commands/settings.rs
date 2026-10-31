@@ -14,21 +14,9 @@ fn merge_settings_for_save(
     mut incoming: crate::settings::AppSettings,
     existing: &crate::settings::AppSettings,
 ) -> crate::settings::AppSettings {
-    match (&mut incoming.webdav_sync, &existing.webdav_sync) {
-        // incoming 没有 webdav → 保留现有
-        (None, _) => {
-            incoming.webdav_sync = existing.webdav_sync.clone();
-        }
-        // incoming 有 webdav 但密码为空，且现有有密码 → 填回现有密码
-        // （get_settings_for_frontend 总是清空密码，所以通过 save_settings
-        //   传入的空密码意味着"保持现有"而非"用户主动清空"）
-        (Some(incoming_sync), Some(existing_sync))
-            if incoming_sync.password.is_empty() && !existing_sync.password.is_empty() =>
-        {
-            incoming_sync.password = existing_sync.password.clone();
-        }
-        _ => {}
-    }
+    // WebDAV is edited only through its dedicated commands. A general
+    // settings payload is a possibly stale/redacted view, not its SSOT.
+    incoming.webdav_sync = existing.webdav_sync.clone();
     match (&mut incoming.s3_sync, &existing.s3_sync) {
         // incoming 没有 s3 → 保留现有
         (None, _) => {
@@ -107,13 +95,13 @@ pub async fn save_settings(
     // Unrelated settings must remain editable if a configured source disappears.
     if shared_instruction_file_changed && instruction_dirs_changed {
         let source = merged.shared_instruction_file.clone();
-        crate::settings::update_settings(merged).map_err(|e| e.to_string())?;
+        crate::settings::update_general_settings(merged).map_err(|e| e.to_string())?;
         if let Err(error) = crate::shared_instructions::sync_with_source_for_state(
             state.inner(),
             source.as_deref(),
             || Ok(()),
         ) {
-            crate::settings::update_settings(existing.clone()).map_err(|rollback| {
+            crate::settings::update_general_settings(existing.clone()).map_err(|rollback| {
                 format!("共享指令同步失败 ({error}); 设置回滚也失败: {rollback}")
             })?;
             return Err(error.to_string());
@@ -123,11 +111,11 @@ pub async fn save_settings(
         crate::shared_instructions::sync_with_source_for_state(
             state.inner(),
             source.as_deref(),
-            || crate::settings::update_settings(merged),
+            || crate::settings::update_general_settings(merged),
         )
         .map_err(|error| error.to_string())?;
     } else {
-        crate::settings::update_settings(merged).map_err(|e| e.to_string())?;
+        crate::settings::update_general_settings(merged).map_err(|e| e.to_string())?;
     }
 
     // 原生托盘菜单 / 托盘面板当场切换，不用重启。
@@ -145,7 +133,7 @@ pub async fn save_settings(
             rollback.codex_stack_subagent_reasoning_effort =
                 existing.codex_stack_subagent_reasoning_effort.clone();
             rollback.codex_stack_auto_review_model = existing.codex_stack_auto_review_model.clone();
-            if let Err(rollback_err) = crate::settings::update_settings(rollback) {
+            if let Err(rollback_err) = crate::settings::update_general_settings(rollback) {
                 log::error!("回滚 Codex 聚合设置失败: {rollback_err}");
             }
             return Err(format!(
@@ -171,7 +159,7 @@ pub async fn save_settings(
             let mut rollback = crate::settings::get_settings();
             rollback.unify_codex_session_history = existing.unify_codex_session_history;
             rollback.unify_codex_migrate_existing = existing.unify_codex_migrate_existing;
-            if let Err(rollback_err) = crate::settings::update_settings(rollback) {
+            if let Err(rollback_err) = crate::settings::update_general_settings(rollback) {
                 log::error!("回滚统一会话开关设置失败: {rollback_err}");
             }
             return Err(format!(
@@ -522,7 +510,7 @@ mod tests {
     }
 
     #[test]
-    fn save_settings_should_keep_incoming_webdav_when_present() {
+    fn save_settings_should_keep_backend_webdav_when_payload_contains_stale_values() {
         let existing = AppSettings {
             webdav_sync: Some(WebDavSyncSettings {
                 base_url: "https://dav.old.example.com".to_string(),
@@ -547,7 +535,53 @@ mod tests {
 
         assert_eq!(
             merged.webdav_sync.as_ref().map(|v| v.base_url.as_str()),
-            Some("https://dav.new.example.com")
+            Some("https://dav.old.example.com")
+        );
+        assert_eq!(
+            merged.webdav_sync.as_ref().map(|v| v.password.as_str()),
+            Some("old-pass")
+        );
+    }
+
+    #[test]
+    fn general_save_does_not_resurrect_cleared_webdav_from_a_stale_payload() {
+        let incoming = AppSettings {
+            language: Some("ja".to_string()),
+            webdav_sync: Some(WebDavSyncSettings {
+                enabled: true,
+                base_url: "https://forgotten.example.test/dav/".to_string(),
+                username: "old-user".to_string(),
+                password: "old-secret".to_string(),
+                ..WebDavSyncSettings::default()
+            }),
+            ..AppSettings::default()
+        };
+
+        let merged = merge_settings_for_save(incoming, &AppSettings::default());
+        assert!(merged.webdav_sync.is_none());
+        assert_eq!(merged.language.as_deref(), Some("ja"));
+    }
+
+    #[test]
+    fn general_save_preserves_new_webdav_configuration_over_an_old_payload() {
+        let existing = AppSettings {
+            webdav_sync: Some(WebDavSyncSettings {
+                enabled: true,
+                base_url: "https://current.example.test/dav/".to_string(),
+                username: "current-user".to_string(),
+                password: "current-secret".to_string(),
+                ..WebDavSyncSettings::default()
+            }),
+            ..AppSettings::default()
+        };
+        let mut incoming = existing.clone();
+        let stale = incoming.webdav_sync.as_mut().unwrap();
+        stale.base_url = "https://old.example.test/dav/".to_string();
+        stale.password = "old-secret".to_string();
+        let merged = merge_settings_for_save(incoming, &existing);
+        assert_eq!(
+            serde_json::to_value(merged.webdav_sync).unwrap(),
+            serde_json::to_value(existing.webdav_sync).unwrap()
         );
     }
 

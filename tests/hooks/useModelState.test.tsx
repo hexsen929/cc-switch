@@ -196,4 +196,48 @@ describe("useModelState", () => {
     cfg = JSON.parse(latestConfig);
     expect(cfg.modelAliases).toBeUndefined();
   });
+
+  it.each([true, false])(
+    "preserves current JSON editor changes when model aliases are enabled=%s",
+    (enabled) => {
+      const renderSnapshot = JSON.stringify({
+        env: { ANTHROPIC_AUTH_TOKEN: "old-token" },
+        modelAliases: { old: "old-model" },
+      });
+      let currentConfig = renderSnapshot;
+      const { result } = renderHook(() =>
+        useModelState({
+          settingsConfig: renderSnapshot,
+          getSettingsConfig: () => currentConfig,
+          onConfigChange: (config) => {
+            currentConfig = config;
+          },
+        }),
+      );
+
+      // The raw editor writes through form.setValue without refreshing the
+      // render-time snapshot used by this event handler.
+      currentConfig = JSON.stringify({
+        env: {
+          ANTHROPIC_AUTH_TOKEN: "json-editor-token",
+          ANTHROPIC_BASE_URL: "https://new.example",
+        },
+        modelAliases: { old: "old-model" },
+        permissions: { allow: ["Read"] },
+      });
+      act(() => {
+        result.current.handleModelAliasesChange(
+          enabled ? [{ id: "new", source: "alias", target: "new-model" }] : [],
+        );
+      });
+
+      const saved = JSON.parse(currentConfig);
+      expect(saved.env.ANTHROPIC_AUTH_TOKEN).toBe("json-editor-token");
+      expect(saved.env.ANTHROPIC_BASE_URL).toBe("https://new.example");
+      expect(saved.permissions).toEqual({ allow: ["Read"] });
+      expect(saved.modelAliases).toEqual(
+        enabled ? { alias: "new-model" } : undefined,
+      );
+    },
+  );
 });

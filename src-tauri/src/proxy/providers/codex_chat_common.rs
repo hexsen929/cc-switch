@@ -168,7 +168,7 @@ pub(crate) fn tool_call_extra_content(source: &Value) -> Option<&Value> {
 }
 
 /// Gemini 文档给的跳过签名校验的占位值，只在真签名找不回来时兜底用（会影响模型表现）。
-const GEMINI_SKIP_THOUGHT_SIGNATURE: &str = "skip_thought_signature_validator";
+pub(crate) const GEMINI_SKIP_THOUGHT_SIGNATURE: &str = "skip_thought_signature_validator";
 
 /// Tool-call extension objects can arrive in several deltas. Merge their nested
 /// fields instead of replacing the whole object; absent/empty fragments cannot
@@ -297,7 +297,7 @@ pub(crate) fn fill_gemini_thought_signature_fallback(chat_body: &mut Value) -> u
 }
 
 /// 模型名（可带 `google/` 之类的中转前缀）是 Gemini 3 及以后的版本：这些版本才强制校验工具调用签名。
-fn requires_gemini_thought_signature(model: &str) -> bool {
+pub(crate) fn requires_gemini_thought_signature(model: &str) -> bool {
     let name = model
         .rsplit('/')
         .next()

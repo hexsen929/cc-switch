@@ -88,17 +88,11 @@ where
     .await
 }
 
-fn map_sync_result<T, F>(result: Result<T, AppError>, on_error: F) -> Result<T, String>
+fn map_sync_result<T, F>(result: Result<T, AppError>, on_error: F) -> Result<T, AppError>
 where
     F: FnOnce(&AppError),
 {
-    match result {
-        Ok(value) => Ok(value),
-        Err(err) => {
-            on_error(&err);
-            Err(err.to_string())
-        }
-    }
+    result.inspect_err(on_error)
 }
 
 #[tauri::command]
@@ -106,43 +100,55 @@ pub async fn webdav_test_connection(
     settings: WebDavSyncSettings,
     #[allow(non_snake_case)] preserveEmptyPassword: Option<bool>,
 ) -> Result<Value, String> {
-    let preserve_empty = preserveEmptyPassword.unwrap_or(true);
-    let resolved = resolve_password_for_request(
-        settings,
-        settings::get_webdav_sync_settings(),
-        preserve_empty,
-    );
-    webdav_sync_service::check_connection(&resolved)
-        .await
-        .map_err(|e| e.to_string())?;
-    Ok(json!({
-        "success": true,
-        "message": "WebDAV connection ok"
-    }))
+    run_with_webdav_lock(async {
+        let preserve_empty = preserveEmptyPassword.unwrap_or(true);
+        let resolved = resolve_password_for_request(
+            settings,
+            settings::get_webdav_sync_settings(),
+            preserve_empty,
+        );
+        webdav_sync_service::check_connection(&resolved).await?;
+        Ok(json!({
+            "success": true,
+            "message": "WebDAV connection ok"
+        }))
+    })
+    .await
+    .map_err(|e| e.to_string())
 }
 
 #[tauri::command]
 pub async fn webdav_sync_upload(state: State<'_, AppState>) -> Result<Value, String> {
     let db = state.db.clone();
-    let mut settings = require_enabled_webdav_settings()?;
-
-    let result = run_with_webdav_lock(webdav_sync_service::upload(&db, &mut settings)).await;
-    map_sync_result(result, |error| {
-        persist_sync_error(&mut settings, error, "manual")
+    run_with_webdav_lock(async {
+        // A queued request must observe a clear/save that acquired the lock
+        // first, rather than retaining the previous server's credentials.
+        let mut settings = require_enabled_webdav_settings().map_err(AppError::Message)?;
+        let result = webdav_sync_service::upload(&db, &mut settings).await;
+        map_sync_result(result, |error| {
+            persist_sync_error(&mut settings, error, "manual")
+        })
     })
+    .await
+    .map_err(|e| e.to_string())
 }
 
 #[tauri::command]
 pub async fn webdav_sync_download(state: State<'_, AppState>) -> Result<Value, String> {
     let db = state.db.clone();
     let app_state_for_sync = state.inner().clone();
-    let mut settings = require_enabled_webdav_settings()?;
 
     // Keep the derived live configuration refresh in the same global sync
     // operation. Otherwise another WebDAV/S3 restore can start after the DB
     // apply but before this snapshot has finished projecting its live files.
     let sync_result = run_download_with_webdav_lock(
-        webdav_sync_service::download(&db, &mut settings),
+        async {
+            let mut settings = require_enabled_webdav_settings().map_err(AppError::Message)?;
+            let result = webdav_sync_service::download(&db, &mut settings).await;
+            map_sync_result(result, |error| {
+                persist_sync_error(&mut settings, error, "manual")
+            })
+        },
         |result| async move {
             let post_sync_result = tauri::async_runtime::spawn_blocking(move || {
                 run_post_import_sync(&app_state_for_sync)
@@ -153,9 +159,7 @@ pub async fn webdav_sync_download(state: State<'_, AppState>) -> Result<Value, S
         },
     )
     .await;
-    let (mut result, post_sync_result) = map_sync_result(sync_result, |error| {
-        persist_sync_error(&mut settings, error, "manual")
-    })?;
+    let (mut result, post_sync_result) = sync_result.map_err(|e| e.to_string())?;
 
     // Post-download sync is best-effort: snapshot restore has already succeeded.
     let warning = post_sync_warning_from_result(post_sync_result);
@@ -172,29 +176,46 @@ pub async fn webdav_sync_save_settings(
     settings: WebDavSyncSettings,
     #[allow(non_snake_case)] passwordTouched: Option<bool>,
 ) -> Result<Value, String> {
-    let password_touched = passwordTouched.unwrap_or(false);
-    let existing = settings::get_webdav_sync_settings();
-    let mut sync_settings =
-        resolve_password_for_request(settings, existing.clone(), !password_touched);
+    run_with_webdav_lock(async {
+        let password_touched = passwordTouched.unwrap_or(false);
+        let existing = settings::get_webdav_sync_settings();
+        let mut sync_settings =
+            resolve_password_for_request(settings, existing.clone(), !password_touched);
 
-    // Preserve server-owned fields that the frontend does not manage
-    if let Some(existing_settings) = existing {
-        sync_settings.status = existing_settings.status;
-    }
+        // Preserve server-owned fields only from the configuration current at
+        // lock acquisition, never from one that a concurrent clear forgot.
+        sync_settings.status = existing
+            .map(|existing_settings| existing_settings.status)
+            .unwrap_or_default();
 
-    sync_settings.normalize();
-    sync_settings.validate().map_err(|e| e.to_string())?;
-    settings::set_webdav_sync_settings(Some(sync_settings)).map_err(|e| e.to_string())?;
+        sync_settings.normalize();
+        sync_settings.validate()?;
+        settings::set_webdav_sync_settings(Some(sync_settings))?;
+        Ok(json!({ "success": true }))
+    })
+    .await
+    .map_err(|e| e.to_string())
+}
+
+/// Forget the saved WebDAV config (URL, credentials, remote root, status) on
+/// this device. Remote snapshots are left untouched.
+#[tauri::command]
+pub async fn webdav_sync_clear_settings() -> Result<Value, String> {
+    run_with_webdav_lock(async { settings::set_webdav_sync_settings(None) })
+        .await
+        .map_err(|e| e.to_string())?;
     Ok(json!({ "success": true }))
 }
 
 #[tauri::command]
 pub async fn webdav_sync_fetch_remote_info() -> Result<Value, String> {
-    let settings = require_enabled_webdav_settings()?;
-    let info = webdav_sync_service::fetch_remote_info(&settings)
-        .await
-        .map_err(|e| e.to_string())?;
-    Ok(info.unwrap_or(json!({ "empty": true })))
+    run_with_webdav_lock(async {
+        let settings = require_enabled_webdav_settings().map_err(AppError::Message)?;
+        let info = webdav_sync_service::fetch_remote_info(&settings).await?;
+        Ok(info.unwrap_or(json!({ "empty": true })))
+    })
+    .await
+    .map_err(|e| e.to_string())
 }
 
 #[cfg(test)]
@@ -202,7 +223,8 @@ mod tests {
     use super::{
         map_sync_result, persist_sync_error, require_enabled_webdav_settings,
         resolve_password_for_request, run_download_with_webdav_lock, run_with_webdav_lock,
-        webdav_sync_mutex,
+        webdav_sync_clear_settings, webdav_sync_fetch_remote_info, webdav_sync_mutex,
+        webdav_sync_save_settings,
     };
     use crate::error::AppError;
     use crate::settings::{AppSettings, WebDavSyncSettings};
@@ -289,19 +311,128 @@ mod tests {
 
     #[tokio::test]
     #[serial]
-    async fn map_sync_result_runs_error_handler_after_lock_release() {
-        let result = run_with_webdav_lock(async {
-            Err::<(), AppError>(AppError::Config("boom".to_string()))
+    async fn map_sync_result_publishes_error_before_lock_release() {
+        let mut lock_held = false;
+        let mapped = run_with_webdav_lock(async {
+            map_sync_result(
+                Err::<(), AppError>(AppError::Config("boom".to_string())),
+                |_| lock_held = webdav_sync_mutex().try_lock().is_err(),
+            )
         })
         .await;
 
-        let mut lock_released = false;
-        let mapped = map_sync_result(result, |_| {
-            lock_released = webdav_sync_mutex().try_lock().is_ok();
-        });
-
         assert!(mapped.is_err());
-        assert!(lock_released);
+        assert!(lock_held);
+        assert!(webdav_sync_mutex().try_lock().is_ok());
+    }
+
+    fn seed_sync_settings(test_name: &str) -> WebDavSyncSettings {
+        let test_home = std::env::temp_dir().join(test_name);
+        std::fs::create_dir_all(&test_home).expect("create test home");
+        std::env::set_var("CC_SWITCH_TEST_HOME", &test_home);
+        crate::settings::update_settings(AppSettings::default()).expect("reset settings");
+        let settings = WebDavSyncSettings {
+            enabled: true,
+            base_url: "https://dav.example.test/dav/".to_string(),
+            username: "alice".to_string(),
+            password: "old-secret".to_string(),
+            ..WebDavSyncSettings::default()
+        };
+        crate::settings::set_webdav_sync_settings(Some(settings.clone()))
+            .expect("seed webdav settings");
+        settings
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn clear_waits_for_sync_error_publication_and_stays_cleared() {
+        let mut old_settings = seed_sync_settings("cc-switch-webdav-clear-error-lock-test");
+        let guard = webdav_sync_mutex().lock().await;
+        let clear = webdav_sync_clear_settings();
+        tokio::pin!(clear);
+        assert!(
+            tokio::time::timeout(Duration::from_millis(40), clear.as_mut())
+                .await
+                .is_err()
+        );
+
+        persist_sync_error(
+            &mut old_settings,
+            &AppError::Config("old request failed".to_string()),
+            "manual",
+        );
+        drop(guard);
+        tokio::time::timeout(Duration::from_secs(1), clear.as_mut())
+            .await
+            .expect("clear should finish after sync publication")
+            .expect("clear should succeed");
+        assert!(crate::settings::get_webdav_sync_settings().is_none());
+
+        // The status-only writer is also defensive against a stale callback:
+        // forgetting credentials must never be undone by an old failure.
+        persist_sync_error(
+            &mut old_settings,
+            &AppError::Config("late failure".to_string()),
+            "manual",
+        );
+        assert!(crate::settings::get_webdav_sync_settings().is_none());
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn queued_remote_info_read_observes_clear_before_using_credentials() {
+        seed_sync_settings("cc-switch-webdav-clear-queued-read-test");
+        let guard = webdav_sync_mutex().lock().await;
+        let fetch = webdav_sync_fetch_remote_info();
+        tokio::pin!(fetch);
+        assert!(
+            tokio::time::timeout(Duration::from_millis(40), fetch.as_mut())
+                .await
+                .is_err()
+        );
+
+        // Simulate clear owning this same lock before the queued reader.
+        crate::settings::set_webdav_sync_settings(None).expect("clear settings");
+        drop(guard);
+        let error = tokio::time::timeout(Duration::from_secs(1), fetch.as_mut())
+            .await
+            .expect("queued read should reject immediately, without a network request")
+            .expect_err("cleared settings must not be used");
+        assert!(error.contains("not configured") || error.contains("未配置"));
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn queued_save_does_not_reuse_password_or_status_forgotten_by_clear() {
+        let mut old_settings = seed_sync_settings("cc-switch-webdav-clear-queued-save-test");
+        persist_sync_error(
+            &mut old_settings,
+            &AppError::Config("old error".to_string()),
+            "manual",
+        );
+        let mut incoming = old_settings;
+        incoming.password.clear();
+        let guard = webdav_sync_mutex().lock().await;
+        let save = webdav_sync_save_settings(incoming, Some(false));
+        tokio::pin!(save);
+        assert!(
+            tokio::time::timeout(Duration::from_millis(40), save.as_mut())
+                .await
+                .is_err()
+        );
+
+        crate::settings::set_webdav_sync_settings(None).expect("clear settings");
+        drop(guard);
+        tokio::time::timeout(Duration::from_secs(1), save.as_mut())
+            .await
+            .expect("explicit save should finish after clear")
+            .expect("new configuration should be saved");
+        let saved = crate::settings::get_webdav_sync_settings().expect("explicitly saved config");
+        assert!(saved.password.is_empty(), "old password was forgotten");
+        assert!(
+            saved.status.last_error.is_none(),
+            "old status was forgotten"
+        );
     }
 
     #[test]

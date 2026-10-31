@@ -8,6 +8,12 @@ import {
 interface UseModelStateProps {
   settingsConfig: string;
   onConfigChange: (config: string) => void;
+  /**
+   * 现读当前配置。latestConfigRef 只在渲染期从 settingsConfig 快照赋值，可能
+   * 早于别处（如 JSON 编辑器）的写入。改模型时若基于它重建整份 JSON 会把那些
+   * 改动覆盖回去。
+   */
+  getSettingsConfig?: () => string;
 }
 
 export type ClaudeModelEnvField =
@@ -140,6 +146,7 @@ function parseAliasesFromConfig(settingsConfig: string): unknown {
 export function useModelState({
   settingsConfig,
   onConfigChange,
+  getSettingsConfig,
 }: UseModelStateProps) {
   const initial = useState(() => parseModelsFromConfig(settingsConfig))[0];
   const [claudeModel, setClaudeModel] = useState(initial.model);
@@ -222,9 +229,8 @@ export function useModelState({
       if (field === "CLAUDE_CODE_SUBAGENT_MODEL") setSubagentModel(value);
 
       try {
-        const currentConfig = latestConfigRef.current
-          ? JSON.parse(latestConfigRef.current)
-          : { env: {} };
+        const currentRaw = getSettingsConfig?.() ?? latestConfigRef.current;
+        const currentConfig = currentRaw ? JSON.parse(currentRaw) : { env: {} };
         if (!currentConfig.env) currentConfig.env = {};
         const env = currentConfig.env as Record<string, unknown>;
 
@@ -245,7 +251,7 @@ export function useModelState({
         console.error("Failed to update model config:", err);
       }
     },
-    [onConfigChange],
+    [getSettingsConfig, onConfigChange],
   );
 
   // 精确模型别名写回 settings config 顶层 modelAliases 字段（不是 env）。
@@ -256,9 +262,8 @@ export function useModelState({
       setModelAliases(entries);
 
       try {
-        const currentConfig = latestConfigRef.current
-          ? JSON.parse(latestConfigRef.current)
-          : {};
+        const currentRaw = getSettingsConfig?.() ?? latestConfigRef.current;
+        const currentConfig = currentRaw ? JSON.parse(currentRaw) : {};
         const serialized = serializeModelAliases(entries);
         if (serialized) {
           currentConfig.modelAliases = serialized;
@@ -273,7 +278,7 @@ export function useModelState({
         console.error("Failed to update model aliases:", err);
       }
     },
-    [onConfigChange],
+    [getSettingsConfig, onConfigChange],
   );
 
   return {

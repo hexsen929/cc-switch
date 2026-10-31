@@ -1083,6 +1083,20 @@ pub fn update_settings(mut new_settings: AppSettings) -> Result<(), AppError> {
     Ok(())
 }
 
+fn replace_general_settings(current: &mut AppSettings, mut incoming: AppSettings) {
+    // A clear/save can commit after the frontend snapshot was captured. Rebase
+    // the dedicated WebDAV SSOT at publication, while the settings write lock is
+    // held, including when the general save is rolling back another setting.
+    incoming.webdav_sync = current.webdav_sync.clone();
+    *current = incoming;
+}
+
+/// Publish ordinary UI settings without replaying a stale WebDAV configuration.
+/// Dedicated WebDAV commands and snapshot/import paths keep their own semantics.
+pub fn update_general_settings(new_settings: AppSettings) -> Result<(), AppError> {
+    mutate_settings(|current| replace_general_settings(current, new_settings))
+}
+
 fn mutate_settings<F>(mutator: F) -> Result<(), AppError>
 where
     F: FnOnce(&mut AppSettings),
@@ -1580,6 +1594,53 @@ pub fn update_s3_sync_status(status: WebDavSyncStatus) -> Result<(), AppError> {
 mod tests {
     use super::*;
     use crate::app_config::AppType;
+
+    #[test]
+    fn general_settings_commit_rebases_webdav_after_a_concurrent_clear_or_save() {
+        // Use an isolated lock and the exact publication helper: no real
+        // settings store, HOME override, filesystem or network is involved.
+        let previous = WebDavSyncSettings {
+            enabled: true,
+            base_url: "https://old.example.test/dav/".to_string(),
+            username: "old-user".to_string(),
+            password: "old-secret".to_string(),
+            ..WebDavSyncSettings::default()
+        };
+        let replacement = WebDavSyncSettings {
+            base_url: "https://new.example.test/dav/".to_string(),
+            password: "new-secret".to_string(),
+            ..previous.clone()
+        };
+        for latest in [None, Some(replacement)] {
+            let current = std::sync::Arc::new(std::sync::RwLock::new(AppSettings {
+                webdav_sync: Some(previous.clone()),
+                ..AppSettings::default()
+            }));
+            let mut stale_payload = current.read().unwrap().clone();
+            stale_payload.language = Some("ja".to_string());
+            let writer = current.clone();
+            let (ready_tx, ready_rx) = std::sync::mpsc::sync_channel(0);
+            let (commit_tx, commit_rx) = std::sync::mpsc::sync_channel(0);
+            let queued_save = std::thread::spawn(move || {
+                ready_tx.send(()).unwrap();
+                commit_rx.recv().unwrap();
+                replace_general_settings(&mut writer.write().unwrap(), stale_payload);
+            });
+
+            ready_rx.recv().unwrap();
+            // The dedicated command commits after the UI captured its payload,
+            // but before the queued general save reaches the publication lock.
+            current.write().unwrap().webdav_sync = latest.clone();
+            commit_tx.send(()).unwrap();
+            queued_save.join().unwrap();
+            let saved = current.read().unwrap();
+            assert_eq!(
+                serde_json::to_value(&saved.webdav_sync).unwrap(),
+                serde_json::to_value(&latest).unwrap()
+            );
+            assert_eq!(saved.language.as_deref(), Some("ja"));
+        }
+    }
 
     #[test]
     fn codex_stack_classic_tools_default_on_and_ignore_the_old_off_key() {

@@ -848,6 +848,29 @@ fn mcode_installer_update_command(install_root: &str) -> String {
     )
 }
 
+/// 重跑 Kimi Code 官方 installer 升级原生安装那一处。显式传 `KIMI_INSTALL_DIR`，
+/// 保证写回探测到的目录（installer 覆盖 `<dir>/bin/kimi`），而不是默认的 `~/.kimi-code`。
+#[cfg(not(target_os = "windows"))]
+fn kimi_installer_update_command(install_root: &str) -> String {
+    format!(
+        "KIMI_INSTALL_DIR={} {KIMI_INSTALL_UNIX}",
+        shell_single_quote(install_root)
+    )
+}
+
+#[cfg(target_os = "windows")]
+fn kimi_installer_update_command(install_root: &str) -> String {
+    // PowerShell 单引号字面量里 `'` 写作 `''`；整段经 EncodedCommand 传入，不经 cmd 解析。
+    let script = format!(
+        "$env:KIMI_INSTALL_DIR = '{}'; {KIMI_INSTALL_WINDOWS_SCRIPT}",
+        install_root.replace('\'', "''")
+    );
+    format!(
+        "powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -EncodedCommand {}",
+        powershell_encoded_command(&script)
+    )
+}
+
 /// Codex 官方独立安装器（`install.sh` / `install.ps1`）装出的一处安装。
 ///
 /// 布局（2026-09 实测 install.sh、读 install.ps1）：发布包在
@@ -1985,7 +2008,7 @@ fn build_provider_command_line(shell: &str, launch_command: &str, cwd: Option<&P
         .map(|dir| {
             format!(
                 "cd {} && {}",
-                shell_single_quote(&dir.to_string_lossy()),
+                user_shell_quote(shell, &dir.to_string_lossy()),
                 launch_command
             )
         })
@@ -2380,10 +2403,11 @@ fn tool_executable_candidates(tool: &str, dir: &Path) -> Vec<std::path::PathBuf>
     #[cfg(target_os = "windows")]
     {
         let extensionless = dir.join(tool);
-        let mut candidates = vec![
-            dir.join(format!("{tool}.cmd")),
-            dir.join(format!("{tool}.exe")),
-        ];
+        let exe = dir.join(format!("{tool}.exe"));
+        let mut candidates = vec![dir.join(format!("{tool}.cmd"))];
+        if let Some(exe) = windows_preferred_tool_executable(tool, &exe) {
+            candidates.push(exe);
+        }
         if windows_runnable_sibling_for_extensionless_tool(&extensionless).is_none() {
             candidates.push(extensionless);
         }
@@ -2868,6 +2892,52 @@ fn windows_runnable_sibling_for_extensionless_tool(path: &Path) -> Option<std::p
         .find(|candidate| candidate.is_file())
 }
 
+/// OpenCode Desktop has shipped both root-level and Electron `resources/` CLI sidecars.
+/// Some Electron releases omitted the sidecar; `resources/app.asar` still identifies the
+/// Desktop bundle, so skip its GUI instead of probing `opencode.exe` with `--version`.
+/// A standalone OpenCode CLI install remains valid when no Desktop marker is present.
+#[cfg(target_os = "windows")]
+fn windows_preferred_tool_executable(tool: &str, path: &Path) -> Option<std::path::PathBuf> {
+    if tool == "opencode"
+        && path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .is_some_and(|name| name.eq_ignore_ascii_case("opencode.exe"))
+    {
+        if let Some(parent) = path.parent() {
+            let sidecar = parent.join("opencode-cli.exe");
+            if sidecar.is_file() {
+                return Some(sidecar);
+            }
+
+            let resources = parent.join("resources");
+            let bundled_sidecar = resources.join("opencode-cli.exe");
+            if bundled_sidecar.is_file() {
+                return Some(bundled_sidecar);
+            }
+
+            if resources.join("app.asar").is_file() {
+                return None;
+            }
+        }
+    }
+
+    Some(
+        windows_runnable_sibling_for_extensionless_tool(path).unwrap_or_else(|| path.to_path_buf()),
+    )
+}
+
+#[cfg(target_os = "windows")]
+fn windows_preferred_path_default(tool: &str, raw: &str) -> Option<std::path::PathBuf> {
+    raw.lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .filter(|line| {
+            !is_windows_app_execution_alias_dir(Path::new(line).parent().unwrap_or(Path::new("")))
+        })
+        .find_map(|line| windows_preferred_tool_executable(tool, Path::new(line)))
+}
+
 #[cfg(target_os = "windows")]
 fn build_windows_tool_command(
     tool_path: &Path,
@@ -3317,23 +3387,12 @@ fn resolve_path_default(
         return Ok(None);
     }
     let raw = decode_command_output(&out.stdout);
-    // `where` lists every match on PATH in order; the first is what the user
-    // actually runs. Skip App Execution Aliases (reparse points under
-    // `Microsoft\WindowsApps`) — they launch the Store / a protocol handler,
-    // are not CLIs we can `--version`-probe, and must not be treated as the
-    // PATH default. Take the first remaining real entry.
-    let resolved = raw.lines().map(str::trim).find(|line| {
-        !line.is_empty()
-            && !is_windows_app_execution_alias_dir(
-                Path::new(line).parent().unwrap_or(Path::new("")),
-            )
-    });
-    let Some(first) = resolved else {
+    // `where` lists every match on PATH in order. Skip entries that cannot be
+    // safely probed (App Execution Aliases and Desktop GUI executables) and keep
+    // looking so a later real CLI can still be the PATH default.
+    let Some(preferred) = windows_preferred_path_default(tool, &raw) else {
         return Ok(None);
     };
-    let path = Path::new(first);
-    let preferred =
-        windows_runnable_sibling_for_extensionless_tool(path).unwrap_or_else(|| path.to_path_buf());
     Ok(std::fs::canonicalize(preferred).ok())
 }
 
@@ -3624,6 +3683,68 @@ fn mcode_script_install_root(
     [bin_path, real_target].iter().find_map(|path| {
         let root = mcode_install_root_candidate(path, layout);
         (last_path_segment_lower(&root) == ".minimax-code").then_some(root)
+    })
+}
+
+/// Kimi Code 的 `upgrade` 子命令 0.43.0 起才有 `-y, --yes`。更早的版本把 `--yes` 当成主命令
+/// 的全局选项吞掉，非 TTY（静默 lifecycle 正是如此）下只打印手动升级提示就 exit 0，
+/// `kimi upgrade --yes || <fallback>` 的兜底永不触发，用户看到「版本没有变化」（#9032）。
+const KIMI_UPGRADE_YES_MIN_VERSION: &str = "0.43.0";
+
+fn kimi_upgrade_ignores_yes(version: Option<&str>) -> bool {
+    version.and_then(|v| compare_semver(v, KIMI_UPGRADE_YES_MIN_VERSION))
+        == Some(std::cmp::Ordering::Less)
+}
+
+/// Kimi Code 官方 installer 的布局：两平台都是 `<KIMI_INSTALL_DIR>/bin/kimi[.exe]`
+/// 原生二进制。npm 版的真身在 `node_modules` 下（Windows 入口是 `kimi.cmd`），不算。
+/// 先看真身：POSIX 用户自建的软链（如 `~/.local/bin/kimi`）指回安装目录时，installer
+/// 必须写回真身所在的那处；Windows 的真身是 canonicalize 出的 `\\?\` verbatim 路径，
+/// 交给 installer 前还原。纯字符串、不碰 fs。
+fn kimi_native_install_root(bin_path: &str, real_target: &str) -> Option<String> {
+    let normalized_real = real_target.replace('\\', "/").to_ascii_lowercase();
+    if normalized_real.contains("/node_modules/") {
+        return None;
+    }
+    #[cfg(not(target_os = "windows"))]
+    if is_brew_managed_path(real_target) {
+        return None;
+    }
+    let real = match real_target.strip_prefix(r"\\?\UNC\") {
+        Some(unc) => format!(r"\\{unc}"),
+        None => real_target
+            .strip_prefix(r"\\?\")
+            .unwrap_or(real_target)
+            .to_string(),
+    };
+    let root = [real.as_str(), bin_path].into_iter().find_map(|path| {
+        if !matches!(last_path_segment_lower(path).as_str(), "kimi" | "kimi.exe") {
+            return None;
+        }
+        let bin_dir = parent_dir(path);
+        if last_path_segment_lower(&bin_dir) != "bin" {
+            return None;
+        }
+        let root = parent_dir(&bin_dir);
+        (!root.is_empty()).then_some(root)
+    });
+    root
+}
+
+/// 旧版 Kimi Code（见 `KIMI_UPGRADE_YES_MIN_VERSION`）的升级命令：跳过会假成功的
+/// `kimi upgrade --yes`。包管理器认得的安装（npm / Volta / bun / Homebrew）走锚定的包管理器；
+/// 先查它，因为 Volta 的 `bin/kimi[.exe]` shim 不解析到 `node_modules`，会被误认成原生
+/// 布局、让 installer 覆盖 shim。其余原生安装重跑官方 installer。都认不出时返回 None，
+/// 交回普通锚定。
+fn kimi_legacy_update_command(bin_path: &str, real_target: &str) -> Option<String> {
+    #[cfg(not(target_os = "windows"))]
+    let package_command =
+        package_manager_anchored_command_from_paths("kimi", bin_path, real_target);
+    #[cfg(target_os = "windows")]
+    let package_command = package_manager_anchored_command_from_paths("kimi", bin_path);
+    package_command.or_else(|| {
+        kimi_native_install_root(bin_path, real_target)
+            .map(|root| kimi_installer_update_command(&root))
     })
 }
 
@@ -4235,8 +4356,8 @@ fn locate_default_tool(
             if path_default.as_ref() == Some(&real) {
                 return Ok(candidate);
             }
-            if seen.insert(real) {
-                candidates.push(candidate);
+            if seen.insert(real.clone()) {
+                candidates.push((candidate, real));
             }
         }
     }
@@ -4245,13 +4366,62 @@ fn locate_default_tool(
         return Ok(path);
     }
 
+    #[cfg(not(target_os = "windows"))]
+    if candidates.len() > 1 {
+        if let Some(target) = candidates
+            .iter()
+            .find_map(|(candidate, real)| mise_shim_target(tool, candidate, real, deadline))
+        {
+            return Ok(target);
+        }
+    }
+
     match candidates.as_slice() {
-        [only] => Ok(only.clone()),
+        [(only, _)] => Ok(only.clone()),
         [] => Err(format!("{tool} is not installed")),
         _ => Err(format!(
             "{tool} is installed but its default installation is ambiguous"
         )),
     }
+}
+
+/// mise 的 shim 是指向 mise 本体的软链，canonicalize 后和它调度的真身不是同一个文件，
+/// 按真身去重时 shim 与 `installs/node/<版本>/bin/<tool>` 会被算成两处安装。登录 shell
+/// 问不出默认入口时，让 mise 自己说 shim 现在指向哪个文件（按用户的 mise 配置选版本，
+/// 与终端里跑这个 shim 的结果一致），直接用那个真身。不是 mise shim 或解析失败返回 None。
+#[cfg(not(target_os = "windows"))]
+fn mise_shim_target(
+    tool: &str,
+    candidate: &Path,
+    real: &Path,
+    deadline: Option<CommandDeadline>,
+) -> Option<std::path::PathBuf> {
+    use std::ffi::OsStr;
+    use std::process::{Command, Stdio};
+
+    let is_mise_shim = candidate.parent().and_then(Path::file_name) == Some(OsStr::new("shims"))
+        && real.file_name() == Some(OsStr::new("mise"));
+    if !is_mise_shim {
+        return None;
+    }
+
+    let mut cmd = Command::new(real);
+    cmd.args(["which", tool])
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    // GUI 进程的工作目录是 `/`；在 home 下解析，与新开终端看到的 mise 配置一致。
+    if let Some(home) = dirs::home_dir() {
+        cmd.current_dir(home);
+    }
+    isolate_child_process_group(&mut cmd);
+    let out = wait_child_output(cmd.spawn().ok()?, deadline).ok()?;
+    if !out.status.success() {
+        return None;
+    }
+    let raw = decode_command_output(&out.stdout);
+    let target = std::path::PathBuf::from(first_abs_path_line(&raw)?);
+    target.is_file().then_some(target)
 }
 
 #[derive(Clone, Copy)]
@@ -4760,6 +4930,12 @@ fn installs_anchored_command(tool: &str, installs: &[ToolInstallation]) -> Optio
             return Some(mcode_installer_update_command(&root));
         }
     }
+    // 版本号来自 `--version` 探测，所以放在这里而不是纯路径的 `anchored_command_from_paths`。
+    if tool == "kimi" && kimi_upgrade_ignores_yes(inst.version.as_deref()) {
+        if let Some(cmd) = kimi_legacy_update_command(&inst.path, &real) {
+            return Some(cmd);
+        }
+    }
     anchored_command_from_paths(tool, &inst.path, &real)
 }
 
@@ -5106,9 +5282,12 @@ pub async fn open_provider_terminal(
     #[allow(non_snake_case)] providerId: String,
     cwd: Option<String>,
     #[allow(non_snake_case)] skipPermissions: Option<bool>,
+    #[allow(non_snake_case)] extraArgs: Option<String>,
 ) -> Result<bool, String> {
     let app_type = AppType::from_str(&app).map_err(|e| e.to_string())?;
     let launch_cwd = resolve_launch_cwd(cwd)?;
+    // 先拆参数：填错了直接报错，不必等到切完 agy 登录、写完临时文件。
+    let extra_args = split_launch_args(extraArgs.as_deref().unwrap_or_default())?;
 
     // 获取提供商配置
     let providers = ProviderService::list(state.inner(), app_type.clone())
@@ -5152,6 +5331,12 @@ pub async fn open_provider_terminal(
     };
     if skipPermissions == Some(true) {
         launch.skip_permissions();
+    }
+    if let Err(e) = launch.append_user_args(extra_args) {
+        for file in &launch.cleanup {
+            let _ = std::fs::remove_file(file);
+        }
+        return Err(e);
     }
 
     launch_provider_terminal(&launch, launch_cwd.as_deref())
@@ -5273,6 +5458,90 @@ impl ProviderLaunch {
         self.batch_command.push(' ');
         self.batch_command.push_str(flag);
     }
+
+    /// 用户在「打开终端」里填的附加参数，接在 CC Switch 生成的参数后面，同样只给这一次。
+    /// Windows 上每个参数经 .bat 变量传、用引号包住，cmd 的 `&`、`|` 之类不会接出别的命令。
+    fn append_user_args(&mut self, args: Vec<String>) -> Result<(), String> {
+        if args.len() > USER_ARG_BATCH_VARS.len() {
+            return Err(format!("附加参数最多 {} 个", USER_ARG_BATCH_VARS.len()));
+        }
+        // Codex 的启动行带 `call`：`%` 会再展开一遍、引号里的 `^` 会加倍，和 `-c` 值同一条限制。
+        if cfg!(target_os = "windows") && args.iter().any(|arg| arg.contains(['"', '%', '^'])) {
+            return Err("附加参数里有 Windows 终端传不过去的字符（\" % ^）".to_string());
+        }
+        for (arg, var) in args.into_iter().zip(USER_ARG_BATCH_VARS) {
+            // 程序按 Windows 的规则拆命令行：收尾引号前的反斜杠要成对，否则 `C:\work\` 会把
+            // 引号当成内容吞掉。
+            let trailing = arg.len() - arg.trim_end_matches('\\').len();
+            let quoted_value = format!("{arg}{}", "\\".repeat(trailing));
+            self.batch_command.push_str(&format!(" \"%{var}%\""));
+            self.batch_vars.push((var, quoted_value));
+            self.args.push(arg);
+        }
+        Ok(())
+    }
+}
+
+/// 附加参数在 .bat 里经这些变量传，也是附加参数的个数上限（各平台一样）。
+const USER_ARG_BATCH_VARS: [&str; 16] = [
+    "CC_SWITCH_ARG0",
+    "CC_SWITCH_ARG1",
+    "CC_SWITCH_ARG2",
+    "CC_SWITCH_ARG3",
+    "CC_SWITCH_ARG4",
+    "CC_SWITCH_ARG5",
+    "CC_SWITCH_ARG6",
+    "CC_SWITCH_ARG7",
+    "CC_SWITCH_ARG8",
+    "CC_SWITCH_ARG9",
+    "CC_SWITCH_ARG10",
+    "CC_SWITCH_ARG11",
+    "CC_SWITCH_ARG12",
+    "CC_SWITCH_ARG13",
+    "CC_SWITCH_ARG14",
+    "CC_SWITCH_ARG15",
+];
+
+/// 把附加参数按空白拆开：单引号或双引号括起来的部分算同一个参数（引号本身去掉），没有
+/// 反斜杠转义（Windows 路径里全是反斜杠）。只拆成参数，不经 shell，`;`、`&`、`|` 原样交给 CLI。
+fn split_launch_args(input: &str) -> Result<Vec<String>, String> {
+    let mut args = Vec::new();
+    let mut current = String::new();
+    let mut in_word = false;
+    let mut quote: Option<char> = None;
+    for c in input.chars() {
+        if c.is_control() && !(quote.is_none() && c.is_whitespace()) {
+            return Err("附加参数里不能有换行等控制字符".to_string());
+        }
+        match quote {
+            Some(q) if c == q => quote = None,
+            Some(_) => current.push(c),
+            None if c == '"' || c == '\'' => {
+                quote = Some(c);
+                in_word = true;
+            }
+            None if c.is_whitespace() => {
+                if in_word {
+                    args.push(std::mem::take(&mut current));
+                    in_word = false;
+                }
+            }
+            None => {
+                current.push(c);
+                in_word = true;
+            }
+        }
+    }
+    if quote.is_some() {
+        return Err("附加参数里的引号没有配对".to_string());
+    }
+    if in_word {
+        args.push(current);
+    }
+    if args.len() > USER_ARG_BATCH_VARS.len() {
+        return Err(format!("附加参数最多 {} 个", USER_ARG_BATCH_VARS.len()));
+    }
+    Ok(args)
 }
 
 /// Codex 的 `-c` 值在 .bat 里经这些变量传（值里可能有 `&` 之类 cmd 的特殊字符）。
@@ -5688,7 +5957,15 @@ fn shell_word(value: &str) -> String {
 /// 交给用户 shell 执行的启动命令。有环境变量时经 `env` 设置或清除，值从启动脚本读进来的
 /// `CC_SWITCH_LAUNCH_ENV_<n>` 取，不出现在命令行里。
 #[cfg_attr(windows, allow(dead_code))]
+#[cfg(test)]
 fn unix_launch_command(launch: &ProviderLaunch) -> String {
+    unix_launch_command_in(launch, "/bin/sh")
+}
+
+/// 同上，参数按用户 shell 的规则加引号：这条命令由用户 shell 解析（见
+/// `build_provider_command_line`），附加参数又是用户随手填的文本。
+#[cfg_attr(windows, allow(dead_code))]
+fn unix_launch_command_in(launch: &ProviderLaunch, shell: &str) -> String {
     let mut words = Vec::new();
     if !launch.env.is_empty() {
         words.push("env".to_string());
@@ -5706,7 +5983,7 @@ fn unix_launch_command(launch: &ProviderLaunch) -> String {
         }
     }
     words.push(launch.program.to_string());
-    words.extend(launch.args.iter().map(|arg| shell_word(arg)));
+    words.extend(launch.args.iter().map(|arg| user_shell_word(shell, arg)));
     words.join(" ")
 }
 
@@ -5762,7 +6039,7 @@ fn build_unix_launcher_script(
     }
     script.push_str(&build_provider_command_line(
         shell,
-        &unix_launch_command(launch),
+        &unix_launch_command_in(launch, shell),
         cwd,
     ));
     script.push('\n');
@@ -6404,6 +6681,34 @@ fn shell_single_quote(value: &str) -> String {
     format!("'{}'", value.replace('\'', "'\"'\"'"))
 }
 
+/// fish 的单引号里 `\'` 和 `\\` 仍是转义，POSIX 的 `'"'"'` 写法会让引号错位、接出别的命令。
+#[cfg_attr(windows, allow(dead_code))]
+fn is_fish_shell(shell: &str) -> bool {
+    shell.rsplit('/').next().unwrap_or(shell) == "fish"
+}
+
+/// 交给用户 shell（而不是启动脚本的 sh）解析的一段文本加引号。
+#[cfg_attr(windows, allow(dead_code))]
+fn user_shell_quote(shell: &str, value: &str) -> String {
+    if is_fish_shell(shell) {
+        format!("'{}'", value.replace('\\', "\\\\").replace('\'', "\\'"))
+    } else {
+        shell_single_quote(value)
+    }
+}
+
+/// `shell_word` 的用户 shell 版本：只含安全字符时原样写。
+#[cfg_attr(windows, allow(dead_code))]
+fn user_shell_word(shell: &str, value: &str) -> String {
+    let word = shell_word(value);
+    // zsh 把开头的 `=名字` 展开成命令路径（`=sh` → `/bin/sh`），找不到还会直接报错。
+    if word == value && !value.starts_with('=') {
+        word
+    } else {
+        user_shell_quote(shell, value)
+    }
+}
+
 #[cfg_attr(not(target_os = "windows"), allow(dead_code))]
 fn is_windows_unc_path(path: &str) -> bool {
     path.starts_with(r"\\")
@@ -6421,12 +6726,20 @@ fn build_windows_launch_env(launch: &ProviderLaunch) -> (String, Vec<(String, St
         .env
         .iter()
         .map(|(name, value)| (*name, value.clone()))
-        .chain(
-            launch
-                .batch_vars
-                .iter()
-                .map(|(name, value)| (*name, Some(value.clone()))),
-        );
+        .chain(launch.batch_vars.iter().map(|(name, value)| {
+            // The batch fallback doubles trailing backslashes before a
+            // closing quote. A PowerShell argument array needs the raw
+            // value, not that cmd-specific spelling.
+            let raw = windows_user_arg_start(launch)
+                .and_then(|start| {
+                    USER_ARG_BATCH_VARS
+                        .iter()
+                        .position(|candidate| candidate == name)
+                        .and_then(|offset| launch.args.get(start + offset))
+                })
+                .unwrap_or(value);
+            (*name, Some(raw.clone()))
+        }));
     for (index, (name, value)) in entries.enumerate() {
         match value {
             None => lines.push_str(&format!("set \"{name}=\"\r\n")),
@@ -6439,7 +6752,21 @@ fn build_windows_launch_env(launch: &ProviderLaunch) -> (String, Vec<(String, St
 #[cfg_attr(not(target_os = "windows"), allow(dead_code))]
 fn needs_windows_env_launcher(launch: &ProviderLaunch) -> bool {
     matches!(launch.program, "agy" | "codex")
-        || (launch.program == "claude" && !launch.env.is_empty())
+        || (launch.program == "claude" && (!launch.env.is_empty() || !launch.batch_vars.is_empty()))
+}
+
+/// User arguments are appended as a suffix and have their own carriers. They
+/// must be recognized before interpreting generated Codex `-c` / AGY prefixes.
+#[cfg_attr(not(target_os = "windows"), allow(dead_code))]
+fn windows_user_arg_start(launch: &ProviderLaunch) -> Option<usize> {
+    let count = launch
+        .batch_vars
+        .iter()
+        .filter(|(name, _)| USER_ARG_BATCH_VARS.contains(name))
+        .count();
+    (count > 0)
+        .then(|| launch.args.len().checked_sub(count))
+        .flatten()
 }
 
 #[cfg_attr(not(target_os = "windows"), allow(dead_code))]
@@ -6466,6 +6793,18 @@ fn windows_env_launch_script(launch: &ProviderLaunch) -> String {
     }
     script.push_str("$ccsArgs = @()\n");
     for (argument_index, argument) in launch.args.iter().enumerate() {
+        let user_carrier = windows_user_arg_start(launch).and_then(|start| {
+            let offset = argument_index.checked_sub(start)?;
+            let name = USER_ARG_BATCH_VARS.get(offset)?;
+            launch.batch_vars.iter().position(|(key, _)| key == name)
+        });
+        if let Some(index) = user_carrier {
+            script.push_str(&format!(
+                "$ccsArgs += ({})\n",
+                carrier(launch.env.len() + index)
+            ));
+            continue;
+        }
         // Codex overrides are carried too: they may contain Unicode, quotes or
         // provider headers and must not enter batch syntax or encoded source.
         if launch.program == "codex"
@@ -7548,6 +7887,171 @@ mod tests {
     }
 
     #[test]
+    fn split_launch_args_groups_quoted_values_without_a_shell() {
+        assert_eq!(split_launch_args("  ").unwrap(), Vec::<String>::new());
+        assert_eq!(
+            split_launch_args(
+                "--debug --append-system-prompt \"be brief; ok\" --mcp-config 'C:\\a b\\mcp.json'\n-x=\"\""
+            )
+            .unwrap(),
+            vec![
+                "--debug",
+                "--append-system-prompt",
+                "be brief; ok",
+                "--mcp-config",
+                "C:\\a b\\mcp.json",
+                "-x=",
+            ]
+        );
+        // 引号可以接在词中间，引号里也能放另一种引号
+        assert_eq!(
+            split_launch_args("--name=\"it's\" ''").unwrap(),
+            vec!["--name=it's", ""]
+        );
+        assert!(split_launch_args("--append-system-prompt \"oops").is_err());
+        assert!(split_launch_args("\"line\nbreak\"").is_err());
+        let too_many = vec!["-v"; USER_ARG_BATCH_VARS.len() + 1].join(" ");
+        assert!(split_launch_args(&too_many).is_err());
+    }
+
+    #[test]
+    fn fish_gets_its_own_quoting_for_user_text() {
+        let provider = claude_runtime_test_provider(None, None);
+        let mut launch = claude_account_terminal_launch(None, &provider).unwrap();
+        launch.env.clear();
+        launch
+            .append_user_args(vec!["x\\'; printf INJECTED; #".into(), "C:\\work\\".into()])
+            .unwrap();
+        assert_eq!(
+            unix_launch_command_in(&launch, "/opt/homebrew/bin/fish"),
+            "claude 'x\\\\\\'; printf INJECTED; #' 'C:\\\\work\\\\'"
+        );
+        assert_eq!(
+            unix_launch_command_in(&launch, "/bin/zsh"),
+            "claude 'x\\'\"'\"'; printf INJECTED; #' 'C:\\work\\'"
+        );
+        // .bat 里收尾的反斜杠成对，Unix 参数保持原样
+        assert_eq!(launch.batch_vars[1].1, "C:\\work\\\\");
+        assert_eq!(launch.args[1], "C:\\work\\");
+        assert_eq!(
+            build_provider_command_line("/usr/bin/fish", "claude", Some(Path::new("/tmp/a\\'b"))),
+            "'/usr/bin/fish' -ic 'cd '\"'\"'/tmp/a\\\\\\'\"'\"'b'\"'\"' && claude'"
+        );
+        let provider = claude_runtime_test_provider(None, None);
+        let mut launch = claude_account_terminal_launch(None, &provider).unwrap();
+        launch.env.clear();
+        launch.append_user_args(vec!["=sh".into()]).unwrap();
+        assert_eq!(unix_launch_command_in(&launch, "/bin/zsh"), "claude '=sh'");
+    }
+
+    #[test]
+    fn user_args_follow_the_generated_args_and_pass_through_batch_vars() {
+        let provider = claude_runtime_test_provider(None, None);
+        let mut launch = claude_account_terminal_launch(None, &provider).unwrap();
+        launch.env.clear();
+        launch.skip_permissions();
+        launch
+            .append_user_args(vec!["--append-system-prompt".into(), "a & b | c".into()])
+            .unwrap();
+        assert_eq!(
+            unix_launch_command(&launch),
+            "claude --dangerously-skip-permissions --append-system-prompt 'a & b | c'"
+        );
+        assert_eq!(
+            launch.batch_command,
+            "claude --dangerously-skip-permissions \"%CC_SWITCH_ARG0%\" \"%CC_SWITCH_ARG1%\""
+        );
+        assert_eq!(
+            launch.batch_vars,
+            vec![
+                ("CC_SWITCH_ARG0", "--append-system-prompt".to_string()),
+                ("CC_SWITCH_ARG1", "a & b | c".to_string()),
+            ]
+        );
+    }
+
+    #[test]
+    fn windows_relay_claude_user_args_use_raw_private_carriers() {
+        let mut launch = ProviderLaunch {
+            title: "Relay",
+            detail: None,
+            program: "claude",
+            args: vec!["--settings".into(), r"C:\Temp\settings.json".into()],
+            batch_command: "claude --settings settings.json".into(),
+            env: Vec::new(),
+            batch_vars: Vec::new(),
+            cleanup: Vec::new(),
+        };
+        assert!(!needs_windows_env_launcher(&launch));
+        let directory = "C:\\中文 & work\\";
+        launch
+            .append_user_args(vec!["--add-dir".into(), directory.into()])
+            .unwrap();
+        assert!(needs_windows_env_launcher(&launch));
+        let (lines, carried) = build_windows_launch_env(&launch);
+        assert!(lines.is_empty());
+        assert_eq!(
+            carried,
+            vec![
+                ("CC_SWITCH_INTERNAL_ENV_0".into(), "--add-dir".into()),
+                ("CC_SWITCH_INTERNAL_ENV_1".into(), directory.into()),
+            ]
+        );
+        // The batch fallback spelling is escaped, but the private argv carrier
+        // keeps the exact original trailing backslash.
+        assert_eq!(launch.batch_vars[1].1, format!("{directory}\\"));
+        let script = windows_env_launch_script(&launch);
+        assert!(script.contains("$ccsArgs += ([Environment]::GetEnvironmentVariable('CC_SWITCH_INTERNAL_ENV_0', 'Process'))"));
+        assert!(script.contains("$ccsArgs += ([Environment]::GetEnvironmentVariable('CC_SWITCH_INTERNAL_ENV_1', 'Process'))"));
+        assert!(!script.contains(directory));
+        assert!(script.contains("& 'claude' @ccsArgs"));
+    }
+
+    #[test]
+    fn windows_codex_user_config_args_do_not_reuse_generated_override_carriers() {
+        let mut launch = codex_launch(
+            "Relay",
+            vec!["model='generated'".into()],
+            vec![("CC_SWITCH_CODEX_API_KEY", Some("key".into()))],
+            Vec::new(),
+        )
+        .unwrap();
+        launch.skip_permissions();
+        launch
+            .append_user_args(vec!["-c".into(), "model='user-choice'".into()])
+            .unwrap();
+        let (_, carried) = build_windows_launch_env(&launch);
+        assert!(carried.contains(&(
+            "CC_SWITCH_INTERNAL_ENV_3".into(),
+            "model='user-choice'".into()
+        )));
+        let script = windows_env_launch_script(&launch);
+        assert_eq!(script.matches("$ccsArgs += '-c'").count(), 1);
+        for index in [1, 2, 3] {
+            assert!(script.contains(&format!(
+                "$ccsArgs += ([Environment]::GetEnvironmentVariable('CC_SWITCH_INTERNAL_ENV_{index}', 'Process'))"
+            )));
+        }
+        assert!(!script.contains("user-choice"));
+    }
+
+    #[test]
+    fn windows_agy_user_model_args_are_not_replaced_with_generated_values() {
+        let mut launch = agy_key_launch();
+        launch
+            .append_user_args(vec!["--model=user-model".into()])
+            .unwrap();
+        let script = windows_env_launch_script(&launch);
+        assert!(script.contains("$ccsArgs += ([Environment]::GetEnvironmentVariable('CC_SWITCH_INTERNAL_ENV_3', 'Process'))"));
+        assert!(!script.contains("user-model"));
+        let mut excessive = agy_key_launch();
+        assert!(excessive
+            .append_user_args(vec!["x".into(); USER_ARG_BATCH_VARS.len() + 1])
+            .is_err());
+        assert_eq!(excessive.args, agy_key_launch().args);
+    }
+
+    #[test]
     fn skip_permissions_appends_the_flag_on_every_platform() {
         let provider = claude_runtime_test_provider(None, None);
         let mut launch = claude_account_terminal_launch(None, &provider).unwrap();
@@ -8493,6 +8997,101 @@ mod tests {
         .unwrap();
         assert_eq!(update, format!("kimi upgrade --yes || {posix}"));
         assert!(!update.contains("npm"));
+    }
+
+    #[test]
+    fn kimi_native_install_root_follows_the_installer_layout() {
+        assert_eq!(
+            kimi_native_install_root(
+                "/home/me/.kimi-code/bin/kimi",
+                "/home/me/.kimi-code/bin/kimi"
+            )
+            .as_deref(),
+            Some("/home/me/.kimi-code")
+        );
+        // 软链指回安装目录时写回真身那处。
+        assert_eq!(
+            kimi_native_install_root("/home/me/.local/bin/kimi", "/opt/kimi/bin/kimi").as_deref(),
+            Some("/opt/kimi")
+        );
+        assert_eq!(
+            kimi_native_install_root(
+                r"C:\Users\sc\.kimi-code\bin\kimi.exe",
+                r"\\?\C:\Users\sc\.kimi-code\bin\kimi.exe"
+            )
+            .as_deref(),
+            Some(r"C:\Users\sc\.kimi-code")
+        );
+        // npm 版不归 installer 管。
+        assert_eq!(
+            kimi_native_install_root(
+                "/home/me/.nvm/versions/node/v22.19.0/bin/kimi",
+                "/home/me/.nvm/versions/node/v22.19.0/lib/node_modules/@moonshot-ai/kimi-code/dist/main.mjs"
+            ),
+            None
+        );
+        assert_eq!(
+            kimi_native_install_root(
+                r"C:\Users\sc\AppData\Roaming\npm\kimi.cmd",
+                r"\\?\C:\Users\sc\AppData\Roaming\npm\kimi.cmd"
+            ),
+            None
+        );
+    }
+
+    #[test]
+    fn legacy_kimi_native_update_reruns_the_installer() {
+        let install = |path: &str, version: &str| ToolInstallation {
+            path: path.to_string(),
+            version: Some(version.to_string()),
+            runnable: true,
+            error: None,
+            exited_with_error: false,
+            source: infer_install_source(Path::new(path)).to_string(),
+            is_path_default: true,
+            real: PathBuf::from(path),
+        };
+        let (path, root) = if cfg!(target_os = "windows") {
+            (
+                r"C:\Users\sc\.kimi-code\bin\kimi.exe",
+                r"C:\Users\sc\.kimi-code",
+            )
+        } else {
+            ("/home/me/.kimi-code/bin/kimi", "/home/me/.kimi-code")
+        };
+
+        // 0.43.0 之前 `upgrade --yes` 在非 TTY 下只打印提示就 exit 0（#9032）。
+        assert_eq!(
+            installs_anchored_command("kimi", &[install(path, "0.23.1")]),
+            Some(kimi_installer_update_command(root))
+        );
+        // 新版照旧走 CLI 自升级。
+        let current = installs_anchored_command("kimi", &[install(path, "2.4.0")]).unwrap();
+        assert!(current.contains("upgrade --yes"), "{current}");
+        assert_eq!(
+            installs_anchored_command("kimi", &[install(path, "0.43.0")]),
+            Some(current)
+        );
+        // Volta 的 shim 也是 `bin/kimi`，必须交给 Volta，不能让 installer 覆盖。
+        #[cfg(not(target_os = "windows"))]
+        {
+            let volta =
+                installs_anchored_command("kimi", &[install("/home/me/.volta/bin/kimi", "0.23.1")])
+                    .unwrap();
+            assert!(
+                volta.ends_with("volta install @moonshot-ai/kimi-code"),
+                "{volta}"
+            );
+        }
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    #[test]
+    fn kimi_installer_update_command_targets_the_detected_dir() {
+        assert_eq!(
+            kimi_installer_update_command("/home/me/my kimi"),
+            format!("KIMI_INSTALL_DIR='/home/me/my kimi' {KIMI_INSTALL_UNIX}")
+        );
     }
 
     #[cfg(target_os = "windows")]
@@ -11675,6 +12274,52 @@ mod tests {
 
     #[cfg(not(target_os = "windows"))]
     #[test]
+    fn mise_shim_target_resolves_shim_through_mise_which() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let temp = tempfile::tempdir().expect("temp dir should be created");
+        let root = temp.path();
+        let node_bin = root.join("installs/node/22.12.0/bin");
+        std::fs::create_dir_all(&node_bin).expect("node bin should be created");
+        let target = node_bin.join("claude");
+        std::fs::write(&target, "").expect("target should be written");
+
+        let mise_dir = root.join("bin");
+        std::fs::create_dir_all(&mise_dir).expect("mise dir should be created");
+        let mise = mise_dir.join("mise");
+        std::fs::write(
+            &mise,
+            format!(
+                "#!/bin/sh\n[ \"$1\" = which ] && [ \"$2\" = claude ] && echo '{}'\n",
+                target.display()
+            ),
+        )
+        .expect("fake mise should be written");
+        std::fs::set_permissions(&mise, std::fs::Permissions::from_mode(0o755))
+            .expect("fake mise should be executable");
+
+        let shims = root.join("shims");
+        std::fs::create_dir_all(&shims).expect("shims dir should be created");
+        let shim = shims.join("claude");
+        std::os::unix::fs::symlink(&mise, &shim).expect("shim symlink should be created");
+        let shim_real = std::fs::canonicalize(&shim).expect("shim should canonicalize");
+
+        assert_eq!(
+            mise_shim_target("claude", &shim, &shim_real, None),
+            Some(target.clone())
+        );
+        // 不是 mise shim 的候选不去问 mise。
+        let target_real = std::fs::canonicalize(&target).expect("target should canonicalize");
+        assert_eq!(
+            mise_shim_target("claude", &target, &target_real, None),
+            None
+        );
+        // mise 说不出路径（工具没装在当前版本里）时不猜。
+        assert_eq!(mise_shim_target("codex", &shim, &shim_real, None), None);
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    #[test]
     fn tool_executable_candidates_non_windows_uses_plain_binary_name() {
         let dir = PathBuf::from("/usr/local/bin");
         let candidates = tool_executable_candidates("opencode", &dir);
@@ -11793,6 +12438,102 @@ mod tests {
                 PathBuf::from("C:\\tools\\opencode"),
             ]
         );
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn tool_executable_candidates_windows_prefers_opencode_desktop_cli_sidecar() {
+        let dir = tempfile::tempdir().expect("temp dir should be created");
+        let gui = dir.path().join("opencode.exe");
+        let sidecar = dir.path().join("opencode-cli.exe");
+        std::fs::write(&gui, "").expect("desktop executable should be created");
+        std::fs::write(&sidecar, "").expect("CLI sidecar should be created");
+
+        let candidates = tool_executable_candidates("opencode", dir.path());
+
+        assert_eq!(
+            candidates,
+            vec![dir.path().join("opencode.cmd"), sidecar.clone()]
+        );
+        assert!(!candidates.contains(&gui));
+        assert_eq!(
+            windows_preferred_tool_executable("opencode", &gui),
+            Some(sidecar)
+        );
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn tool_executable_candidates_windows_prefers_opencode_resources_cli_sidecar() {
+        let dir = tempfile::tempdir().expect("temp dir should be created");
+        let gui = dir.path().join("opencode.exe");
+        let resources = dir.path().join("resources");
+        let sidecar = resources.join("opencode-cli.exe");
+        std::fs::create_dir(&resources).expect("resources dir should be created");
+        std::fs::write(&gui, "").expect("desktop executable should be created");
+        std::fs::write(resources.join("app.asar"), "").expect("app.asar should be created");
+        std::fs::write(&sidecar, "").expect("CLI sidecar should be created");
+
+        let candidates = tool_executable_candidates("opencode", dir.path());
+
+        assert_eq!(
+            candidates,
+            vec![dir.path().join("opencode.cmd"), sidecar.clone()]
+        );
+        assert!(!candidates.contains(&gui));
+        assert_eq!(
+            windows_preferred_tool_executable("opencode", &gui),
+            Some(sidecar)
+        );
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn tool_executable_candidates_windows_skips_electron_desktop_without_cli_sidecar() {
+        let dir = tempfile::tempdir().expect("temp dir should be created");
+        let gui = dir.path().join("opencode.exe");
+        let resources = dir.path().join("resources");
+        std::fs::create_dir(&resources).expect("resources dir should be created");
+        std::fs::write(&gui, "").expect("desktop executable should be created");
+        std::fs::write(resources.join("app.asar"), "").expect("app.asar should be created");
+
+        let candidates = tool_executable_candidates("opencode", dir.path());
+
+        assert_eq!(candidates, vec![dir.path().join("opencode.cmd")]);
+        assert!(!candidates.contains(&gui));
+        assert_eq!(windows_preferred_tool_executable("opencode", &gui), None);
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn windows_preferred_tool_executable_keeps_standalone_opencode_exe() {
+        let dir = tempfile::tempdir().expect("temp dir should be created");
+        let standalone = dir.path().join("opencode.exe");
+        std::fs::write(&standalone, "").expect("standalone executable should be created");
+
+        assert_eq!(
+            windows_preferred_tool_executable("opencode", &standalone),
+            Some(standalone)
+        );
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn windows_path_default_skips_desktop_without_sidecar_and_uses_next_cli() {
+        let desktop_dir = tempfile::tempdir().expect("desktop temp dir should be created");
+        let resources = desktop_dir.path().join("resources");
+        std::fs::create_dir(&resources).expect("resources dir should be created");
+        let desktop = desktop_dir.path().join("opencode.exe");
+        std::fs::write(&desktop, "").expect("desktop executable should be created");
+        std::fs::write(resources.join("app.asar"), "").expect("app.asar should be created");
+
+        let cli_dir = tempfile::tempdir().expect("CLI temp dir should be created");
+        let cli = cli_dir.path().join("opencode.exe");
+        std::fs::write(&cli, "").expect("standalone executable should be created");
+
+        let raw = format!("{}\r\n{}\r\n", desktop.display(), cli.display());
+
+        assert_eq!(windows_preferred_path_default("opencode", &raw), Some(cli));
     }
 
     #[cfg(target_os = "windows")]
