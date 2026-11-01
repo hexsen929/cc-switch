@@ -257,6 +257,8 @@ export interface ProviderMeta {
   // Tool-call bridge: convert tools into prompt instructions and parse JSON tool calls back.
   toolCallBridge?: boolean;
   toolCallBridgePreamble?: string;
+  // Claude route → OpenAI Chat / Responses: how the client's thinking effort is sent upstream (absent = auto)
+  claudeReasoningEffort?: ClaudeReasoningEffortMode;
   // Codex → Anthropic path: emulate the Claude Code client (disabled by default; only an explicit true enables it)
   impersonateClaudeCode?: boolean;
   // Codex → Anthropic path: override the Anthropic max_tokens (output ceiling).
@@ -313,6 +315,9 @@ export type ClaudeApiFormat =
   | "openai_chat"
   | "openai_responses"
   | "gemini_native";
+
+// Claude 路由经 OpenAI Chat / Responses 转发时思考档位的发法；缺省 = 自动
+export type ClaudeReasoningEffortMode = "off" | "passthrough";
 
 // Codex API 格式类型
 // - "openai_responses": OpenAI Responses API 格式，直接透传

@@ -65,6 +65,10 @@ import {
 import { ClaudeShellWrapperCard } from "@/components/claude/ClaudeShellWrapperCard";
 import { ModelAliasEditor } from "./ModelAliasEditor";
 import type { ModelAliasEntry } from "@/utils/modelAliases";
+import {
+  ClaudeReasoningEffortField,
+  type ClaudeReasoningEffortChoice,
+} from "./ClaudeReasoningEffortField";
 import type {
   ClaudeAppendInstructionsConfig,
   ClaudeSystemInstructionsConfig,
@@ -164,6 +168,9 @@ interface ClaudeFormFieldsProps {
   // API Format (for Claude-compatible providers that need request/response conversion)
   apiFormat: ClaudeApiFormat;
   onApiFormatChange: (format: ClaudeApiFormat) => void;
+  // 转成 OpenAI Chat / Responses 时思考档位的发法
+  reasoningEffort: ClaudeReasoningEffortChoice;
+  onReasoningEffortChange: (value: ClaudeReasoningEffortChoice) => void;
 
   // Auth Field (ANTHROPIC_AUTH_TOKEN or ANTHROPIC_API_KEY)
   apiKeyField: ClaudeApiKeyField;
@@ -258,6 +265,8 @@ export function ClaudeFormFields({
   speedTestEndpoints,
   apiFormat,
   onApiFormatChange,
+  reasoningEffort,
+  onReasoningEffortChange,
   apiKeyField,
   onApiKeyFieldChange,
   isFullUrl,
@@ -292,6 +301,7 @@ export function ClaudeFormFields({
     subagentModel ||
     (!isXaiOauthPreset && !isCodexOauthPreset && apiFormat !== "anthropic") ||
     toolCallBridge ||
+    reasoningEffort !== "auto" ||
     apiKeyField !== "ANTHROPIC_AUTH_TOKEN" ||
     isFullUrl ||
     customUserAgent ||
@@ -931,6 +941,17 @@ export function ClaudeFormFields({
               <DirectModeFormatWarning notice={directModeFormatNotice} />
             )}
           </div>
+        )}
+      {category !== "cloud_provider" &&
+        !isXaiOauthPreset &&
+        !isCodexOauthPreset &&
+        !isCopilotPreset &&
+        (apiFormat === "openai_chat" || apiFormat === "openai_responses") && (
+          <ClaudeReasoningEffortField
+            id="claudeReasoningEffort"
+            value={reasoningEffort}
+            onChange={onReasoningEffortChange}
+          />
         )}
     </>
   );

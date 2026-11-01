@@ -388,6 +388,18 @@ pub fn transform_claude_request_for_api_format(
     } else {
         (None, "none")
     };
+    // 转换层只给认得的模型写思考档位，其余模型由 claude_reasoning 补判（#9062）。
+    let effort_plan = if matches!(
+        api_format,
+        "openai_chat" | "openai_responses" | "openai_chat_virtual_tools"
+    ) {
+        let base_url = ClaudeAdapter::new()
+            .extract_base_url(provider)
+            .unwrap_or_default();
+        super::claude_reasoning::plan(&body, provider, &base_url)
+    } else {
+        super::claude_reasoning::EffortPlan::Unchanged
+    };
     match api_format {
         "openai_responses" => {
             log::debug!(
@@ -419,6 +431,7 @@ pub fn transform_claude_request_for_api_format(
                 }
                 result["include"] = json!(include);
             }
+            super::claude_reasoning::apply(&mut result, api_format, effort_plan);
             Ok(result)
         }
         "openai_chat" => {
@@ -450,15 +463,19 @@ pub fn transform_claude_request_for_api_format(
                     obj.remove("stop");
                 }
             }
+            super::claude_reasoning::apply(&mut result, api_format, effort_plan);
             Ok(result)
         }
         "openai_chat_virtual_tools" => {
             let preserve_reasoning_content =
                 should_preserve_reasoning_content_for_openai_chat(provider, &body);
-            let result = super::transform::anthropic_to_openai_with_reasoning_content(
+            let mut result = super::transform::anthropic_to_openai_with_reasoning_content(
                 body,
                 preserve_reasoning_content,
             )?;
+            // The fork's bridge still sends Chat Completions. Apply the same
+            // user/vendor effort decision before replacing native tools.
+            super::claude_reasoning::apply(&mut result, "openai_chat", effort_plan);
             super::tool_virtual::openai_chat_request_to_virtual_tools(
                 result,
                 super::tool_virtual::preamble(provider),
@@ -1847,6 +1864,95 @@ mod tests {
         assert_eq!(transformed["model"], "gpt-5.4");
         assert!(transformed.get("input").is_some());
         assert!(transformed.get("max_output_tokens").is_some());
+    }
+
+    #[test]
+    fn test_responses_sends_effort_for_unlisted_deepseek_model() {
+        // #9062：Desktop 把 claude-fable-5 映射到 deepseek-flash，经自建 Responses 网关转发。
+        let provider = create_provider(json!({
+            "env": { "ANTHROPIC_BASE_URL": "https://gateway.example.com/v1" }
+        }));
+        let body = json!({
+            "model": "deepseek-flash",
+            "thinking": { "type": "adaptive" },
+            "output_config": { "effort": "high" },
+            "messages": [{ "role": "user", "content": "hello" }],
+            "max_tokens": 128
+        });
+
+        let transformed = transform_claude_request_for_api_format(
+            body,
+            &provider,
+            "openai_responses",
+            None,
+            None,
+        )
+        .unwrap();
+
+        assert_eq!(transformed["reasoning"], json!({ "effort": "high" }));
+    }
+
+    #[test]
+    fn test_chat_folds_effort_to_standard_tiers_for_unlisted_model() {
+        let provider = create_provider(json!({
+            "env": { "ANTHROPIC_BASE_URL": "https://api.groq.com/openai/v1" }
+        }));
+        let body = json!({
+            "model": "openai/gpt-oss-120b",
+            "thinking": { "type": "adaptive" },
+            "output_config": { "effort": "max" },
+            "messages": [{ "role": "user", "content": "hello" }],
+            "max_tokens": 128
+        });
+
+        let transformed =
+            transform_claude_request_for_api_format(body, &provider, "openai_chat", None, None)
+                .unwrap();
+
+        assert_eq!(transformed["reasoning_effort"], "high");
+    }
+
+    #[test]
+    fn virtual_tool_chat_honors_the_same_reasoning_override_and_vendor_rules() {
+        for (model, mode, expected) in [
+            ("gpt-5.4", Some("off"), None),
+            ("unknown-model", Some("passthrough"), Some("max")),
+            ("unknown-model", None, Some("high")),
+            ("kimi-k2", None, None),
+        ] {
+            let provider = create_provider_with_meta(
+                json!({ "env": { "ANTHROPIC_BASE_URL": "https://relay.example.com/v1" } }),
+                ProviderMeta {
+                    tool_call_bridge: Some(true),
+                    claude_reasoning_effort: mode.map(str::to_string),
+                    ..Default::default()
+                },
+            );
+            let body = json!({
+                "model": model,
+                "thinking": { "type": "adaptive" },
+                "output_config": { "effort": "max" },
+                "messages": [{ "role": "user", "content": "hello" }],
+                "tools": [{ "name": "lookup", "input_schema": { "type": "object" } }],
+                "max_tokens": 128,
+                "stream": true
+            });
+            let transformed = transform_claude_request_for_api_format(
+                body,
+                &provider,
+                "openai_chat_virtual_tools",
+                None,
+                None,
+            )
+            .unwrap();
+            assert_eq!(
+                transformed.get("reasoning_effort").and_then(Value::as_str),
+                expected,
+                "model={model}, mode={mode:?}"
+            );
+            assert!(transformed.get("tools").is_none());
+            assert_eq!(transformed["stream"], false);
+        }
     }
 
     #[test]

@@ -1,4 +1,11 @@
-import { render, screen, waitFor, within, act } from "@testing-library/react";
+import {
+  render,
+  screen,
+  waitFor,
+  within,
+  act,
+  fireEvent,
+} from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi, beforeEach, afterEach } from "vitest";
 import i18n from "i18next";
@@ -8,7 +15,9 @@ import UnifiedSkillsPanel from "@/components/skills/UnifiedSkillsPanel";
 import { settingsApi, skillsApi } from "@/lib/api";
 import type {
   InstalledSkill,
+  DiscoverableSkill,
   SkillBackupEntry,
+  SkillRepo,
   SkillRepoFailure,
   SkillUpdateInfo,
 } from "@/lib/api/skills";
@@ -30,6 +39,8 @@ const m = vi.hoisted(() => ({
   toastWarning: vi.fn(),
   toastInfo: vi.fn(),
   installed: [] as InstalledSkill[],
+  discoverable: [] as DiscoverableSkill[],
+  repos: [] as SkillRepo[],
   backups: [] as SkillBackupEntry[],
   updates: [] as SkillUpdateInfo[],
   repoFailures: [] as SkillRepoFailure[],
@@ -54,6 +65,19 @@ vi.mock("@/components/mcp/useVisibleAppIds", () => ({
 vi.mock("@/components/skills/SkillsStorageSheet", () => ({
   SkillsStorageSheet: ({ open }: { open: boolean }) =>
     open ? <div data-testid="storage-sheet" /> : null,
+}));
+
+// Discovery rows otherwise have zero measured height in jsdom.
+vi.mock("@tanstack/react-virtual", () => ({
+  useVirtualizer: ({ count }: { count: number }) => ({
+    getTotalSize: () => count * 56,
+    getVirtualItems: () =>
+      Array.from({ length: count }, (_, index) => ({
+        index,
+        key: index,
+        start: index * 56,
+      })),
+  }),
 }));
 
 vi.mock("@/hooks/useSkills", () => ({
@@ -115,10 +139,10 @@ vi.mock("@/hooks/useSkills", () => ({
     mutateAsync: m.updateSkill,
     isPending: false,
   }),
-  useDiscoverableSkills: () => ({ data: [], refetch: vi.fn() }),
+  useDiscoverableSkills: () => ({ data: m.discoverable, refetch: vi.fn() }),
   useRefreshDiscoverableSkills: () => vi.fn(),
   useDiscoverableSkillsFailures: () => ({ data: [] }),
-  useSkillRepos: () => ({ data: [], refetch: vi.fn() }),
+  useSkillRepos: () => ({ data: m.repos, refetch: vi.fn() }),
   useAddSkillRepo: () => ({ mutateAsync: vi.fn() }),
   useRemoveSkillRepo: () => ({ mutateAsync: vi.fn() }),
   useSearchSkillsSh: () => ({ data: undefined, isLoading: false }),
@@ -171,6 +195,8 @@ async function openMenu(trigger: string, item: string) {
 describe("UnifiedSkillsPanel", () => {
   beforeEach(() => {
     m.installed = [];
+    m.discoverable = [];
+    m.repos = [];
     m.backups = [];
     m.updates = [];
     m.repoFailures = [];
@@ -631,6 +657,68 @@ describe("UnifiedSkillsPanel", () => {
         screen.getByRole("tablist", { name: "skillsPage.viewAria" }),
       ).getAllByRole("tab")[1],
     ).toHaveAttribute("aria-selected", "true");
+  });
+
+  it("can flash the same installed row again after its own animation finishes", async () => {
+    const skill = makeSkill();
+    m.installed = [skill];
+    m.repos = [{ owner: "owner", name: "repo", branch: "main", enabled: true }];
+    m.discoverable = [
+      {
+        key: skill.id,
+        name: skill.name,
+        description: skill.description ?? "",
+        directory: skill.directory,
+        repoOwner: "owner",
+        repoName: "repo",
+        repoBranch: "main",
+      },
+    ];
+    const original = Object.getOwnPropertyDescriptor(
+      Element.prototype,
+      "scrollIntoView",
+    );
+    const scroll = vi.fn();
+    Object.defineProperty(Element.prototype, "scrollIntoView", {
+      configurable: true,
+      value: scroll,
+    });
+    try {
+      renderPanel({ initialView: "discover" });
+      const jump = () =>
+        userEvent.click(
+          screen.getByRole("button", {
+            name: "skillsPage.discover.installedAria",
+          }),
+        );
+      await jump();
+      const row = document.getElementById(`sk-row-${skill.id}`)!;
+      expect(row).toHaveFocus();
+      expect(row).toHaveClass("before:animate-row-flash");
+      expect(row).toHaveClass("motion-reduce:before:animate-row-fade");
+      expect(scroll).toHaveBeenCalledTimes(1);
+
+      // A nested icon/button animation must not clear the row's own flash.
+      fireEvent.animationEnd(
+        within(row).getByRole("button", { name: skill.name }),
+      );
+      expect(row).toHaveClass("before:animate-row-flash");
+      fireEvent.animationEnd(row);
+      expect(row).not.toHaveClass("before:animate-row-flash");
+
+      const tabs = screen.getByRole("tablist", { name: "skillsPage.viewAria" });
+      await userEvent.click(within(tabs).getAllByRole("tab")[1]);
+      await jump();
+      expect(row).toHaveClass("before:animate-row-flash");
+      expect(row).toHaveFocus();
+      expect(scroll).toHaveBeenCalledTimes(2);
+    } finally {
+      if (original) {
+        Object.defineProperty(Element.prototype, "scrollIntoView", original);
+      } else {
+        delete (Element.prototype as Partial<Element>).scrollIntoView;
+      }
+    }
   });
 
   it("lets the unmanaged notice be ignored with one control", async () => {

@@ -1880,7 +1880,19 @@
     "localProxyRequestOverridesHelp": "Format dönüştürme sonrasındaki yukarı akış isteği için geçerlidir.",
     "apiFormatHelp": "Sağlayıcının yerel olarak desteklediği protokolü seçin: Anthropic Mesajlar, dönüştürme yapılmadan olduğu gibi iletilir; yönlendirme diğer üçünü Anthropic Mesajlarına dönüştürür.",
     "directModeFormatInUse": "Bu kart doğrudan modda kullanılıyor: bu formatta kaydedilmesi isteklerin başarısız olmasına neden olur. Önce yönlendirmeye veya Birleştirme'ya geçin.",
-    "directModeFormatSwitch": "Bu biçim doğrudan modda çalışmaz; Bu kartı kullanmak için yönlendirmeye veya Birleştirme'ya geçin."
+    "directModeFormatSwitch": "Bu biçim doğrudan modda çalışmaz; Bu kartı kullanmak için yönlendirmeye veya Birleştirme'ya geçin.",
+    "nativeConfig": {
+      "hint": "Dosyanın yalnızca bu sağlayıcıya ait bölümünü uygulamanın kendi biçiminde gösterir ve kaydeder. Varsayılan model gibi genel ayarlar burada yer almaz. Buraya yazılan yorumlar kaydedilmez.",
+      "invalid": "Geçersiz {{format}}: {{error}}",
+      "schema": "Bazı alanların türü yanlış. Yukarıdaki formu kullanarak kontrol edin.",
+      "scope": "Buraya yalnızca {{section}} düğümü eklenir. Sağlayıcı Anahtarını yukarıdaki alandan değiştirin.",
+      "title": "Yapılandırma dosyası {{path}} (yalnızca bu sağlayıcı)"
+    },
+    "reasoningEffort": "Düşünme düzeyi",
+    "reasoningEffortAuto": "Otomatik (önerilen)",
+    "reasoningEffortHelp": "Yönlendirme istekleri OpenAI biçimine dönüştürdüğünde istemcide seçilen düşünme düzeyinin üst sunucuya nasıl gönderileceğini belirler. Otomatik: üst sunucunun desteklediği bir düzey gönderilir; tanınmayan sunuculara en fazla high gönderilir ve düşünme kapalıysa parametre gönderilmez. Olduğu gibi gönder: istemcinin seçtiği düzey aynen iletilir; xhigh veya max desteklemeyen sunucular hata verir. Gönderme: üst sunucu bu parametreyi reddediyorsa kullanın.",
+    "reasoningEffortOff": "Gönderme",
+    "reasoningEffortPassthrough": "Olduğu gibi gönder"
   },
   "copilot": {
     "automaticFormat": "Yönlendirme tarafından otomatik seçilir",
@@ -4896,7 +4908,7 @@
       "sourceRepos": "Depolar · {{count}}",
       "reload": "Kod depolarını yeniden yükle",
       "listLabel": "Yükleyebileceğiniz beceriler",
-      "installed": "Yüklendi · {{count}} uygulamalar",
+      "installed": "Yüklendi",
       "installedAria": "{{name}}, {{count}} uygulamalarına yüklenir; Yüklendi altında görüntüleyin",
       "dirTaken": "Klasör adı {{name}} ({{source}}) tarafından kullanılıyor",
       "installing": "Kurulum",
@@ -5128,7 +5140,9 @@
     "error": {
       "defaultModelInUse": "Kimi Code bu sağlayıcıdaki bir modeli kullanıyor. Önce Kimi Code'da /model komutuyla başka bir modele geçin.",
       "secondaryModelInUse": "Kimi Code'un alt ajan modeli bu sağlayıcıdaki bir modeli kullanıyor. Önce Kimi Code'da /secondary-model komutuyla değiştirin."
-    }
+    },
+    "configTomlSchema": "Eksik yapılandırma: sağlayıcının type alanını ve her modelin model ile max_context_size (pozitif tam sayı) alanlarını kontrol edin.",
+    "configTomlScope": "Buraya yalnızca [providers.{{key}}] ve ona ait [models.*] tabloları eklenir. Sağlayıcı Anahtarını yukarıdaki alandan değiştirin."
   },
   "omp": {
     "empty": {

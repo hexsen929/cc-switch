@@ -384,7 +384,6 @@ jobs:
   macos-binary:
     name: Build macOS binary (${{ matrix.target }})
     needs: whats-new-check
-    # Keep native ARM builds; macOS 14 runners retire on 2026-11-02.
     runs-on: macos-15
     environment: release
     strategy:

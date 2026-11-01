@@ -2569,7 +2569,10 @@ impl RequestForwarder {
                 // effort 换算才不会当成关闭。
                 if matches!(
                     api_format,
-                    "openai_chat" | "openai_responses" | "openai_chat_virtual_tools"
+                    "openai_chat"
+                        | "openai_responses"
+                        | "openai_chat_virtual_tools"
+                        | "gemini_native"
                 ) {
                     super::providers::transform::make_default_adaptive_thinking_explicit(
                         &mut mapped_body,
