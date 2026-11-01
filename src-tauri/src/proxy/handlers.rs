@@ -4827,6 +4827,7 @@ data: [DONE]\n\n";
                 upstream_model: model.into(),
                 original_model: model.into(),
             }),
+            None,
         )
         .await
         .unwrap();
