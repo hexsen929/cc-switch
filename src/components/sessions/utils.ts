@@ -57,10 +57,10 @@ export const canResumeSession = (session: SessionMeta) =>
   Boolean(session.resumeCommand?.trim()) &&
   (Boolean(session.sourcePath) || session.providerId === "agy");
 
-/** 子代理只读；MiniMax Code / Kimi Code / DeepSeek Harness / Antigravity 的会话需在原客户端中删除。 */
+/** 子代理只读；MiniMax Code / DeepSeek Harness / Antigravity 的会话需在原客户端中删除。 */
 export const canDeleteSession = (session: SessionMeta) =>
   Boolean(session.sourcePath) &&
-  !["mcode", "agy", "kimi", "dsh"].includes(session.providerId) &&
+  !["mcode", "agy", "dsh"].includes(session.providerId) &&
   !isReadOnlySession(session);
 
 export interface SessionProjectGroup {

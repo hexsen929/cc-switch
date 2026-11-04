@@ -14,7 +14,7 @@ import {
 import type { SessionMeta } from "@/types";
 
 describe("session utils", () => {
-  it.each(["agy", "mcode", "kimi", "dsh"])(
+  it.each(["agy", "mcode", "dsh"])(
     "keeps %s main sessions resumable but prevents CCS deletion",
     (providerId) => {
       const session: SessionMeta = {
@@ -56,24 +56,30 @@ describe("session utils", () => {
     expect(canDeleteSession(session)).toBe(false);
   });
 
-  it("keeps an OMP main session resumable and deletable only with its native source", () => {
-    const session: SessionMeta = {
-      providerId: "omp",
-      sessionId: "omp-main",
-      sourcePath: "/sessions/omp-main.jsonl",
-      resumeCommand: "omp --resume '/sessions/omp-main.jsonl'",
-    };
-    expect(canResumeSession(session)).toBe(true);
-    expect(canDeleteSession(session)).toBe(true);
-    for (const marker of [
-      { readOnly: true },
-      { role: "subagent" as const },
-      { parentSessionId: "parent" },
-    ]) {
-      expect(canResumeSession({ ...session, ...marker })).toBe(false);
-      expect(canDeleteSession({ ...session, ...marker })).toBe(false);
-    }
-  });
+  it.each(["omp", "kimi"])(
+    "keeps a %s main session resumable and deletable only with its native source",
+    (providerId) => {
+      const session: SessionMeta = {
+        providerId,
+        sessionId: "main",
+        sourcePath: `/sessions/${providerId}-main.jsonl`,
+        resumeCommand: `${providerId} --resume main`,
+      };
+      expect(canResumeSession(session)).toBe(true);
+      expect(canDeleteSession(session)).toBe(true);
+      expect(canDeleteSession({ ...session, sourcePath: undefined })).toBe(
+        false,
+      );
+      for (const marker of [
+        { readOnly: true },
+        { role: "subagent" as const },
+        { parentSessionId: "parent" },
+      ]) {
+        expect(canResumeSession({ ...session, ...marker })).toBe(false);
+        expect(canDeleteSession({ ...session, ...marker })).toBe(false);
+      }
+    },
+  );
 
   it.each([
     "claude",
