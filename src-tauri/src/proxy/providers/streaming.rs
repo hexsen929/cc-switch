@@ -858,18 +858,16 @@ pub fn create_anthropic_sse_stream<E: std::error::Error + Send + 'static>(
     // Trade-off: live streaming UX is replaced by a single flush at upstream
     // completion, in exchange for correct usage reporting.
     async_stream::stream! {
-        use crate::proxy::sse::{strip_sse_field, take_sse_block};
         tokio::pin!(inner);
-        let mut sse_buf = String::new();
-        let mut utf_rem: Vec<u8> = Vec::new();
+        let mut sse = SseBuffer::new();
         let mut events: Vec<(String, Value)> = Vec::new();
         let mut final_usage: Option<Value> = None;
 
         while let Some(item) = inner.next().await {
             match item {
                 Ok(bytes) => {
-                    crate::proxy::sse::append_utf8_safe(&mut sse_buf, &mut utf_rem, &bytes);
-                    while let Some(block) = take_sse_block(&mut sse_buf) {
+                    sse.push_bytes(&bytes);
+                    while let Some(block) = sse.next_block() {
                         if block.trim().is_empty() {
                             continue;
                         }

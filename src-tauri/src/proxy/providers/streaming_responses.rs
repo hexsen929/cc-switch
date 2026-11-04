@@ -4730,16 +4730,15 @@ fn backfill_anthropic_message_start_usage(
     // acceptable cost for correct usage reporting.
     async_stream::stream! {
         tokio::pin!(stream);
-        let mut sse_buf = String::new();
-        let mut utf_rem: Vec<u8> = Vec::new();
+        let mut sse = SseBuffer::new();
         let mut events: Vec<(String, Value)> = Vec::new();
         let mut final_usage: Option<Value> = None;
 
         while let Some(item) = stream.next().await {
             match item {
                 Ok(bytes) => {
-                    crate::proxy::sse::append_utf8_safe(&mut sse_buf, &mut utf_rem, &bytes);
-                    while let Some(block) = take_sse_block(&mut sse_buf) {
+                    sse.push_bytes(&bytes);
+                    while let Some(block) = sse.next_block() {
                         if block.trim().is_empty() {
                             continue;
                         }

@@ -30,7 +30,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use super::hyper_client::ProxyResponse;
-use super::sse::{append_utf8_safe, strip_sse_field, take_sse_block};
+use super::sse::{strip_sse_field, SseBuffer};
 use crate::error::AppError;
 
 /// onResponse 脚本执行时长上限（毫秒）。非流式路径同步执行一次，取与 onRequest 相同的预算。
@@ -385,8 +385,7 @@ pub fn wrap_sse_stream(
         if transformer.is_none() {
             log::warn!("[Middleware] onEvent 变换器初始化失败，整条流原样透传");
         }
-        let mut buf = String::new();
-        let mut remainder: Vec<u8> = Vec::new();
+        let mut sse = SseBuffer::new();
         while let Some(item) = raw_rx.blocking_recv() {
             if out_tx.is_closed() {
                 return;
@@ -405,15 +404,15 @@ pub fn wrap_sse_stream(
                     }
                 }
                 Some(t) => {
-                    append_utf8_safe(&mut buf, &mut remainder, &chunk);
-                    while let Some(block) = take_sse_block(&mut buf) {
+                    sse.push_bytes(&chunk);
+                    while let Some(block) = sse.next_block() {
                         if out_tx.is_closed() {
                             return;
                         }
-                        let transformed = transform_sse_block(&block, t);
-                        let emit = transformed.unwrap_or(block);
+                        let transformed = transform_sse_block(block, t);
+                        let emit = transformed.as_deref().unwrap_or(block);
                         let mut bytes = String::with_capacity(emit.len() + 2);
-                        bytes.push_str(&emit);
+                        bytes.push_str(emit);
                         bytes.push_str("\n\n");
                         if out_tx.blocking_send(Ok(Bytes::from(bytes))).is_err() {
                             return;
@@ -424,11 +423,9 @@ pub fn wrap_sse_stream(
         }
         // 收尾：把残留的不完整尾块原样放出（不变换，fail-open）。
         if transformer.is_some() {
-            if !remainder.is_empty() {
-                buf.push_str(&String::from_utf8_lossy(&remainder));
-            }
-            if !buf.is_empty() {
-                let _ = out_tx.blocking_send(Ok(Bytes::from(buf)));
+            let tail = sse.take_tail();
+            if !tail.is_empty() {
+                let _ = out_tx.blocking_send(Ok(Bytes::from(tail)));
             }
         }
     });
@@ -598,6 +595,35 @@ mod tests {
             body.contains("event: a"),
             "non-data lines must be preserved"
         );
+    }
+
+    #[tokio::test]
+    async fn wrap_sse_stream_preserves_split_utf8_events_and_unframed_tail() {
+        let mut input_bytes =
+            "event: a\r\ndata: {\"text\":\"你🙂\"}\r\n\r\ndata: [DONE]\n\n: keep-alive\n\n"
+                .as_bytes()
+                .to_vec();
+        input_bytes.extend_from_slice(b"data: unfinished \xe4");
+        let chunks = input_bytes
+            .into_iter()
+            .map(|byte| Ok::<_, std::io::Error>(Bytes::from(vec![byte])));
+        let input = ProxyResponse::streamed(
+            http::StatusCode::OK,
+            http::HeaderMap::new(),
+            futures::stream::iter(chunks),
+        );
+        let wrapped = wrap_sse_stream(input, "(e)=>{ e.seen = true; return e; }".into(), meta());
+        let mut output = Vec::new();
+        let mut stream = wrapped.bytes_stream();
+        while let Some(chunk) = stream.next().await {
+            output.extend_from_slice(&chunk.unwrap());
+        }
+        let body = String::from_utf8(output).unwrap();
+        assert!(body.contains("你🙂"), "split UTF-8 must remain intact");
+        assert_eq!(body.matches("\"seen\":true").count(), 1);
+        assert_eq!(body.matches("data: [DONE]").count(), 1);
+        assert_eq!(body.matches(": keep-alive").count(), 1);
+        assert!(body.ends_with("data: unfinished \u{fffd}"));
     }
 
     #[test]

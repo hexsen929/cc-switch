@@ -3492,15 +3492,6 @@ impl RequestForwarder {
             short_value_hash(Some(&filtered_body))
         );
 
-        // 序列化后释放工作副本；只有加密子任务的流式判错还需要保留请求体。
-        let encrypted_agent_request = (matches!(app_type, AppType::Codex | AppType::GrokBuild)
-            && !codex_responses_to_chat
-            && !codex_responses_to_anthropic
-            && request_is_streaming
-            && self.rectifier_config.enabled
-            && carries_encrypted_agent_task(&filtered_body))
-        .then_some(filtered_body);
-
         // 确定超时
         let timeout = if self.non_streaming_timeout.is_zero() {
             std::time::Duration::from_secs(600) // 默认 600 秒
@@ -3551,6 +3542,17 @@ impl RequestForwarder {
             }
             attempt.prepared(&filtered_body, &secrets);
         }
+
+        // Diagnostics must inspect the prepared body before ownership is transferred.
+        // Keep it only for encrypted subtask stream validation; other requests release it here.
+        let encrypted_agent_request = (matches!(app_type, AppType::Codex | AppType::GrokBuild)
+            && !codex_responses_to_chat
+            && !codex_responses_to_anthropic
+            && request_is_streaming
+            && self.rectifier_config.enabled
+            && carries_encrypted_agent_task(&filtered_body))
+        .then_some(filtered_body);
+
         let response = if is_socks_proxy || !preserve_exact_header_case {
             // OpenAI / Copilot / Codex 类后端不依赖原始 header 大小写；走 reqwest
             // 连接池，避免 raw TCP/TLS path 每次请求都重新握手。SOCKS5 也只能走 reqwest。
