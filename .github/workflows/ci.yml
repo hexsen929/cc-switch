@@ -263,9 +263,9 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # Pin the supported ARM image instead of the moving latest pool: its
-        # hosted runner could not be acquired on two consecutive runs.
-        os: [ubuntu-22.04, windows-latest, macos-15]
+        # The ARM pool repeatedly failed to acquire a runner. Keep macOS checks
+        # on the supported Intel image while release builds cover both targets.
+        os: [ubuntu-22.04, windows-latest, macos-15-intel]
     steps:
       - name: Checkout
         uses: actions/checkout@v6

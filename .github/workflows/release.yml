@@ -386,7 +386,9 @@ jobs:
   macos-binary:
     name: Build macOS binary (${{ matrix.target }})
     needs: whats-new-check
-    runs-on: macos-15
+    # Avoid the ARM runner pool's repeated acquisition failures. Xcode and the
+    # target-specific Rust toolchain build both Apple architectures on Intel.
+    runs-on: macos-15-intel
     environment: release
     strategy:
       matrix:
@@ -461,7 +463,7 @@ jobs:
   # 已经过了 release 的批准，这里再挂会在半路要求第二次批准。secret 都是仓库级的。
   macos-release:
     name: Bundle macOS release
-    runs-on: macos-15
+    runs-on: macos-15-intel
     needs: macos-binary
 
     steps:
