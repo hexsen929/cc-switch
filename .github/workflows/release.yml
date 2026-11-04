@@ -387,7 +387,7 @@ jobs:
           echo "Listing bundles in src-tauri/target..."
           find src-tauri/target -maxdepth 4 -type f -name "*.*" 2>/dev/null || true
 
-  # macOS 两个架构分两台机器同时编译（以前在一台机器上串行），再由 macos-release 合并签名。
+  # macOS 两个架构分别编译，再由 macos-release 合并签名。
   # 编译不需要任何 secret；挂 release environment 只是为了和其它平台在开头一起批准一次。
   macos-binary:
     name: Build macOS binary (${{ matrix.target }})
@@ -397,6 +397,9 @@ jobs:
     runs-on: macos-15-intel
     environment: release
     strategy:
+      # The second macOS job repeatedly expired while the first held a runner.
+      # Schedule it after the first build rather than exhausting acquisition retries.
+      max-parallel: 1
       matrix:
         target: [aarch64-apple-darwin, x86_64-apple-darwin]
 
