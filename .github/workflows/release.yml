@@ -212,9 +212,15 @@ jobs:
 
       - name: Build Tauri App (Linux)
         if: runner.os == 'Linux'
+        shell: bash
         env:
           LINUXDEPLOY_EXCLUDED_LIBRARIES: "libwayland-client.so*"
-        run: pnpm tauri build --bundles appimage,deb,rpm
+        run: |
+          pnpm tauri build --bundles appimage,deb
+          # Reuse the compiled binary, which embeds the full fork version.
+          # RPM requires a numeric Version and a separate revision in Release.
+          node scripts/prepare-release-version.mjs --rpm-config "$RUNNER_TEMP/tauri-rpm-config.json"
+          pnpm tauri bundle --bundles rpm --config "$RUNNER_TEMP/tauri-rpm-config.json"
 
       - name: Prepare Windows Assets
         if: runner.os == 'Windows'

@@ -52,18 +52,47 @@ export function prepareReleaseVersion(root, refType, refName) {
   return version;
 }
 
+// RPM disallows '-' in Version. Override packaging metadata only, after the
+// binary has been built with the full fork version used by the updater.
+export function prepareRpmBundleConfig(root, refType, refName, outputPath) {
+  prepareReleaseVersion(root, refType, refName);
+  const config = JSON.parse(
+    readFileSync(resolve(root, "src-tauri/tauri.conf.json"), "utf8"),
+  );
+  const match = /^(\d+\.\d+\.\d+)-codex-auth-([1-9]\d*)$/.exec(config.version);
+  const override = match
+    ? {
+        version: match[1],
+        bundle: { linux: { rpm: { release: match[2] } } },
+      }
+    : {};
+  writeFileSync(outputPath, `${JSON.stringify(override, null, 2)}\n`);
+  return override;
+}
+
 if (
   process.argv[1] &&
   import.meta.url === pathToFileURL(resolve(process.argv[1])).href
 ) {
-  const version = prepareReleaseVersion(
-    process.cwd(),
-    process.env.GITHUB_REF_TYPE,
-    process.env.GITHUB_REF_NAME,
-  );
-  console.log(
-    version
-      ? `Embedded release version: ${version}`
-      : "Branch build: keeping the development version",
-  );
+  if (process.argv[2] === "--rpm-config") {
+    if (!process.argv[3]) throw new Error("Missing RPM config output path");
+    const override = prepareRpmBundleConfig(
+      process.cwd(),
+      process.env.GITHUB_REF_TYPE,
+      process.env.GITHUB_REF_NAME,
+      process.argv[3],
+    );
+    console.log(`RPM packaging override: ${JSON.stringify(override)}`);
+  } else {
+    const version = prepareReleaseVersion(
+      process.cwd(),
+      process.env.GITHUB_REF_TYPE,
+      process.env.GITHUB_REF_NAME,
+    );
+    console.log(
+      version
+        ? `Embedded release version: ${version}`
+        : "Branch build: keeping the development version",
+    );
+  }
 }

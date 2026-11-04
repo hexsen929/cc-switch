@@ -90,6 +90,35 @@ describe("release version stamping", () => {
     expect(JSON.parse(readFileSync(configPath, "utf8"))).toEqual(config);
   });
 
+  it("separates RPM metadata from the embedded version and orders fork revisions", () => {
+    for (const revision of [121, 122]) {
+      const { root, configPath } = fixture("4.0.25");
+      const outputPath = join(root, "rpm-config.json");
+      const result = spawnSync(
+        process.execPath,
+        [script, "--rpm-config", outputPath],
+        {
+          cwd: root,
+          env: {
+            ...process.env,
+            GITHUB_REF_TYPE: "tag",
+            GITHUB_REF_NAME: `v4.0.25-codex-auth-${revision}`,
+          },
+          encoding: "utf8",
+          timeout: 10000,
+        },
+      );
+      expect(result.status, result.stderr).toBe(0);
+      expect(JSON.parse(readFileSync(outputPath, "utf8"))).toEqual({
+        version: "4.0.25",
+        bundle: { linux: { rpm: { release: String(revision) } } },
+      });
+      expect(JSON.parse(readFileSync(configPath, "utf8")).version).toBe(
+        `4.0.25-codex-auth-${revision}`,
+      );
+    }
+  });
+
   it.each([
     "v4.0.5-codex-auth-75",
     "v4.0.6-codex-auth-075",
