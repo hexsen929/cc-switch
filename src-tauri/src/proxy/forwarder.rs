@@ -1244,7 +1244,7 @@ impl RequestForwarder {
                 // The enabled failover queue owns ordering and retry budget.
                 // Skip only capacities explicitly known to be insufficient;
                 // unknown capacities remain user-selected candidates, not guesses.
-                let window = self.configured_input_window(app_type, provider, &body);
+                let window = self.configured_input_window(app_type, provider, body);
                 let too_small = window.is_some_and(|window| {
                     required_input_tokens.map_or_else(
                         || input_limit_floor.is_some_and(|failed| window <= failed),
@@ -1778,7 +1778,7 @@ impl RequestForwarder {
                         input_limit_seen = true;
                         let failed_window = limit
                             .limit
-                            .or_else(|| self.configured_input_window(app_type, provider, &body));
+                            .or_else(|| self.configured_input_window(app_type, provider, body));
                         input_limit_floor =
                             input_limit_floor.into_iter().chain(failed_window).max();
                         required_input_tokens = required_input_tokens
