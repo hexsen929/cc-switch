@@ -619,7 +619,6 @@ export function TrayPanel() {
       setQuery("");
       const cold = !lastState.current;
       const loading = load();
-      void queryClient.invalidateQueries({ queryKey: ["settings"] });
       // 反馈行（切换后的「重启生效」）收起即算看过（后端 `mark_feedback_seen`）：沿用上次
       // 内容时先去掉。缓存键跟着换，收起之后才记下的（还没看过）等数据回来照样显示。
       if (lastState.current) {
@@ -647,7 +646,7 @@ export function TrayPanel() {
       setPixelRatio(window.devicePixelRatio || 1);
       setPlacement(next);
     },
-    [load, queryClient],
+    [load],
   );
 
   useEffect(() => {

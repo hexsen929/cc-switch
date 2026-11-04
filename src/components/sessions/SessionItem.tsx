@@ -134,20 +134,16 @@ export function SessionItem({
       : t(
           session.providerId === "dsh"
             ? "dsh.deleteSessionHint"
-            : session.providerId === "kimi"
-              ? "kimi.deleteSessionHint"
-              : session.providerId === "agy"
-                ? "sessionManager.agyDeleteHint"
-                : "sessionManager.mcodeDeleteHint",
+            : session.providerId === "agy"
+              ? "sessionManager.agyDeleteHint"
+              : "sessionManager.mcodeDeleteHint",
           {
             defaultValue:
               session.providerId === "dsh"
                 ? "请在 DeepSeek Harness 中删除"
-                : session.providerId === "kimi"
-                  ? "请在 Kimi Code 中删除"
-                  : session.providerId === "agy"
-                    ? "请在 Antigravity 中删除"
-                    : "请在 MiniMax Code 中删除",
+                : session.providerId === "agy"
+                  ? "请在 Antigravity 中删除"
+                  : "请在 MiniMax Code 中删除",
           },
         )
     : null;
