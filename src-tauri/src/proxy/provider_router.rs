@@ -485,27 +485,6 @@ impl ProviderRouter {
                 .ok()
                 .flatten()
         });
-        self.select_providers_with_current(app_type, current_provider, None)
-            .await
-    }
-
-    /// 同 [`Self::select_providers`]，正在用的那家由调用方给出：处理请求时上下文已经读过
-    /// 一次（要读 `live-state.json` 和这一行），不用每个请求再读一遍，两处用的也一定是
-    /// 同一家。
-    ///
-    /// `session_id` 仅在客户端提供了稳定会话标识时传入（自生成的 UUID 每轮都变，不能作粘性键）；
-    /// 为 `Some` 且该应用开启会话粘性时，会尽量把同一会话固定在上一轮的 Provider 上。
-    pub async fn select_providers_with_current(
-        &self,
-        app_type: &str,
-        current_provider: Option<Provider>,
-        session_id: Option<&str>,
-    ) -> Result<Vec<Provider>, AppError> {
-        let mut result = Vec::new();
-        let mut total_providers = 0usize;
-        let mut circuit_open_count = 0usize;
-
-        // 检查该应用的自动故障转移开关是否开启（从 proxy_config 表读取）
         let auto_failover_enabled = match self.db.get_proxy_config_for_app(app_type).await {
             Ok(config) => config.auto_failover_enabled,
             Err(e) => {
@@ -513,6 +492,24 @@ impl ProviderRouter {
                 false
             }
         };
+        self.select_providers_with_current(app_type, current_provider, auto_failover_enabled, None)
+            .await
+    }
+
+    /// 同 [`Self::select_providers`]，正在用的那家由调用方给出：处理请求时上下文已经读过
+    /// 一次（要读 `live-state.json` 和这一行），不用每个请求再读一遍，两处用的也一定是
+    /// 同一家。故障转移开关也沿用本次请求已读取的配置。
+    /// `session_id` 只接收客户端提供的稳定标识，用于 fork 会话粘性。
+    pub async fn select_providers_with_current(
+        &self,
+        app_type: &str,
+        current_provider: Option<Provider>,
+        auto_failover_enabled: bool,
+        session_id: Option<&str>,
+    ) -> Result<Vec<Provider>, AppError> {
+        let mut result = Vec::new();
+        let mut total_providers = 0usize;
+        let mut circuit_open_count = 0usize;
 
         if auto_failover_enabled
             && current_provider
@@ -526,20 +523,8 @@ impl ProviderRouter {
             result.push(current_provider.expect("checked above"));
         } else if auto_failover_enabled {
             // 故障转移开启：仅按队列顺序依次尝试（P1 → P2 → ...）
-            let all_providers = self.db.get_all_providers(app_type)?;
-
             // 使用 DAO 返回的排序结果，确保和前端展示一致
-            let ordered_ids: Vec<String> = self
-                .db
-                .get_failover_queue(app_type)?
-                .into_iter()
-                .map(|item| item.provider_id)
-                .collect();
-
-            for provider_id in ordered_ids {
-                let Some(provider) = all_providers.get(&provider_id).cloned() else {
-                    continue;
-                };
+            for provider in self.db.get_failover_providers(app_type)? {
                 if !provider_supports_failover(app_type, &provider) {
                     continue;
                 }
@@ -1403,7 +1388,7 @@ mod tests {
 
         // 第一轮：无绑定，rotate 从队首 a 起；仅成功后记住 a。
         let first = router
-            .select_providers_with_current("claude", None, Some("sess-1"))
+            .select_providers_with_current("claude", None, true, Some("sess-1"))
             .await
             .unwrap();
         assert_eq!(first[0].id, "a");
@@ -1412,7 +1397,7 @@ mod tests {
 
         // 第二轮同一会话：粘性命中，仍是 a（若无粘性 rotate 本会给 b）
         let second = router
-            .select_providers_with_current("claude", None, Some("sess-1"))
+            .select_providers_with_current("claude", None, true, Some("sess-1"))
             .await
             .unwrap();
         assert_eq!(second[0].id, "a");
@@ -1420,7 +1405,7 @@ mod tests {
 
         // 另一个会话不受 sess-1 绑定影响，rotate 继续推进 → b 作主路由
         let other = router
-            .select_providers_with_current("claude", None, Some("sess-2"))
+            .select_providers_with_current("claude", None, true, Some("sess-2"))
             .await
             .unwrap();
         assert_eq!(other[0].id, "b");
@@ -1434,7 +1419,7 @@ mod tests {
         db.set_provider_sticky_enabled("claude", true).unwrap();
 
         let first = router
-            .select_providers_with_current("claude", None, Some("sess"))
+            .select_providers_with_current("claude", None, true, Some("sess"))
             .await
             .unwrap();
         assert_eq!(first[0].id, "a");
@@ -1445,12 +1430,12 @@ mod tests {
 
         // Selecting a (or recording its failure) does not pin the next attempt.
         let second = router
-            .select_providers_with_current("claude", None, Some("sess"))
+            .select_providers_with_current("claude", None, true, Some("sess"))
             .await
             .unwrap();
         assert_eq!(second[0].id, "b");
         let third = router
-            .select_providers_with_current("claude", None, Some("sess"))
+            .select_providers_with_current("claude", None, true, Some("sess"))
             .await
             .unwrap();
         assert_eq!(third[0].id, "a");
@@ -1463,7 +1448,7 @@ mod tests {
         let (db, router) = setup_two_provider_failover("order").await;
         db.set_provider_sticky_enabled("claude", true).unwrap();
         let first = router
-            .select_providers_with_current("claude", None, Some("sess"))
+            .select_providers_with_current("claude", None, true, Some("sess"))
             .await
             .unwrap();
         assert_eq!(first[0].id, "a");
@@ -1474,7 +1459,7 @@ mod tests {
         router.remember_successful_provider("claude", "sess", "b");
 
         let next = router
-            .select_providers_with_current("claude", None, Some("sess"))
+            .select_providers_with_current("claude", None, true, Some("sess"))
             .await
             .unwrap();
         assert_eq!(next.len(), 2, "a must still be below its breaker threshold");
@@ -1489,12 +1474,12 @@ mod tests {
         let (_db, router) = setup_two_provider_failover("rotate").await;
         // 未开启粘性：即使带 session，也应照常轮询
         let first = router
-            .select_providers_with_current("claude", None, Some("sess-1"))
+            .select_providers_with_current("claude", None, true, Some("sess-1"))
             .await
             .unwrap();
         router.remember_successful_provider("claude", "sess-1", &first[0].id);
         let second = router
-            .select_providers_with_current("claude", None, Some("sess-1"))
+            .select_providers_with_current("claude", None, true, Some("sess-1"))
             .await
             .unwrap();
         assert_eq!(first[0].id, "a");
@@ -1542,7 +1527,7 @@ mod tests {
 
         // a 成功后绑定 sess。
         let first = router
-            .select_providers_with_current("claude", None, Some("sess"))
+            .select_providers_with_current("claude", None, true, Some("sess"))
             .await
             .unwrap();
         assert_eq!(first[0].id, "a");
@@ -1555,7 +1540,7 @@ mod tests {
             .unwrap();
 
         let second = router
-            .select_providers_with_current("claude", None, Some("sess"))
+            .select_providers_with_current("claude", None, true, Some("sess"))
             .await
             .unwrap();
         assert_eq!(second.len(), 2);
@@ -1564,14 +1549,14 @@ mod tests {
         // 若本轮全失败，不能提前改绑 b；a 恢复后仍是最近成功的供应商。
         router.reset_provider_breaker("a", "claude").await;
         let third = router
-            .select_providers_with_current("claude", None, Some("sess"))
+            .select_providers_with_current("claude", None, true, Some("sess"))
             .await
             .unwrap();
         assert_eq!(third[0].id, "a");
 
         router.remember_successful_provider("claude", "sess", "b");
         let fourth = router
-            .select_providers_with_current("claude", None, Some("sess"))
+            .select_providers_with_current("claude", None, true, Some("sess"))
             .await
             .unwrap();
         assert_eq!(fourth[0].id, "b");
