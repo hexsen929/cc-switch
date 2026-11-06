@@ -15,13 +15,20 @@ describe("useCodexConfigState", () => {
               auth: {},
               config: 'model = "main-model"\n',
               autoReviewModel: reviewer,
-              modelCatalog: { models: [], autoReviewModel: "old-reviewer" },
+              modelCatalog: {
+                models: [],
+                autoReviewModel: "old-reviewer",
+                officialSpeedTiers: true,
+              },
             },
           },
         }),
       );
       expect(result.current.codexAutoReviewModel).toBe(reviewer);
       expect(result.current.codexCatalogModels).toEqual([]);
+      expect(result.current.codexOfficialSpeedTiers).toBe(true);
+      act(() => result.current.setCodexOfficialSpeedTiers(false));
+      expect(result.current.codexAutoReviewModel).toBe(reviewer);
     },
   );
 
@@ -82,6 +89,7 @@ describe("useCodexConfigState", () => {
         auth: {},
         config: 'model = "main-model"\n',
         autoReviewModel: "stored-reviewer",
+        modelCatalog: { officialSpeedTiers: true },
       },
     };
     const { result } = renderHook(() => useCodexConfigState({ initialData }));
@@ -102,6 +110,7 @@ describe("useCodexConfigState", () => {
     );
     expect(result.current.codexAutoReviewModel).toBe("preset-reviewer");
     expect(result.current.shouldSaveCodexAutoReviewModel).toBe(false);
+    expect(result.current.codexOfficialSpeedTiers).toBe(false);
     expect(serializeModelAliases(result.current.codexModelAliases)).toEqual(
       presetAliases,
     );

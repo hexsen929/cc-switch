@@ -210,6 +210,8 @@ const PromptFormPanel: React.FC<PromptFormPanelProps> = ({
               aria-invalid={showNameError}
               aria-describedby={showNameError ? nameHintId : undefined}
               autoComplete="off"
+              autoCorrect="off"
+              autoCapitalize="off"
               className={cn(promptFieldClass, "h-8")}
             />
             {showNameError ? (
@@ -232,6 +234,8 @@ const PromptFormPanel: React.FC<PromptFormPanelProps> = ({
               disabled={saving}
               placeholder={t("prompts.descriptionPlaceholder")}
               autoComplete="off"
+              autoCorrect="off"
+              autoCapitalize="off"
               className={cn(promptFieldClass, "h-8")}
             />
           </div>
@@ -250,6 +254,8 @@ const PromptFormPanel: React.FC<PromptFormPanelProps> = ({
               onChange={(event) => setContent(event.target.value)}
               disabled={saving}
               spellCheck={false}
+              autoCorrect="off"
+              autoCapitalize="off"
               placeholder={
                 isHermes
                   ? t("prompts.contentPlaceholderHermes")

@@ -402,7 +402,8 @@
     "proxyOfficialWarning": "当前供应商 {{name}} 是官方供应商，建议切换到第三方供应商后再使用本地路由",
     "proxyReasonClaudeDesktop": "使用 Claude Desktop 本地路由模式",
     "providerResourcesWarning": "配置已生效，但部分供应商资源同步失败",
-    "providerResourcesSynced": "供应商资源已同步"
+    "providerResourcesSynced": "供应商资源已同步",
+    "proxyLoopbackHijacked": "{{app}} 发往本地路由 {{origin}} 的请求会被系统代理接走，{{app}} 会报 502 错误。请在代理工具里让本机地址直连（例如 Clash 规则最前面加 IP-CIDR,127.0.0.0/8,DIRECT,no-resolve），改完后彻底退出 {{app}} 再打开。"
   },
   "confirm": {
     "deleteProvider": "删除供应商",
@@ -1012,6 +1013,7 @@
     "browsePlaceholderHermes": "例如：/home/<你的用户名>/.hermes",
     "browsePlaceholderPi": "例如：/home/<你的用户名>/.pi/agent",
     "browsePlaceholderOmp": "例如：/home/<你的用户名>/.omp/agent",
+    "browsePlaceholderDsh": "例如：/home/<你的用户名>/.dsh",
     "browseDirectory": "浏览目录",
     "resetDefault": "恢复默认目录（需保存后生效）",
     "checkForUpdates": "检查更新",
@@ -1071,6 +1073,7 @@
     "toolActionDone": "{{count}} 个工具{{action}}完成",
     "toolActionPartial": "{{succeeded}} 个{{action}}成功，{{failed}} 个失败",
     "toolActionFailed": "安装/升级命令执行失败",
+    "toolActionBinCollision": "{{path}} 已经有一个同名文件，多半来自另一种安装方式，npm 不会覆盖它。请先确认它是什么，改名备份后再重试；不要用 npm 的 --force，它会直接覆盖这个文件。",
     "toolActionInProgress": "应用操作仍在进行中",
     "toolActionInProgressDetail": "{{tool}} 已有安装、升级或卸载任务正在后台处理，请等待完成，无需重复操作。",
     "toolNotRunnable": "已安装但无法运行（未探测到版本）",
@@ -2132,6 +2135,8 @@
     "autoReviewModelCodexDefault": "Codex 默认（codex-auto-review）",
     "autoReviewModelMainDefault": "主模型自己审批（默认）",
     "autoReviewModelNoList": "无需配置模型列表；可直接填写审批模型，留空使用 codex-auto-review。",
+    "officialSpeedTiersLabel": "保留官方 Fast 档",
+    "officialSpeedTiersHint": "让模型列表里的 GPT 模型保留官方的 Fast 速度档，Codex 选了 Fast 后请求会带 service_tier=priority。只有转发官方 ChatGPT 账号的中转（如 CPA）才认，会更快消耗额度；其他上游可能报错或按更高价计费。打开后，之前在官方卡下选过的 Fast 会立刻在这家生效。聚合模式下不生效。改完需要重启 Codex。",
     "modelListHint": "修改后需要重启 Codex。",
     "modelListDefaultHelp": "这些模型会出现在 Codex 的 /model 里，第一行是默认模型。名字是官方 GPT 模型的行按官方条目生成，行里的显示名、窗口和思考等级不生效。",
     "addCatalogModel": "手动添加",
@@ -2775,7 +2780,7 @@
     "officialSubscriptionHint": "读取本机 CLI 的 OAuth 凭据，并调用官方接口查询订阅额度。默认关闭，只有启用后才会请求。",
     "officialSubscriptionHintAgy": "优先使用授权中心保存的账号令牌查询官方额度；识别不到当前登录或平台不支持切号时，回退到 agy 自带的 /usage 命令（约 10 秒）。默认关闭，启用后才会查询。",
     "resetDate": "重置日期",
-    "premiumRequests": "Premium 请求",
+    "premiumRequests": "Credits",
     "credentialsConfig": "凭证配置",
     "credentialsHint": "留空则自动使用供应商配置",
     "optional": "可选",
@@ -4668,7 +4673,7 @@
       "agyThirdPartyWeekly": "Claude 每周",
       "monthly": "每月",
       "credits": "额度",
-      "copilotPremium": "高级请求"
+      "copilotPremium": "Credits"
     },
     "fiveHour": "5 小时",
     "sevenDay": "每周",
@@ -4688,7 +4693,11 @@
     "weeklyLimit": "每周",
     "monthly": "每月",
     "credits": "额度",
-    "copilotPremium": "高级请求",
+    "copilotPremium": "Credits",
+    "copilotCompletions": "代码补全",
+    "copilotChat": "聊天",
+    "copilotCount": "剩余 {{remaining}} / 共 {{total}}",
+    "copilotNotIncluded": "当前计划不含",
     "utilization": "{{value}}%",
     "resetsIn": "{{time}}后重置",
     "extraUsage": "超额用量",
@@ -5072,6 +5081,7 @@
     "connection": {
       "unchecked": "未检查",
       "connected": "连接成功",
+      "authRequired": "服务器可连接，但要求登录授权（如 OAuth）。CC Switch 检测时不带客户端自己的登录凭据：客户端里已登录即可正常使用；如果在请求头里配置了令牌，请确认它仍然有效",
       "disconnected": "连接失败",
       "checking": "正在检查连接",
       "disabled": "未启用"

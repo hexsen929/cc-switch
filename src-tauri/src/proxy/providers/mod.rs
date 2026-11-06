@@ -25,6 +25,7 @@ pub(crate) mod codex_responses_sse;
 pub mod codex_tool_strip;
 pub mod copilot_auth;
 pub mod copilot_model_map;
+pub(crate) mod copilot_responses;
 mod gemini;
 pub(crate) mod gemini_schema;
 pub mod gemini_shadow;

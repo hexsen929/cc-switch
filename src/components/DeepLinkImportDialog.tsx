@@ -561,9 +561,7 @@ export function DeepLinkImportDialog() {
                             }
                           >
                             {idx === 0 ? "🔹 " : "└ "}
-                            {endpointRisk && (
-                              <span aria-hidden="true">⚠ </span>
-                            )}
+                            {endpointRisk && <span aria-hidden="true">⚠ </span>}
                             {ep.trim()}
                             {idx === 0 && request.endpoint?.includes(",") && (
                               <span className="text-xs text-fg-2 ml-2">
@@ -592,7 +590,8 @@ export function DeepLinkImportDialog() {
                   </div>
 
                   {/* Model Fields - 根据应用类型显示不同的模型字段 */}
-                  {request.app === "claude" ? (
+                  {request.app === "claude" ||
+                  request.app === "claude-desktop" ? (
                     <>
                       {/* Claude 四种模型字段 */}
                       {request.haikuModel && (

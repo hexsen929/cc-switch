@@ -878,8 +878,8 @@ const UnifiedMcpPanel: React.FC<UnifiedMcpPanelProps> = ({
                           .join(listSeparator);
                         const hasDocs = Boolean(
                           server.docs ||
-                            server.homepage ||
-                            mcpPresets.find((item) => item.id === id)?.docs,
+                          server.homepage ||
+                          mcpPresets.find((item) => item.id === id)?.docs,
                         );
                         const displayName = server.name?.trim() || id;
                         const hasCustomName = Boolean(
@@ -906,11 +906,13 @@ const UnifiedMcpPanel: React.FC<UnifiedMcpPanelProps> = ({
                                     "h-2 w-2 shrink-0 rounded-full",
                                     connection === "connected"
                                       ? "bg-success"
-                                      : connection === "disconnected"
-                                        ? "bg-danger"
-                                        : connection === "checking"
-                                          ? "animate-pulse bg-fg-3"
-                                          : "bg-fg-3",
+                                      : connection === "authRequired"
+                                        ? "bg-warning"
+                                        : connection === "disconnected"
+                                          ? "bg-danger"
+                                          : connection === "checking"
+                                            ? "animate-pulse bg-fg-3"
+                                            : "bg-fg-3",
                                   )}
                                 />
                                 <span

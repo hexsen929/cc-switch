@@ -402,7 +402,8 @@
     "proxyOfficialWarning": "Current provider {{name}} is official. Consider switching to a third-party provider before using local routing.",
     "proxyReasonClaudeDesktop": "Using Claude Desktop local routing mode",
     "providerResourcesWarning": "Configuration applied, but some provider resources failed to sync",
-    "providerResourcesSynced": "Provider resources synced"
+    "providerResourcesSynced": "Provider resources synced",
+    "proxyLoopbackHijacked": "Requests from {{app}} to the local route {{origin}} will be picked up by the system proxy, so {{app}} will fail with 502 errors. Make loopback addresses connect directly in your proxy tool (for example, add IP-CIDR,127.0.0.0/8,DIRECT,no-resolve at the top of your Clash rules), then fully quit and reopen {{app}}."
   },
   "confirm": {
     "deleteProvider": "Delete Provider",
@@ -1012,6 +1013,7 @@
     "browsePlaceholderHermes": "e.g., /home/<your-username>/.hermes",
     "browsePlaceholderPi": "e.g., /home/<your-username>/.pi/agent",
     "browsePlaceholderOmp": "e.g., /home/<your-username>/.omp/agent",
+    "browsePlaceholderDsh": "e.g., /home/<your-username>/.dsh",
     "browseDirectory": "Browse Directory",
     "resetDefault": "Reset to default directory (takes effect after saving)",
     "checkForUpdates": "Check for Updates",
@@ -1071,6 +1073,7 @@
     "toolActionDone": "{{action}} completed for {{count}} tool(s)",
     "toolActionPartial": "{{action}} succeeded for {{succeeded}}, failed for {{failed}}",
     "toolActionFailed": "Install/update command failed",
+    "toolActionBinCollision": "A file already exists at {{path}}, probably from another installation method, and npm won't overwrite it. Check what it is, rename it as a backup, then try again. Don't use npm's --force: it overwrites the file outright.",
     "toolActionInProgress": "An app operation is still running",
     "toolActionInProgressDetail": "{{tool}} already has an installation, update or uninstall running in the background. Please wait for it to finish.",
     "toolNotRunnable": "Installed but not runnable (no version detected)",
@@ -2132,6 +2135,8 @@
     "autoReviewModelCodexDefault": "Codex default (codex-auto-review)",
     "autoReviewModelMainDefault": "Main model reviews itself (default)",
     "autoReviewModelNoList": "No model list is required. Enter a reviewer model directly; blank uses codex-auto-review.",
+    "officialSpeedTiersLabel": "Keep official Fast tier",
+    "officialSpeedTiersHint": "Keeps the official Fast speed tier on GPT models in the model list, so choosing Fast in Codex sends service_tier=priority. Only relays that forward to official ChatGPT accounts (such as CPA) accept it, and it uses quota faster; other upstreams may reject it or bill it at a higher price. Once on, a Fast choice you made under the official card takes effect on this provider right away. Not used in aggregation mode. Restart Codex after changing it.",
     "modelListHint": "Restart Codex after changes.",
     "modelListDefaultHelp": "These models appear in Codex's /model menu; the first row is the default model. Rows named after an official GPT model use the official entry, so their display name, window and reasoning levels are ignored.",
     "addCatalogModel": "Add manually",
@@ -2775,7 +2780,7 @@
     "officialSubscriptionHint": "Reads the local CLI OAuth credentials and calls the official API to query subscription quota. Disabled by default and only requests after you enable it.",
     "officialSubscriptionHintAgy": "Queries the official quota using account tokens saved in the Auth Center. If the current sign-in cannot be identified or the platform does not support account switching, falls back to agy's /usage command (about 10 seconds). Disabled by default; runs after you enable it.",
     "resetDate": "Reset date",
-    "premiumRequests": "Premium Requests",
+    "premiumRequests": "Credits",
     "credentialsConfig": "Credentials",
     "credentialsHint": "Leave empty to use provider config",
     "optional": "optional",
@@ -4668,7 +4673,7 @@
       "agyThirdPartyWeekly": "Claude Wk",
       "monthly": "Mo",
       "credits": "Credits",
-      "copilotPremium": "Premium"
+      "copilotPremium": "Credits"
     },
     "fiveHour": "5-hour",
     "sevenDay": "Weekly",
@@ -4688,7 +4693,11 @@
     "weeklyLimit": "Weekly",
     "monthly": "Monthly",
     "credits": "Credits",
-    "copilotPremium": "Premium",
+    "copilotPremium": "Credits",
+    "copilotCompletions": "Completions",
+    "copilotChat": "Chat",
+    "copilotCount": "{{remaining}} of {{total}} left",
+    "copilotNotIncluded": "Not in your plan",
     "utilization": "{{value}}%",
     "resetsIn": "Resets in {{time}}",
     "extraUsage": "Extra Usage",
@@ -5072,6 +5081,7 @@
     "connection": {
       "unchecked": "Not checked",
       "connected": "Connection successful",
+      "authRequired": "Server reachable but requires sign-in (e.g. OAuth). CC Switch checks without your client's own login: if you've signed in from the client, it works there; if you set a token in the headers, make sure it is still valid",
       "disconnected": "Connection failed",
       "checking": "Checking connection",
       "disabled": "Not enabled"

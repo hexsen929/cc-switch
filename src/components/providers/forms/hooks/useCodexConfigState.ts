@@ -199,6 +199,8 @@ export function useCodexConfigState({ initialData }: UseCodexConfigStateProps) {
     setCodexAutoReviewModelDraft(model);
     setCodexAutoReviewModelEdited(true);
   }, []);
+  // 保留官方 Fast 档：`modelCatalog.officialSpeedTiers`，默认关
+  const [codexOfficialSpeedTiers, setCodexOfficialSpeedTiers] = useState(false);
   const [codexAuthError, setCodexAuthError] = useState("");
 
   const isUpdatingCodexBaseUrlRef = useRef(false);
@@ -265,8 +267,8 @@ export function useCodexConfigState({ initialData }: UseCodexConfigStateProps) {
       );
       const hasLegacyReviewer = Boolean(
         modelCatalog &&
-          typeof modelCatalog === "object" &&
-          Object.prototype.hasOwnProperty.call(modelCatalog, "autoReviewModel"),
+        typeof modelCatalog === "object" &&
+        Object.prototype.hasOwnProperty.call(modelCatalog, "autoReviewModel"),
       );
       setHasStoredCodexAutoReviewModel(
         hasIndependentReviewer || hasLegacyReviewer,
@@ -281,6 +283,7 @@ export function useCodexConfigState({ initialData }: UseCodexConfigStateProps) {
             ? modelCatalog.autoReviewModel.trim()
             : "",
       );
+      setCodexOfficialSpeedTiers(modelCatalog?.officialSpeedTiers === true);
 
       // 提取 Base URL
       const initialBaseUrl = extractCodexBaseUrl(configStr);
@@ -576,6 +579,7 @@ export function useCodexConfigState({ initialData }: UseCodexConfigStateProps) {
       setCodexAutoReviewModelDraft("");
       setHasStoredCodexAutoReviewModel(false);
       setCodexAutoReviewModelEdited(false);
+      setCodexOfficialSpeedTiers(false);
 
       const baseUrl = extractCodexBaseUrl(config);
       setCodexBaseUrl(baseUrl || "");
@@ -602,6 +606,7 @@ export function useCodexConfigState({ initialData }: UseCodexConfigStateProps) {
     codexModelInstructionsFiles,
     codexAutoReviewModel,
     shouldSaveCodexAutoReviewModel,
+    codexOfficialSpeedTiers,
     codexAuthError,
     setCodexAuth,
     setCodexConfig,
@@ -609,6 +614,7 @@ export function useCodexConfigState({ initialData }: UseCodexConfigStateProps) {
     setCodexModelAliases,
     setCodexModelInstructionsFiles,
     setCodexAutoReviewModel,
+    setCodexOfficialSpeedTiers,
     handleCodexApiKeyChange,
     handleCodexBaseUrlChange,
     handleCodexModelChange,

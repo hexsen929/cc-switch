@@ -854,6 +854,7 @@ function ProviderFormFull({
     codexModelInstructionsFiles,
     codexAutoReviewModel,
     shouldSaveCodexAutoReviewModel,
+    codexOfficialSpeedTiers,
     codexAuthError,
     setCodexAuth,
     setCodexConfig,
@@ -861,6 +862,7 @@ function ProviderFormFull({
     setCodexModelAliases,
     setCodexModelInstructionsFiles,
     setCodexAutoReviewModel,
+    setCodexOfficialSpeedTiers,
     handleCodexApiKeyChange,
     handleCodexBaseUrlChange,
     handleCodexModelChange,
@@ -1880,10 +1882,14 @@ function ProviderFormFull({
           modelCatalog?: {
             models: CodexCatalogModel[];
             autoReviewModel?: string;
+            officialSpeedTiers?: boolean;
           };
         };
         if (normalizedCatalogModels.length > 0) {
           configObj.modelCatalog = { models: normalizedCatalogModels };
+          if (codexOfficialSpeedTiers) {
+            configObj.modelCatalog.officialSpeedTiers = true;
+          }
         }
         if (category !== "official" && shouldSaveCodexAutoReviewModel) {
           // Independent of the picker catalog. An explicit empty value resets
@@ -3017,6 +3023,8 @@ function ProviderFormFull({
               onModelAliasesChange={setCodexModelAliases}
               autoReviewModel={codexAutoReviewModel}
               onAutoReviewModelChange={setCodexAutoReviewModel}
+              officialSpeedTiers={codexOfficialSpeedTiers}
+              onOfficialSpeedTiersChange={setCodexOfficialSpeedTiers}
               speedTestEndpoints={speedTestEndpoints}
               customUserAgent={customUserAgent}
               onCustomUserAgentChange={setCustomUserAgent}

@@ -4,10 +4,7 @@ import { mcpApi } from "@/lib/api/mcp";
 import type { McpServer, McpServersMap } from "@/types";
 
 export type McpConnectionState =
-  | "unchecked"
-  | "checking"
-  | "connected"
-  | "disconnected";
+  "unchecked" | "checking" | "connected" | "authRequired" | "disconnected";
 
 type CheckResult = {
   /** The connection config the result was produced for. */
@@ -74,9 +71,9 @@ export function useMcpConnectivity(servers: McpServersMap | undefined) {
       const finish = () => cancelsRef.current.delete(cancel);
       const batch = mcpApi.startConnectivityChecks(
         targets,
-        ({ serverId, connected }) => {
+        ({ serverId, status }) => {
           if (disposed || !pending.delete(serverId)) return;
-          settle(serverId, connected ? "connected" : "disconnected");
+          settle(serverId, status === "failed" ? "disconnected" : status);
           if (pending.size === 0) finish();
         },
       );

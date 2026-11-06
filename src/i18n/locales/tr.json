@@ -390,7 +390,8 @@
     "windowControlFailed": "Pencere kontrolü başarısız oldu: {{error}}",
     "officialBlockedByProxy": "Yerel yönlendirme etkinken resmi sağlayıcıya geçilemez. Yönlendirmenin resmi API'lerle kullanılması hesabın yasaklanmasına neden olabilir.",
     "proxyOfficialWarning": "Mevcut sağlayıcı {{name}} resmidir. Yerel yönlendirmeyi kullanmadan önce üçüncü taraf bir sağlayıcıya geçmeyi düşünün.",
-    "proxyReasonDesktopMapping": "model eşlemesi kullanıyor (Claude Desktop yalnızca Claude model adlarını kabul eder)"
+    "proxyReasonDesktopMapping": "model eşlemesi kullanıyor (Claude Desktop yalnızca Claude model adlarını kabul eder)",
+    "proxyLoopbackHijacked": "{{app}} uygulamasından {{origin}} yerel yönlendirmesine giden istekler sistem proxy’sine takılıyor ve {{app}} 502 hatası veriyor. Proxy aracınızda geri döngü adreslerini doğrudan bağlanacak şekilde ayarlayın (örneğin Clash kurallarının en üstüne IP-CIDR,127.0.0.0/8,DIRECT,no-resolve ekleyin), ardından {{app}} uygulamasını tamamen kapatıp yeniden açın."
   },
   "confirm": {
     "deleteProvider": "Sağlayıcıyı Sil",
@@ -1178,7 +1179,9 @@
     },
     "ompConfigDir": "Oh My Pi Yapılandırma Dizini",
     "browsePlaceholderOmp": "ör. /home/<your-username>/.omp/agent",
-    "portableUpdateHint": "Taşınabilir modda yukarıdaki düğme yeni ZIP dosyasını indirir. ZIP'i açıp mevcut cc-switch.exe dosyasını yenisiyle değiştirin. Ayarlarınız ve verileriniz kullanıcı klasörünüzdeki .cc-switch dizininde bulunur ve etkilenmez."
+    "portableUpdateHint": "Taşınabilir modda yukarıdaki düğme yeni ZIP dosyasını indirir. ZIP'i açıp mevcut cc-switch.exe dosyasını yenisiyle değiştirin. Ayarlarınız ve verileriniz kullanıcı klasörünüzdeki .cc-switch dizininde bulunur ve etkilenmez.",
+    "browsePlaceholderDsh": "ör. /home/<your-username>/.dsh",
+    "toolActionBinCollision": "{{path}} konumunda, muhtemelen başka bir kurulum yönteminden kalmış bir dosya var ve npm bunun üzerine yazmıyor. Dosyayı kontrol edin, yedek olarak yeniden adlandırın ve tekrar deneyin. npm --force kullanmayın: mevcut dosyanın üzerine doğrudan yazar."
   },
   "apps": {
     "claude": "Claude",
@@ -2100,7 +2103,7 @@
     "defaultModelPlaceholder": "örneğin gpt-5.6-sol",
     "defaultModelHint": "Codex modeli varsayılan olarak talep eder. Bir model listesi eklediğinizde ilk satırı varsayılan model olur.",
     "subagentModelLabel": "Alt Aracı Modeli",
-    "autoReviewModelNoList": "Bu kartta model listesi yok: Codex onayları yalnızca ChatGPT hesaplarına yönlendirme yapan bazı aktarım hizmetlerinin kabul ettiği resmî codex-auto-review modeliyle inceler; diğerleri 404 döndürür. Bir model seçmek için yukarıdaki listeye model ekleyin.",
+    "autoReviewModelNoList": "Model listesi gerekmez. İnceleme modelini doğrudan girin; boş bırakıldığında codex-auto-review kullanılır.",
     "autoReviewModelMainDefault": "Ana model kendini inceler (varsayılan)",
     "autoReviewModelCodexDefault": "Codex varsayılanı (codex-auto-review)",
     "autoReviewModelHint": "Otomatik onay (Benim yerime onayla) açıkken bir işlemin devam edip edemeyeceğine karar veren Codex modeli. Onay istekleri konuşmayla aynı sağlayıcıya gönderilir; bu nedenle yalnızca bu kartın model listesindeki modeller seçilebilir. Birleştirme modunda bu ayar yok sayılır ve Birleştirme sekmesindeki Otomatik inceleme modeli kullanılır. Değişikliklerden sonra Codex'i yeniden başlatın.",
@@ -2148,7 +2151,9 @@
     "inactiveFieldCopied": "Kopyalandı",
     "upstreamFormatCopilotRouteHint": "Her mod, Copilot hesap kimlik bilgilerini içeren yönlendirmeyi gerektirir. Seçtiğiniz bir protokol, onu desteklemeyen modeller için açıkça başarısız olur.",
     "maxOutputTokensWarning": "Modelin veya ağ geçidinin gerçek çıkış sınırını aşmayın, aksi halde istekler 400 değerini döndürür.",
-    "routeOnlySettingsHint": "Aşağıdaki iki ayar yalnızca yönlendirme ve Birleştirme modlarında geçerlidir."
+    "routeOnlySettingsHint": "Aşağıdaki iki ayar yalnızca yönlendirme ve Birleştirme modlarında geçerlidir.",
+    "officialSpeedTiersLabel": "Resmî Fast hız düzeyini koru",
+    "officialSpeedTiersHint": "Model listesindeki GPT modellerinin resmî Fast hız düzeyini korur; Codex’te Fast seçilince service_tier=priority gönderilir. Yalnızca resmî ChatGPT hesaplarına yönlendiren aktarım hizmetleri (CPA gibi) bunu kabul eder ve kota daha hızlı tükenir. Diğer sağlayıcılar isteği reddedebilir veya daha yüksek ücret uygulayabilir. Açıldığında resmî kartta önceden seçilen Fast bu sağlayıcıda hemen etkinleşir. Birleştirme modunda kullanılmaz. Değişiklikten sonra Codex’i yeniden başlatın."
   },
   "geminiConfig": {
     "envFile": "Ortam Değişkenleri (.env)",
@@ -2709,7 +2714,7 @@
     "balanceHint": "Hesap bakiyesini sorgulamak için sağlayıcının API Anahtarını otomatik olarak kullanır",
     "officialSubscriptionHint": "Yerel CLI OAuth kimlik bilgilerini okur ve abonelik kotasını sorgulamak için resmi API'yi çağırır. Varsayılan olarak devre dışıdır ve yalnızca siz etkinleştirdikten sonra istekte bulunur.",
     "resetDate": "Tarihi sıfırla",
-    "premiumRequests": "Prim Talepleri",
+    "premiumRequests": "Credits",
     "credentialsConfig": "Kimlik bilgileri",
     "credentialsHint": "Sağlayıcı yapılandırmasını kullanmak için boş bırakın",
     "optional": "isteğe bağlı",
@@ -4243,7 +4248,7 @@
       "geminiFlashLite": "Lite",
       "monthly": "Ay",
       "credits": "Kredi",
-      "copilotPremium": "Premium",
+      "copilotPremium": "Credits",
       "agyGeminiFiveHour": "Gemini 5 sa.",
       "agyGeminiWeekly": "Gemini haftalık",
       "agyThirdPartyFiveHour": "Claude 5 sa.",
@@ -4261,7 +4266,7 @@
     "weeklyLimit": "Haftalık",
     "monthly": "Aylık",
     "credits": "Kredi",
-    "copilotPremium": "Premium",
+    "copilotPremium": "Credits",
     "utilization": "{{value}}%",
     "resetsIn": "{{time}} sonra sıfırlanır",
     "extraUsage": "Ekstra Kullanım",
@@ -4275,7 +4280,11 @@
     "agyGeminiWeekly": "Gemini haftalık",
     "agyThirdPartyFiveHour": "Claude/GPT 5 saatlik",
     "agyThirdPartyWeekly": "Claude/GPT haftalık",
-    "expiredHintAccounts": "Hesaplar bölümünde bu hesapla yeniden oturum açın"
+    "expiredHintAccounts": "Hesaplar bölümünde bu hesapla yeniden oturum açın",
+    "copilotCompletions": "Tamamlamalar",
+    "copilotChat": "Sohbet",
+    "copilotCount": "{{total}} üzerinden {{remaining}} kaldı",
+    "copilotNotIncluded": "Planınıza dahil değil"
   },
   "nav": {
     "mainLabel": "Ana gezinme",
@@ -4654,7 +4663,8 @@
       "connected": "Bağlantı başarılı",
       "disconnected": "Bağlantı başarısız",
       "checking": "Bağlantı kontrol ediliyor",
-      "disabled": "Etkin değil"
+      "disabled": "Etkin değil",
+      "authRequired": "Sunucuya erişilebiliyor ancak oturum açılması gerekiyor (ör. OAuth). CC Switch istemcinizin oturumunu kullanmadan denetler: istemcide oturum açtıysanız orada çalışır. Başlıklara bir token eklediyseniz hâlâ geçerli olduğundan emin olun."
     },
     "noun": "MCP sunucuları",
     "listSeparator": ", ",
