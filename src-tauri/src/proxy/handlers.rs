@@ -4101,10 +4101,15 @@ mod tests {
             ..Default::default()
         });
         let state = ProxyState::for_test(Arc::new(Database::memory().unwrap()));
+        let mut headers = axum::http::HeaderMap::new();
+        headers.insert(
+            "session-id",
+            "virtual-tools-session-00000001".parse().unwrap(),
+        );
         let ctx = RequestContext::new(
             &state,
             &request,
-            &axum::http::HeaderMap::new(),
+            &headers,
             AppType::Codex,
             "Codex",
             "codex",
@@ -4184,6 +4189,15 @@ mod tests {
             "previous_response_id": completed["id"],
             "input": [{"type": "function_call_output", "call_id": command["call_id"], "output": "probe"}]
         });
+        assert!(ctx.session_client_provided);
+        let mut other_session = follow_up.clone();
+        assert_eq!(
+            state
+                .codex_chat_history
+                .enrich_request(&mut other_session, Some("another-session"))
+                .await,
+            0,
+        );
         assert!(
             state
                 .codex_chat_history
