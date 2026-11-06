@@ -10,7 +10,7 @@ use crate::session_manager::model::{ContentRef, ImageRef, TranscriptChunk};
 
 #[cfg(test)]
 #[path = "session_manager_tests.rs"]
-mod tests;
+mod transcript_tests;
 
 #[tauri::command]
 pub async fn list_sessions() -> Result<Vec<session_manager::SessionMeta>, String> {

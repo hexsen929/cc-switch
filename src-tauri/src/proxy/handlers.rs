@@ -5460,6 +5460,7 @@ mod copilot_native_responses_tests {
                 upstream_model: "gpt-test".to_string(),
                 original_model: "gpt-test".to_string(),
             }),
+            None,
         )
         .await
         .unwrap();
@@ -5919,6 +5920,7 @@ mod copilot_grok_responses_tests {
                 upstream_model: "gpt-test".to_string(),
                 original_model: "gpt-test".to_string(),
             }),
+            None,
         )
         .await
         .unwrap();
