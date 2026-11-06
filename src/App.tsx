@@ -1595,7 +1595,10 @@ function App() {
     onConfigureUsage: setUsageProvider,
     onOpenWebsite: handleOpenWebsite,
     onOpenTerminal:
-      activeApp === "claude" || activeApp === "codex" || activeApp === "agy"
+      activeApp === "claude" ||
+      activeApp === "codex" ||
+      activeApp === "agy" ||
+      activeApp === "grokbuild"
         ? (provider: Provider) =>
             setTerminalTarget({ provider, appId: activeApp })
         : undefined,
