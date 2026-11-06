@@ -2434,7 +2434,11 @@ async fn handle_codex_virtual_tool_stream(
     })?;
     state
         .codex_chat_history
-        .record_response(&responses_response)
+        .record_response(
+            &responses_response,
+            ctx.session_client_provided
+                .then_some(ctx.session_id.as_str()),
+        )
         .await;
 
     if let Some(usage) = TokenUsage::from_codex_response_auto(&responses_response) {
@@ -4183,7 +4187,11 @@ mod tests {
         assert!(
             state
                 .codex_chat_history
-                .enrich_request(&mut follow_up)
+                .enrich_request(
+                    &mut follow_up,
+                    ctx.session_client_provided
+                        .then_some(ctx.session_id.as_str()),
+                )
                 .await
                 > 0
         );

@@ -864,7 +864,7 @@ mod tests {
                 "type": "function_call", "call_id": "call_partial_signature", "name": "exec_command", "arguments": "{}",
                 "extra_content": {"google": {"thought_signature": "cached-real", "cached_field": true}, "cached_vendor": {"kept": true}}
             }]
-        })).await;
+        }), None).await;
         for (current, expected) in [
             (
                 json!({"google": {}, "client_vendor": {"kept": true}}),
@@ -887,7 +887,7 @@ mod tests {
                     {"type": "function_call_output", "call_id": "call_partial_signature", "output": "done"}
                 ]
             });
-            assert_eq!(history.enrich_request(&mut request).await, 1);
+            assert_eq!(history.enrich_request(&mut request, None).await, 1);
             let mut chat =
                 super::super::transform_codex_chat::responses_to_chat_completions(request).unwrap();
             assert_eq!(
