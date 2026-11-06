@@ -561,7 +561,9 @@ export function DeepLinkImportDialog() {
                             }
                           >
                             {idx === 0 ? "🔹 " : "└ "}
-                            {endpointRisk && <span aria-hidden="true">⚠ </span>}
+                            {endpointRisk && (
+                              <span aria-hidden="true">⚠ </span>
+                            )}
                             {ep.trim()}
                             {idx === 0 && request.endpoint?.includes(",") && (
                               <span className="text-xs text-fg-2 ml-2">
