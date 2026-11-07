@@ -1425,7 +1425,7 @@ mod tests {
     fn auto_review_catalog_uses_a_copy_and_preserves_provider_catalog_pointer() {
         use super::{plan, Owner, Prepared, Target};
         use crate::database::Database;
-        use crate::live::project::codex::{CATALOG_FILENAME, MODEL_CATALOG_JSON};
+        use crate::live::project::codex::{catalog_pointer_value, MODEL_CATALOG_JSON};
         use crate::provider::Provider;
         use serde_json::Value;
         use toml_edit::{DocumentMut, Item};
@@ -1476,7 +1476,7 @@ requires_openai_auth = true
                 .unwrap();
             assert_eq!(
                 effective.get(MODEL_CATALOG_JSON).and_then(Item::as_str),
-                Some(CATALOG_FILENAME)
+                Some(catalog_pointer_value(dir.path()).as_str())
             );
             let catalog: Value = serde_json::from_slice(planned.catalog.as_ref().unwrap()).unwrap();
             assert_eq!(
