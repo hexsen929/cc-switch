@@ -9723,7 +9723,13 @@ mod tests {
             let mut p3 = provider("p3", &large);
             p3.settings_config["modelCatalog"] =
                 json!({"models":[{"model":"claude-sonnet-4-5", "contextWindow":16384}]});
-            let fwd = forwarder(2, "p1");
+            let p1 = provider("p1", &small);
+            let db = Arc::new(Database::memory().unwrap());
+            for candidate in [&p1, &p2, &p3] {
+                db.save_provider("claude", candidate).unwrap();
+            }
+            let mut fwd = forwarder(2, "p1");
+            fwd.router = Arc::new(ProviderRouter::new(db));
             // The small provider is a half-open probe. Capacity rejection must
             // return its slot without counting a provider failure.
             let initial = fwd.router.allow_provider_request("p1", "claude").await;
@@ -9746,7 +9752,7 @@ mod tests {
                 .await
                 .unwrap()
                 .failed_requests;
-            let result = send(&fwd, vec![provider("p1", &small), p2, p3], plain_body()).await;
+            let result = send(&fwd, vec![p1, p2, p3], plain_body()).await;
             assert_eq!(
                 result.ok().map(|result| result.provider.id),
                 Some("p3".into())
