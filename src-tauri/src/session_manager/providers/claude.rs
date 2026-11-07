@@ -27,7 +27,7 @@ use super::blocks::{
 };
 use super::utils::{
     extract_text, parse_timestamp_to_ms, path_basename, read_head_tail_lines, truncate_summary,
-    FileParseCache, JsonlSpan, LineSpans, TITLE_MAX_CHARS,
+    FileParseCache, JsonlSpan, LineSpans, ScanStatus, TITLE_MAX_CHARS,
 };
 
 const PROVIDER_ID: &str = "claude";
@@ -36,11 +36,19 @@ const PROVIDER_ID: &str = "claude";
 static PARSE_CACHE: LazyLock<FileParseCache> = LazyLock::new(FileParseCache::new);
 
 pub fn scan_sessions() -> Vec<SessionMeta> {
-    let root = get_claude_config_dir().join("projects");
-    let mut files = Vec::new();
-    collect_jsonl_files(&root, &mut files);
+    scan_sessions_with_status(&mut ScanStatus::default())
+}
 
-    let mut sessions = PARSE_CACHE.scan(files, scan_session_file);
+pub(crate) fn scan_sessions_with_status(status: &mut ScanStatus) -> Vec<SessionMeta> {
+    let root = get_claude_config_dir().join("projects");
+    scan_sessions_in_root(&root, status)
+}
+
+pub(crate) fn scan_sessions_in_root(root: &Path, status: &mut ScanStatus) -> Vec<SessionMeta> {
+    let mut files = Vec::new();
+    collect_jsonl_files_with_status(root, &mut files, status);
+
+    let mut sessions = PARSE_CACHE.scan_with_status(files, scan_session_file, status);
     // Sidecar metadata is written separately from the transcript and must not
     // be hidden by the transcript's mtime/size cache.
     for meta in &mut sessions {
@@ -371,20 +379,11 @@ fn infer_session_id_from_filename(path: &Path) -> Option<String> {
         .map(|stem| stem.to_string())
 }
 
-fn collect_jsonl_files(root: &Path, files: &mut Vec<PathBuf>) {
-    if !root.exists() {
-        return;
-    }
-
-    let entries = match std::fs::read_dir(root) {
-        Ok(entries) => entries,
-        Err(_) => return,
-    };
-
-    for entry in entries.flatten() {
+fn collect_jsonl_files_with_status(root: &Path, files: &mut Vec<PathBuf>, status: &mut ScanStatus) {
+    for entry in status.entries(root) {
         let path = entry.path();
-        if path.is_dir() {
-            collect_jsonl_files(&path, files);
+        if status.is_dir(&path) {
+            collect_jsonl_files_with_status(&path, files, status);
         } else if path.extension().and_then(|ext| ext.to_str()) == Some("jsonl") {
             files.push(path);
         }
@@ -2252,6 +2251,21 @@ mod tests {
         assert!(meta.read_only);
         assert!(meta.resume_command.is_none());
         assert_eq!(transcript_sidecar(&path), temp.path().join("lead"));
+        let mut status = ScanStatus::default();
+        let first = scan_sessions_in_root(temp.path(), &mut status);
+        assert!(!status.incomplete);
+        assert_eq!(first[0].agent_type.as_deref(), Some("Explore"));
+        std::fs::write(
+            path.with_extension("meta.json"),
+            r#"{"agentType":"Review","description":"Changed task","parentAgentId":"reviewer"}"#,
+        )
+        .unwrap();
+        let next = scan_sessions_in_root(temp.path(), &mut status);
+        assert!(!status.incomplete);
+        assert_eq!(next[0].agent_type.as_deref(), Some("Review"));
+        assert_eq!(next[0].task.as_deref(), Some("Changed task"));
+        assert!(next[0].read_only);
+        assert!(next[0].resume_command.is_none());
         assert!(load_messages(&path)
             .expect("read")
             .iter()

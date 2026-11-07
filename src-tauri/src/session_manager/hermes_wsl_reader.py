@@ -1,7 +1,9 @@
 """Fixed read-only Hermes operations; invoked through WSL, never a shell."""
 import json
+import hashlib
 import pathlib
 import sqlite3
+import struct
 import sys
 
 sys.stdout.reconfigure(encoding="utf-8")
@@ -53,6 +55,40 @@ elif operation == "messages":
         "SELECT * FROM messages WHERE session_id=?" + visible() + " ORDER BY id ASC",
         (request["session_id"],),
     )
+elif operation == "revision":
+    # Match the native revision's typed, per-session hash in the same read-only
+    # transaction. Stream rows so indexing never opens SQLite through Windows UNC.
+    schema = connection.execute(
+        "SELECT sql FROM sqlite_master WHERE type='table' AND name='messages'"
+    ).fetchone()
+    if schema is None:
+        raise ValueError("Hermes messages table is unavailable")
+    digest = hashlib.sha256(b"session-search-revision-v1hermesmessages")
+    digest.update(b"\x01")
+    digest.update(schema[0].encode("utf-8"))
+    for row in connection.execute(
+        "SELECT * FROM messages WHERE session_id=? ORDER BY rowid",
+        (request["session_id"],),
+    ):
+        digest.update(b"\x02")
+        for value in row:
+            if value is None:
+                digest.update(b"\x00")
+            elif isinstance(value, int):
+                digest.update(b"\x01" + struct.pack("<q", value))
+            elif isinstance(value, float):
+                digest.update(b"\x02" + struct.pack("<d", value))
+            else:
+                is_text = isinstance(value, str)
+                data = value.encode("utf-8") if is_text else value
+                digest.update(b"\x03" if is_text else b"\x04")
+                digest.update(struct.pack("<Q", len(data)))
+                digest.update(data)
+    hashed = digest.digest()
+    response = {
+        "modified_ns": int.from_bytes(hashed[:8], "little", signed=True) | -(1 << 63),
+        "len": int.from_bytes(hashed[8:16], "little", signed=True),
+    }
 elif operation == "cell":
     column = request["column"]
     if column not in ("content", "reasoning", "tool_calls"):

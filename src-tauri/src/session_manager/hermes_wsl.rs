@@ -85,6 +85,26 @@ pub(super) fn is_wsl(path: &Path) -> bool {
     target(path).is_some()
 }
 
+pub(super) fn revision(
+    path: &Path,
+    session_id: &str,
+) -> Result<super::search::StoredFingerprint, String> {
+    let value = read(
+        path,
+        serde_json::json!({"operation": "revision", "session_id": session_id}),
+    )?;
+    Ok(super::search::StoredFingerprint {
+        modified_ns: Some(
+            value["modified_ns"]
+                .as_i64()
+                .ok_or("Invalid Hermes WSL revision timestamp")?,
+        ),
+        len: value["len"]
+            .as_i64()
+            .ok_or("Invalid Hermes WSL revision length")?,
+    })
+}
+
 pub(super) fn read(path: &Path, request: Value) -> Result<Value, String> {
     let (distro, native) = target(path).ok_or("Invalid Hermes WSL database path")?;
     let mut command = Command::new("wsl.exe");

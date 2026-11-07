@@ -13,7 +13,15 @@ import {
 } from "@/components/ui/select";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { isLinux } from "@/lib/platform";
+import { isLinux, isMac } from "@/lib/platform";
+import {
+  setDensity,
+  setZoom,
+  useInterfacePrefs,
+  ZOOM_LEVELS,
+  type Density,
+  type ZoomLevel,
+} from "@/lib/interfacePrefs";
 import { TerminalSelect } from "@/components/settings/TerminalSettings";
 import {
   SettingsBlock,
@@ -52,6 +60,7 @@ export function GeneralSection({
   useEffect(() => {
     setSharedPath(settings.sharedInstructionFile ?? "");
   }, [settings.sharedInstructionFile]);
+  const { density, zoom } = useInterfacePrefs();
 
   return (
     <>
@@ -67,7 +76,7 @@ export function GeneralSection({
                 }
               >
                 <SelectTrigger
-                  className="h-8 w-[160px]"
+                  className="w-[160px]"
                   aria-label={t("settings.language")}
                 >
                   <SelectValue />
@@ -134,6 +143,52 @@ export function GeneralSection({
                     label: t("settings.general.quotaDisplayUsed"),
                   },
                 ]}
+              />
+            }
+          />
+          <SettingsRow
+            label={t("settings.general.density")}
+            help={{
+              title: t("settings.general.density"),
+              body: t("settings.general.densityHelp"),
+            }}
+            control={
+              <SegmentedControl<Density>
+                size="sm"
+                aria-label={t("settings.general.density")}
+                value={density}
+                onValueChange={setDensity}
+                items={[
+                  {
+                    value: "compact",
+                    label: t("settings.general.densityCompact"),
+                  },
+                  {
+                    value: "comfortable",
+                    label: t("settings.general.densityComfortable"),
+                  },
+                ]}
+              />
+            }
+          />
+          <SettingsRow
+            label={t("settings.general.zoom")}
+            help={{
+              title: t("settings.general.zoom"),
+              body: t("settings.general.zoomHelp", {
+                shortcut: isMac() ? "⌘" : "Ctrl",
+              }),
+            }}
+            control={
+              <SegmentedControl<`${ZoomLevel}`>
+                size="sm"
+                aria-label={t("settings.general.zoom")}
+                value={`${zoom}`}
+                onValueChange={(value) => setZoom(Number(value) as ZoomLevel)}
+                items={ZOOM_LEVELS.map((level) => ({
+                  value: `${level}` as const,
+                  label: `${Math.round(level * 100)}%`,
+                }))}
               />
             }
           />
