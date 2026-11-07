@@ -999,7 +999,7 @@ fn deletable_session_file(storage: &Path, session_id: &str) -> Result<PathBuf, S
     if matching.next().is_some() {
         return Err("OpenCode session metadata is ambiguous; delete it in OpenCode".to_string());
     }
-    let meta = parse_session(storage, &file)
+    let meta = parse_session_with_status(storage, &file, &mut ScanStatus::default())
         .ok_or("OpenCode session metadata cannot be read; delete it in OpenCode")?;
     if meta.session_id != session_id {
         return Err("OpenCode session metadata ID mismatch".to_string());
@@ -1143,7 +1143,8 @@ mod tests {
             r#"{"id":"prt_child","type":"text","text":"Parser found"}"#,
         )
         .unwrap();
-        let meta = parse_session(storage, &session_file).unwrap();
+        let meta =
+            parse_session_with_status(storage, &session_file, &mut ScanStatus::default()).unwrap();
         assert_eq!(meta.parent_session_id.as_deref(), Some("ses_main"));
         assert!(meta.read_only);
         assert!(meta.resume_command.is_none());
