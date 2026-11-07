@@ -5101,7 +5101,6 @@ base_url = "https://cc-api.pipellm.ai/v1"`,
     auth: generateThirdPartyAuth(""),
     config: `model_provider = "custom"
 model = "deepseek/deepseek-v4.1-flash-1017"
-disable_response_storage = true
 
 [model_providers.custom]
 name = "tokenplus"
