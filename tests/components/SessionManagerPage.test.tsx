@@ -705,6 +705,8 @@ describe("SessionManagerPage", () => {
     await waitFor(() => expect(sync).toHaveBeenCalledTimes(1));
 
     // 列表内容不变（正文可能变了）：刷新后仍要再同步一次
+    // 日期在 beforeEach 固定；推进时间，让这次成功读取有新的 dataUpdatedAt。
+    vi.setSystemTime(Date.now() + 1000);
     await userEvent.click(
       screen.getByRole("button", { name: "会话的更多操作" }),
     );
