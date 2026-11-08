@@ -391,7 +391,14 @@
     "officialBlockedByProxy": "Yerel yönlendirme etkinken resmi sağlayıcıya geçilemez. Yönlendirmenin resmi API'lerle kullanılması hesabın yasaklanmasına neden olabilir.",
     "proxyOfficialWarning": "Mevcut sağlayıcı {{name}} resmidir. Yerel yönlendirmeyi kullanmadan önce üçüncü taraf bir sağlayıcıya geçmeyi düşünün.",
     "proxyReasonDesktopMapping": "model eşlemesi kullanıyor (Claude Desktop yalnızca Claude model adlarını kabul eder)",
-    "proxyLoopbackHijacked": "{{app}} uygulamasından {{origin}} yerel yönlendirmesine giden istekler sistem proxy’sine takılıyor ve {{app}} 502 hatası veriyor. Proxy aracınızda geri döngü adreslerini doğrudan bağlanacak şekilde ayarlayın (örneğin Clash kurallarının en üstüne IP-CIDR,127.0.0.0/8,DIRECT,no-resolve ekleyin), ardından {{app}} uygulamasını tamamen kapatıp yeniden açın."
+    "proxyLoopbackHijacked": "{{app}} uygulamasından {{origin}} yerel yönlendirmesine giden istekler sistem proxy’sine takılıyor ve {{app}} 502 hatası veriyor. Proxy aracınızda geri döngü adreslerini doğrudan bağlanacak şekilde ayarlayın (örneğin Clash kurallarının en üstüne IP-CIDR,127.0.0.0/8,DIRECT,no-resolve ekleyin), ardından {{app}} uygulamasını tamamen kapatıp yeniden açın.",
+    "codexHistorySplit": {
+      "hint": "{{previous}} grubundaki {{count}} oturum artık salt okunur",
+      "officialBucket": "resmî abonelik",
+      "thirdPartyBucket": "üçüncü taraf sağlayıcılar",
+      "migrationFinished": "{{count}} eski oturum taşındı. Devam etmek için Codex’i yeniden başlatın.",
+      "migrationFailed": "Eski oturumlar taşınamadı: {{error}}. CC Switch bir sonraki açılışta yeniden deneyecek."
+    }
   },
   "confirm": {
     "deleteProvider": "Sağlayıcıyı Sil",
@@ -411,14 +418,14 @@
     },
     "unifyCodexHistory": {
       "title": "Birleşik Codex oturum geçmişi",
-      "message": "Etkinleştirildiğinde Codex CLI’nin devam edilebilir oturum listesinde resmî abonelik ve üçüncü taraf oturumları birlikte görünür (Codex masaüstü uygulaması yakın tarihli bir güncellemeden beri tüm oturumları gösterebilir ve bu ayardan etkilenmez). Not: Diğer arka uç encrypted_content içindeki akıl yürütme verilerinin şifresini çözemediği için eski bir oturuma farklı bir sağlayıcıyla devam etmek başarısız olabilir.\n\nMevcut resmî oturum geçmişinizi de paylaşılan listeye taşıyabilirsiniz (önce ~/.cc-switch/backups konumuna yedeklenir; bu ayarı kapatırken geri yükleyebilirsiniz).",
+      "message": "Etkinleştirildiğinde resmî abonelik paylaşılan \"custom\" sağlayıcı kimliğiyle çalışır ve resmî ile üçüncü taraf oturumlar tek grupta toplanır: yeni Codex her ikisine de devam edebilir, CLI'nin devam listesi de bunları birlikte gösterir.\n\nMevcut resmî oturumlarınızı da taşıyabilirsiniz; taşırsanız CC Switch her açılışta geride kalan resmî oturumları da taşır (önce ~/.cc-switch/backups konumuna yedeklenir; bu ayarı kapatırken geri yükleyebilirsiniz). Taşımadığınız oturumlar yeni Codex'te salt okunur kalır. Taşıma bittikten sonra Codex'i yeniden başlatın.\n\nNot: Diğer arka uç encrypted_content içindeki akıl yürütme verilerinin şifresini çözemediği için eski bir oturuma farklı bir sağlayıcıyla devam etmek başarısız olabilir.",
       "migrateExisting": "Ayrıca mevcut resmi oturum geçmişini taşıyın",
       "confirm": "Anladım, etkinleştir"
     },
     "unifyCodexHistoryOff": {
       "title": "Birleşik oturum geçmişini kapat",
-      "message": "Kapatıldığında Codex CLI, resmi abonelik ve üçüncü taraf sağlayıcılar için ayrı oturum listelerine geri döner (masaüstü uygulaması tüm oturumları göstermeye devam eder). Bu açıkken oluşturulan oturumlar birbirinden ayrılamaz, dolayısıyla üçüncü taraf geçmişinde kalırlar ve CLI bunları resmi abonelik altında göstermez.",
-      "restoreBackup": "Etkinleştirme zamanında taşınan resmi oturumları resmi geçmişe geri yükleyin (yedekten tam geri yükleme)",
+      "message": "Kapatıldığında resmî ve üçüncü taraf oturumlar yeniden iki gruba ayrılır: yeni Codex yalnızca geçerli sağlayıcının grubuna devam edebilir, diğer grup salt okunur olur. Bu açıkken oluşturulan oturumlar birbirinden ayrılamaz, bu yüzden üçüncü taraf grubunda kalırlar.",
+      "restoreBackup": "Taşınan resmî oturumları resmî gruba geri yükleyin (yedekten tam geri yükleme)",
       "confirm": "Kapat"
     },
     "usage": {
@@ -918,7 +925,7 @@
     "preserveCodexOfficialAuthOnSwitch": "Doğrudan geçişler için resmi giriş bilgilerini koruyun",
     "preserveCodexOfficialAuthOnSwitchDescription": "Yerel yönlendirme kapalıyken üçüncü taraf anahtarları kontrol eder. Devralma yönlendirmesi her zaman Codex resmi giriş bilgilerini korur.",
     "unifyCodexSessionHistory": "Birleşik Codex oturum geçmişi",
-    "unifyCodexSessionHistoryDescription": "Yalnızca Codex CLI'yi etkiler: devam edilebilir oturum listesi yalnızca mevcut sağlayıcının oturumlarını gösterir. Etkinleştirildiğinde resmi abonelik, paylaşılan \"özel\" sağlayıcı kimliği altında çalışır, böylece resmi ve üçüncü taraf oturumları tek bir listede görünür. Codex masaüstü uygulaması, yeni bir güncellemeden bu yana tüm oturumları gösterebilir, dolayısıyla yalnızca masaüstü kullanıcılarının buna ihtiyacı yoktur. İsteğe bağlı olarak mevcut resmi oturumları (öncelikle yedeklenen) taşıyabilir ve kapattığınızda bunları yedeklemeden geri yükleyebilirsiniz. Not: eski bir oturumun sağlayıcılar arasında sürdürülmesi başarısız olabilir, çünkü encrypted_content mantığının şifresi yalnızca onu oluşturan arka uç tarafından çözülebilir.",
+    "unifyCodexSessionHistoryDescription": "Resmî abonelik, üçüncü taraf sağlayıcılarla aynı \"custom\" sağlayıcı kimliğiyle çalışır; böylece tüm oturumlar tek bir grupta toplanır. Yeni Codex sürümleri (masaüstü 26.1103 / CLI 0.167 ve sonrası) yalnızca geçerli sağlayıcının grubundaki oturumlara devam edebilir; diğer grup salt okunur olur ve CLI'nin devam listesi yalnızca geçerli grubu gösterir. Resmî ve üçüncü taraf sağlayıcılar arasında geçiş yapıyorsanız açın. İsteğe bağlı olarak resmî oturumları paylaşılan gruba taşıyabilir (önce yedeklenir) ve kapatırken yedekten geri yükleyebilirsiniz. Not: eski bir oturumun sağlayıcılar arasında sürdürülmesi başarısız olabilir, çünkü encrypted_content mantığının şifresi yalnızca onu oluşturan arka uç tarafından çözülebilir.",
     "codexStackClassicSubagents": "Birleştirmedaki klasik alt ajan araçları",
     "codexStackClassicSubagentsDescription": "Ana ajan ile alt ajan farklı sağlayıcılar kullandığında açık olmalıdır; aksi halde alt ajan görevini alamaz.",
     "codexStackClassicSubagentsForcedV2": "Codex config.toml, bu ayara göre öncelikli olan [features] multi_agent_v2'yi açar, dolayısıyla hiçbir etkisi olmaz.",
@@ -1187,7 +1194,15 @@
     "browsePlaceholderOmp": "ör. /home/<your-username>/.omp/agent",
     "portableUpdateHint": "Taşınabilir modda yukarıdaki düğme yeni ZIP dosyasını indirir. ZIP'i açıp mevcut cc-switch.exe dosyasını yenisiyle değiştirin. Ayarlarınız ve verileriniz kullanıcı klasörünüzdeki .cc-switch dizininde bulunur ve etkilenmez.",
     "browsePlaceholderDsh": "ör. /home/<your-username>/.dsh",
-    "toolActionBinCollision": "{{path}} konumunda, muhtemelen başka bir kurulum yönteminden kalmış bir dosya var ve npm bunun üzerine yazmıyor. Dosyayı kontrol edin, yedek olarak yeniden adlandırın ve tekrar deneyin. npm --force kullanmayın: mevcut dosyanın üzerine doğrudan yazar."
+    "toolActionBinCollision": "{{path}} konumunda, muhtemelen başka bir kurulum yönteminden kalmış bir dosya var ve npm bunun üzerine yazmıyor. Dosyayı kontrol edin, yedek olarak yeniden adlandırın ve tekrar deneyin. npm --force kullanmayın: mevcut dosyanın üzerine doğrudan yazar.",
+    "codexPauseOfficialLogin": {
+      "title": "Resmî oturumu duraklat",
+      "description": "Resmî kota tükendiğinde ve Codex gönderme düğmesini kilitlediğinde açın; Yönlendirme ve Birleştirme modlarındaki üçüncü taraf modeller çalışmaya devam eder. Açtıktan veya kapattıktan sonra Codex’i tamamen kapatıp yeniden açın.",
+      "help": "Resmî kota dolduğu için üçüncü taraf modellerde de gönderemediğinizde açın. Codex resmî oturumu kullanmayı bırakır ve kota nedeniyle gönderme düğmesini kilitlemez. Giriş bilgileri bu bilgisayarda saklanır; çıkış yapılmaz. Yalnızca Yönlendirme ve Birleştirme modlarında etkilidir, Doğrudan modu etkilemez. Açıkken resmî modeller kullanılamaz; üçüncü taraf model seçmeniz istenir. Codex hesap ve kullanım bilgilerini gizler, ilk açılışta başlangıç sorularını gösterebilir. Kenar çubuğundaki Projeler altında eski oturumlar geçici olarak gizlenir; kaybolmaz, kapatınca geri gelir. Yeni oturumlar custom grubuna yazılır ve resmîye dönünce salt okunur olur. Resmî kota yenilendiğinde kapatın. Her değişiklikten sonra Codex’i tamamen kapatıp yeniden açın.",
+      "pausedToast": "Resmî oturum duraklatıldı. Etkinleşmesi için Codex’i tamamen kapatıp yeniden açın",
+      "resumedToast": "Resmî oturum yeniden etkin. Etkinleşmesi için Codex’i tamamen kapatıp yeniden açın",
+      "saveFailed": "Kaydedilemedi: {{error}}"
+    }
   },
   "apps": {
     "claude": "Claude",
@@ -4441,7 +4456,10 @@
       "serviceDown": "{{app}}, {{mode}} modundadır ancak yönlendirme hizmeti çalışmadığından istekler başarısız olur.",
       "startService": "Hizmeti başlat",
       "backToDirect": "Doğrudan bağlantıya dön",
-      "attachFailed": "{{mode}} önceki başlangıçta yeniden bağlanamadığı için {{app}} doğrudan bağlantıya döndü."
+      "attachFailed": "{{mode}} önceki başlangıçta yeniden bağlanamadığı için {{app}} doğrudan bağlantıya döndü.",
+      "officialLoginPaused": "Codex resmî oturumu duraklatıldı",
+      "officialLoginPausedBody": "Resmî modeller kullanılamaz ve Codex kenar çubuğundaki Projeler altında eski oturumlar geçici olarak gizlenir. Resmî kota yenilendiğinde “Resmî oturumu etkinleştir” düğmesine tıklayın, ardından Codex’i tamamen kapatıp yeniden açın.",
+      "resumeOfficialLogin": "Resmî oturumu etkinleştir"
     },
     "toast": {
       "enteredRoute": "{{app}} artık yönlendirme yapıyor → {{provider}}.",

@@ -1047,6 +1047,22 @@ mod tests {
     }
 
     #[test]
+    fn disable_response_storage_from_old_rows_is_not_projected_and_is_cleared_from_live() {
+        // Codex 0.167 删了这个键，旧预设写进行里的那一行不再投影；它仍是关键字段，写入时
+        // live 里旧版留下的同名行会被清掉。
+        let settings = row(
+            json!({ "OPENAI_API_KEY": "sk" }),
+            &format!("disable_response_storage = true\n{RELAY}"),
+        );
+        let projection = project(&settings).unwrap();
+        assert!(projection
+            .top
+            .iter()
+            .all(|(key, _)| key != "disable_response_storage"));
+        assert!(floor::CODEX_FLOOR_TOP.contains(&"disable_response_storage"));
+    }
+
+    #[test]
     fn a_table_with_its_own_credentials_gets_no_key() {
         for extra in [
             "env_key = \"RELAY_KEY\"",
