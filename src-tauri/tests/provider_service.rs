@@ -821,17 +821,23 @@ experimental_bearer_token = "deepseek-key"
         doc.get("openai_base_url").and_then(|value| value.as_str()),
         Some(proxy_base_url.as_str())
     );
-    let providers = doc["model_providers"].as_table().expect("provider table");
-    assert!(providers.get("cc-switch-official").is_none());
-    // Keep the former third-party bucket available for resuming old sessions,
-    // but retire its credentials to an unselected local proxy placeholder.
-    let dormant = &providers["custom"];
-    assert_eq!(dormant["base_url"].as_str(), Some(proxy_base_url.as_str()));
-    assert_eq!(
-        dormant["experimental_bearer_token"].as_str(),
-        Some("PROXY_MANAGED")
-    );
-    assert!(dormant.get("requires_openai_auth").is_none());
+    // Third-party takeover can now use built-in openai too, so there may be
+    // no custom bucket to retain. If one exists, it must remain dormant and
+    // hold only the local proxy placeholder, as before.
+    if let Some(providers) = doc
+        .get("model_providers")
+        .and_then(|value| value.as_table())
+    {
+        assert!(providers.get("cc-switch-official").is_none());
+        if let Some(dormant) = providers.get("custom") {
+            assert_eq!(dormant["base_url"].as_str(), Some(proxy_base_url.as_str()));
+            assert_eq!(
+                dormant["experimental_bearer_token"].as_str(),
+                Some("PROXY_MANAGED")
+            );
+            assert!(dormant.get("requires_openai_auth").is_none());
+        }
+    }
     assert!(
         !config_after_switch.contains("deepseek-key")
             && !config_after_switch.contains("official-oauth-token"),
