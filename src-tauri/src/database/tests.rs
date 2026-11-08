@@ -303,6 +303,31 @@ fn schema_migration_aligns_column_defaults_and_types() {
 }
 
 #[test]
+fn batched_schema_creation_keeps_main_and_fork_changes_in_the_outer_transaction() {
+    let conn = Connection::open_in_memory().expect("open memory db");
+    super::ensure_fork_database_attached(&conn).expect("attach isolated fork database");
+    conn.execute_batch("SAVEPOINT outer_schema;").unwrap();
+    Database::create_tables_on_conn(&conn).expect("create both schemas in a nested savepoint");
+    assert!(!conn.is_autocommit());
+
+    let table_counts = || {
+        [
+            "SELECT COUNT(*) FROM main.sqlite_master WHERE type = 'table' AND name = 'providers'",
+            "SELECT COUNT(*) FROM forkdb.sqlite_master WHERE type = 'table' AND name = 'settings'",
+        ]
+        .map(|sql| conn.query_row(sql, [], |row| row.get::<_, i64>(0)).unwrap())
+    };
+    assert_eq!(table_counts(), [1, 1]);
+    conn.execute_batch("ROLLBACK TO outer_schema; RELEASE outer_schema;")
+        .unwrap();
+    assert!(conn.is_autocommit());
+    assert_eq!(table_counts(), [0, 0]);
+
+    Database::create_tables_on_conn(&conn).expect("create both schemas after rollback");
+    assert_eq!(table_counts(), [1, 1]);
+}
+
+#[test]
 fn schema_create_tables_include_pricing_model_columns() {
     let conn = Connection::open_in_memory().expect("open memory db");
     Database::create_tables_on_conn(&conn).expect("create tables");

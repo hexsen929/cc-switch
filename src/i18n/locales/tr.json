@@ -4335,6 +4335,8 @@
     "todayRequests": "{{value}} istek"
   },
   "appsPage": {
+    "toolQueued": "Sırada, başka bir uygulamanın bitmesi bekleniyor",
+    "toolElapsed": "{{time}} geçti",
     "showInSidebar": "Kenar çubuğunda {{name}}'yi göster",
     "lastChecked": "Son kontrol: {{time}}",
     "neverChecked": "Güncellemeler henüz kontrol edilmedi",
