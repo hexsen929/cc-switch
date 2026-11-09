@@ -659,7 +659,6 @@
     "skipClaudeOnboarding": "Пропускать подтверждение первого запуска Claude Code",
     "codexAuth": "Улучшения приложения Codex",
     "preserveCodexOfficialAuthOnSwitch": "Сохранять официальный вход для прямых переключений",
-    "preserveCodexOfficialAuthOnSwitchDescription": "Управляет переключением на сторонние провайдеры, когда локальная маршрутизация выключена. При перехвате маршрутизации официальный вход Codex сохраняется всегда.",
     "unifyCodexSessionHistory": "Единая история сессий Codex",
     "unifyCodexHistoryRestoreCompleted": "Официальная история сессий восстановлена из резервной копии (файлов сессий: {{files}}, строк индекса: {{rows}})",
     "unifyCodexHistoryRestoreFailed": "Не удалось восстановить официальную историю сессий, попробуйте ещё раз",
