@@ -18,6 +18,7 @@ mod codex_rollout_file;
 mod codex_state_db;
 mod commands;
 mod config;
+mod copilot_config;
 mod database;
 mod deeplink;
 mod dsh_config;
@@ -2145,6 +2146,7 @@ pub fn run() {
             commands::copilot_get_models_for_account,
             commands::copilot_get_usage,
             commands::copilot_get_usage_for_account,
+            commands::copilot_cli_signed_in_account,
             // OMO commands
             commands::read_omo_local_file,
             commands::get_current_omo_provider_id,

@@ -613,6 +613,7 @@ fn kimi_mcp_and_global_prompts_follow_the_native_home() {
         server: json!({"type":"sse","url":"https://example.com/sse"}),
         apps: McpApps {
             kimi: true,
+            copilot: false,
             ..Default::default()
         },
         description: None,

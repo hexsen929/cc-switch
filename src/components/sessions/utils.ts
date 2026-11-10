@@ -20,6 +20,7 @@ export const SESSION_APP_IDS = [
   "kimi",
   "dsh",
   "agy",
+  "copilot",
 ] as const satisfies readonly AppId[];
 
 export type SessionAppId = (typeof SESSION_APP_IDS)[number];
@@ -44,6 +45,7 @@ export const SESSION_SOURCE_PATHS: Record<SessionAppId, string[]> = {
   agy: [
     "~/.gemini/antigravity-cli/brain/<conversation>/.system_generated/logs",
   ],
+  copilot: ["~/.copilot/session-state"],
 };
 
 export const isReadOnlySession = (session: SessionMeta) =>
@@ -60,7 +62,7 @@ export const canResumeSession = (session: SessionMeta) =>
 /** 子代理只读；MiniMax Code / DeepSeek Harness / Antigravity 的会话需在原客户端中删除。 */
 export const canDeleteSession = (session: SessionMeta) =>
   Boolean(session.sourcePath) &&
-  !["mcode", "agy", "dsh"].includes(session.providerId) &&
+  !["mcode", "agy", "dsh", "copilot"].includes(session.providerId) &&
   !isReadOnlySession(session);
 
 export interface SessionProjectGroup {

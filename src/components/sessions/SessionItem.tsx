@@ -169,14 +169,18 @@ export function SessionItem({
             ? "dsh.deleteSessionHint"
             : session.providerId === "agy"
               ? "sessionManager.agyDeleteHint"
-              : "sessionManager.mcodeDeleteHint",
+              : session.providerId === "copilot"
+                ? "sessionManager.copilotDeleteHint"
+                : "sessionManager.mcodeDeleteHint",
           {
             defaultValue:
               session.providerId === "dsh"
                 ? "请在 DeepSeek Harness 中删除"
                 : session.providerId === "agy"
                   ? "请在 Antigravity 中删除"
-                  : "请在 MiniMax Code 中删除",
+                  : session.providerId === "copilot"
+                    ? "请在 GitHub Copilot CLI 中删除"
+                    : "请在 MiniMax Code 中删除",
           },
         )
     : null;

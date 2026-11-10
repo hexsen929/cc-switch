@@ -355,7 +355,7 @@ export const SessionReaderHeader = memo(function SessionReaderHeader({
         </DropdownMenuItem>
         {!deletable &&
           (readOnly ||
-            ["mcode", "agy", "dsh"].includes(session.providerId)) && (
+            ["mcode", "agy", "dsh", "copilot"].includes(session.providerId)) && (
             <p className="px-2.5 pb-1.5 text-caption text-fg-2">
               {readOnly
                 ? t("sessionManager.subagents.readOnlyHint", {
@@ -366,14 +366,18 @@ export const SessionReaderHeader = memo(function SessionReaderHeader({
                       ? "dsh.deleteSessionHint"
                       : session.providerId === "agy"
                         ? "sessionManager.agyDeleteHint"
-                        : "sessionManager.mcodeDeleteHint",
+                        : session.providerId === "copilot"
+                          ? "sessionManager.copilotDeleteHint"
+                          : "sessionManager.mcodeDeleteHint",
                     {
                       defaultValue:
                         session.providerId === "dsh"
                           ? "请在 DeepSeek Harness 中删除"
                           : session.providerId === "agy"
                             ? "请在 Antigravity 中删除"
-                            : "请在 MiniMax Code 中删除",
+                            : session.providerId === "copilot"
+                              ? "请在 GitHub Copilot CLI 中删除"
+                              : "请在 MiniMax Code 中删除",
                     },
                   )}
             </p>

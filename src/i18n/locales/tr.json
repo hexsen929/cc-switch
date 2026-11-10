@@ -272,7 +272,8 @@
       "agySwitchRunning": "agy çalışıyor: açık agy oturumları önceki hesabı kullanmaya devam eder ve hesabı yeniden kaydedebilir. Mümkünse önce agy oturumlarını kapatın.",
       "extraArgs": "Ek bağımsız değişkenler (isteğe bağlı)",
       "extraArgsHint": "Yalnızca bu terminal için başlatma komutunun sonuna eklenir. Boşluklarla ayırın; boşluk içeren değerleri tırnak içine alın.",
-      "extraArgsPlaceholder": "ör. --debug --append-system-prompt \"Kısa yanıt ver\""
+      "extraArgsPlaceholder": "ör. --debug --append-system-prompt \"Kısa yanıt ver\"",
+      "isolationBodyCopilot": "\"{{name}}\" kartının uç noktası, anahtarı ve modeli yalnızca bu terminaldeki copilot'a iletilir ve hiçbir dosyaya yazılmaz; başka bir terminalde doğrudan copilot çalıştırmak yine GitHub oturumunuzu kullanır."
     },
     "openTerminalIsolated": "Bu sağlayıcıyla terminal aç (yalıtılmış)",
     "liveConfigReadFailed": "{{app}} yapılandırma dosyası okunamadı",
@@ -1220,7 +1221,8 @@
     "pi": "Pi",
     "mcode": "MiniMax Code",
     "agy": "Antigravity",
-    "omp": "Oh My Pi"
+    "omp": "Oh My Pi",
+    "copilot": "Copilot CLI"
   },
   "mcode": {
     "empty": {
@@ -1686,7 +1688,8 @@
     "contentIndexing": "Mesaj metni dizine ekleniyor ({{processed}}/{{total}}). Metin sonuçları henüz eksik olabilir",
     "contentHitPrefix": "Metin: ",
     "contentHitMore": " ({{count}} mesaj eşleşiyor)",
-    "moreContentHits": "Diğer metin eşleşmeleri"
+    "moreContentHits": "Diğer metin eşleşmeleri",
+    "copilotDeleteHint": "Oturum deposunun tutarlı kalması için bu oturumu GitHub Copilot CLI içinde silin"
   },
   "console": {
     "providerSwitchReceived": "Alınan sağlayıcı değiştirme etkinliği:",
@@ -1979,7 +1982,29 @@
     "deploymentType": "GitHub Dağıtım Türü",
     "deploymentGitHubCom": "GitHub.com",
     "deploymentEnterprise": "GitHub Kurumsal Sunucu",
-    "enterpriseDomainPlaceholder": "örneğin şirket.ghe.com"
+    "enterpriseDomainPlaceholder": "örneğin şirket.ghe.com",
+    "form": {
+      "officialTitle": "Copilot CLI'nin GitHub oturumunu kullanır",
+      "officialHint": "\"Terminal aç\", copilot'u bu kartın modeliyle başlatır; Yetki Merkezi'nden bir hesap bağlarsanız o hesapla başlatır.",
+      "byokTitle": "Yalnızca bu karttan açılan terminallerde geçerlidir",
+      "byokHint": "Copilot CLI özel modelleri yalnızca ortam değişkenlerinden okur; Copilot'un kendi dosyalarına hiçbir şey yazılmaz.",
+      "apiFormat": "API biçimi",
+      "baseUrl": "API uç noktası",
+      "baseUrlHint": "OpenAI uyumlu uç noktalar genellikle /v1 ile biter (ör. Ollama http://localhost:11434/v1); Anthropic için yalnızca sunucu adresi (https://api.anthropic.com).",
+      "model": "Model",
+      "officialModelHint": "Boş bırakırsanız Copilot'un geçerli modeli kullanılır. Yalnızca bu oturum için --model olarak iletilir; copilot içindeki /model çalışmaya devam eder.",
+      "byokModelHint": "Uç noktanızın beklediği model kimliği (COPILOT_MODEL).",
+      "reasoningEffort": "Akıl yürütme düzeyi",
+      "reasoningEffortDefault": "Copilot varsayılanı",
+      "reasoningEffortHint": "Terminal açılırken --reasoning-effort olarak iletilir. none seçildiğinde Copilot, Responses isteklerinde reasoning.summary göndermez; bazı aktarıcılar bu alanı kabul etmez.",
+      "maxPromptTokens": "En fazla istem token'ı",
+      "maxOutputTokens": "En fazla çıktı token'ı",
+      "envJsonHint": "Gelişmiş: her COPILOT_PROVIDER_* değişkeni (ör. COPILOT_PROVIDER_MODEL_ID veya COPILOT_PROVIDER_BEARER_TOKEN) copilot'a olduğu gibi iletilir."
+    },
+    "quota": {
+      "accountNotInAuthCenter": "Copilot CLI'nin oturum açtığı {{login}} hesabı Yetki Merkezi'nde yok. Yetki Merkezi'ne ekleyin veya bu kartta bir hesap bağlayın.",
+      "notSignedIn": "Copilot CLI'de oturum açılmamış. copilot'u çalıştırıp /login ile oturum açın veya bu kartta bir Yetki Merkezi hesabı bağlayın."
+    }
   },
   "codexOauth": {
     "authStatus": "Kimlik doğrulama durumu",
@@ -4388,7 +4413,8 @@
       "pi": "Npm ile yüklenir",
       "mcode": "Resmi komut dosyasıyla yüklenir, npm'ye geri döner",
       "agy": "Resmî kurulum betiğiyle yüklenir",
-      "omp": "Resmi komut dosyasıyla yüklenir"
+      "omp": "Resmi komut dosyasıyla yüklenir",
+      "copilot": "npm ile kurulur"
     },
     "sectionInstalled": "Yüklü · {{count}}",
     "sectionNotInstalled": "Yüklü değil · {{count}}",
