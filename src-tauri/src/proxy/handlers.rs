@@ -144,7 +144,9 @@ pub async fn handle_models(
         }
     } else {
         let mut headers = headers;
-        let restricted = authed.as_ref().is_some_and(|key| !key.allowed_models.is_empty());
+        let restricted = authed
+            .as_ref()
+            .is_some_and(|key| !key.allowed_models.is_empty());
         if restricted {
             // A cached or compressed upstream response cannot bypass per-key filtering.
             headers.remove(axum::http::header::IF_NONE_MATCH);
@@ -173,8 +175,7 @@ async fn filter_official_models_response(
     response: axum::response::Response,
     authed: Option<&crate::proxy::gateway_auth::AuthedKey>,
 ) -> Result<axum::response::Response, ProxyError> {
-    if !response.status().is_success()
-        || !authed.is_some_and(|key| !key.allowed_models.is_empty())
+    if !response.status().is_success() || authed.is_none_or(|key| key.allowed_models.is_empty())
     {
         return Ok(response);
     }
@@ -192,9 +193,12 @@ async fn filter_official_models_response(
         axum::http::header::CACHE_CONTROL,
         axum::http::HeaderValue::from_static("private, no-store"),
     );
-    let body = serde_json::to_vec(&catalog)
-        .map_err(|error| ProxyError::Internal(error.to_string()))?;
-    Ok(axum::response::Response::from_parts(parts, axum::body::Body::from(body)))
+    let body =
+        serde_json::to_vec(&catalog).map_err(|error| ProxyError::Internal(error.to_string()))?;
+    Ok(axum::response::Response::from_parts(
+        parts,
+        axum::body::Body::from(body),
+    ))
 }
 
 /// 按 AuthedKey 的 allowed_models 过滤 /v1/models 输出（就地）。
@@ -6540,9 +6544,15 @@ mod stack_tests {
             "account_metadata":{"plan":"fixture"}
         }))
         .into_response();
-        response.headers_mut().insert("etag", "fixture".parse().unwrap());
-        response.headers_mut().insert("content-length", "999".parse().unwrap());
-        let response = filter_official_models_response(response, Some(&key)).await.unwrap();
+        response
+            .headers_mut()
+            .insert("etag", "fixture".parse().unwrap());
+        response
+            .headers_mut()
+            .insert("content-length", "999".parse().unwrap());
+        let response = filter_official_models_response(response, Some(&key))
+            .await
+            .unwrap();
         assert!(!response.headers().contains_key("etag"));
         assert!(!response.headers().contains_key("content-length"));
         assert_eq!(response.headers()["cache-control"], "private, no-store");
