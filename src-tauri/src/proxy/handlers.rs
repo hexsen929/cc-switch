@@ -175,8 +175,7 @@ async fn filter_official_models_response(
     response: axum::response::Response,
     authed: Option<&crate::proxy::gateway_auth::AuthedKey>,
 ) -> Result<axum::response::Response, ProxyError> {
-    if !response.status().is_success() || authed.is_none_or(|key| key.allowed_models.is_empty())
-    {
+    if !response.status().is_success() || authed.is_none_or(|key| key.allowed_models.is_empty()) {
         return Ok(response);
     }
     let (mut parts, body) = response.into_parts();
