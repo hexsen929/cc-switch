@@ -470,7 +470,9 @@ mod tests {
             .is_err());
         }
         std::fs::remove_file(&events).unwrap();
-        assert!(session_manager::resume_session_target("copilot", "session-main", &source).is_err());
+        assert!(
+            session_manager::resume_session_target("copilot", "session-main", &source).is_err()
+        );
     }
 
     #[test]
