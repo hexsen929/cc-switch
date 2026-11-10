@@ -922,6 +922,7 @@ export function CodexFormFields({
       fetchModels: () => Promise<T>,
       receiveModels: (models: T) => number,
       errorLogMessage: string,
+      getEmptyMessage?: (models: T) => string,
     ) => {
       const seq = ++fetchModelsSeqRef.current;
       setIsFetchingModels(true);
@@ -930,7 +931,9 @@ export function CodexFormFields({
           if (seq !== fetchModelsSeqRef.current) return;
           const count = receiveModels(models);
           if (count === 0) {
-            toast.info(t("providerForm.fetchModelsEmpty"));
+            toast.info(
+              getEmptyMessage?.(models) ?? t("providerForm.fetchModelsEmpty"),
+            );
           } else if (!canEditCatalog) {
             // 有模型列表时拉取成功会直接打开选择弹窗，不再提示成功。
             toast.success(t("providerForm.fetchModelsSuccess", { count }));
@@ -1023,6 +1026,10 @@ export function CodexFormFields({
             return usableModels.length;
           },
           "[Copilot] Failed to fetch models:",
+          (models) =>
+            models.length === 0
+              ? t("copilot.noPickerModels")
+              : t("copilot.noModelsForApiFormat"),
         );
         return;
       }
@@ -1595,11 +1602,11 @@ export function CodexFormFields({
         isGrokBuild
           ? t("grokBuild.maxOutputTokensHint", {
               defaultValue:
-                "默认上限 8192，长回答或深度思考容易被截断。这里的值会作为 Anthropic 的 max_tokens 发出。",
+                "默认上限 32000，思考也算在内。网关的输出上限更低时会报 400，在这里填它支持的值。这里的值会作为 Anthropic 的 max_tokens 发出。",
             })
           : t("codexConfig.maxOutputTokensHint", {
               defaultValue:
-                "Codex 不带输出上限，默认 8192，长回答或深度思考容易被截断。这里的值会作为 Anthropic 的 max_tokens 发出。",
+                "Codex 不带输出上限，默认按 32000 发出，思考也算在内。网关的输出上限更低时会报 400，在这里填它支持的值。这里的值会作为 Anthropic 的 max_tokens 发出。",
             }),
         "codex-anthropic-max-output-tokens",
       )}
@@ -1613,7 +1620,7 @@ export function CodexFormFields({
           onMaxOutputTokensChange(event.target.value.replace(/[^\d]/g, ""))
         }
         placeholder={t("codexConfig.maxOutputTokensPlaceholder", {
-          defaultValue: "留空则使用默认 8192",
+          defaultValue: "留空则使用默认 32000",
         })}
       />
       <p className="text-xs leading-relaxed text-fg-2">

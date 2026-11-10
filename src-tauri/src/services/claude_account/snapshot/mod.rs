@@ -164,13 +164,21 @@ pub fn with_account_slot<T>(
     let accounts = crate::services::claude_account::DiskAccounts {
         data_dir: data_dir.to_path_buf(),
     };
-    with_account_slot_in(data_dir, &Slot::default_slot(), &accounts, account, read)
+    with_account_slot_in(
+        data_dir,
+        &Slot::default_slot(),
+        &accounts,
+        store::platform_store().as_ref(),
+        account,
+        read,
+    )
 }
 
 fn with_account_slot_in<T>(
     data_dir: &Path,
     default: &Slot,
     accounts: &dyn Accounts,
+    store: &dyn CredentialStore,
     account: &str,
     read: impl FnOnce(&Slot) -> Result<T, AppError>,
 ) -> Result<Option<T>, AppError> {
@@ -186,11 +194,7 @@ fn with_account_slot_in<T>(
     {
         return Err(creds::changed());
     }
-    let slot = if default_owner(default).as_deref() == Some(account) {
-        default.clone()
-    } else if let Some(dir) = accounts.dir_of(account) {
-        Slot::Account(dir)
-    } else {
+    let Some(slot) = resolve_slot(account, default, store, || accounts.dir_of(account)) else {
         return Ok(None);
     };
     let matches = || default_owner(&slot).as_deref() == Some(account);
@@ -228,6 +232,30 @@ pub fn validate_account_credentials(
         }
     }
     Ok(())
+}
+
+fn resolve_slot(
+    account: &str,
+    default: &Slot,
+    store: &dyn CredentialStore,
+    account_dir: impl FnOnce() -> Option<PathBuf>,
+) -> Option<Slot> {
+    if default_owner(default).as_deref() == Some(account)
+        && default_login_is(account, default, store)
+    {
+        return Some(default.clone());
+    }
+    account_dir().map(Slot::Account)
+}
+
+/// 默认槽位里的凭据（加默认 `.claude.json` 的资料）认出来确实是 `account`。
+fn default_login_is(account: &str, default: &Slot, store: &dyn CredentialStore) -> bool {
+    let secret = store.read(default).ok().flatten();
+    let profile = files::read_profile(&default.global_config());
+    creds::owner_of(secret.as_ref(), profile.as_ref())
+        .ok()
+        .flatten()
+        .is_some_and(|found| found.key == account)
 }
 
 /// 账号目录里有没有能用的登录（读凭据判断；钥匙串条目在、里面只剩 MCP 授权也算没有）。

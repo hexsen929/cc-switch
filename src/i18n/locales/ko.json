@@ -181,6 +181,7 @@
     "managedByHermesHint": "Hermes의 providers: 항목에 정의된 공급자입니다. Hermes 웹 UI에서 편집하거나 제거하세요.",
     "openTerminal": "이 공급자를 사용하여 터미널 열기",
     "openTerminalIsolated": "이 공급자를 사용하여 터미널 열기 (환경 격리)",
+    "openTerminalNeedsRoute": "이 카드는 라우팅을 통해서만 사용할 수 있습니다. 터미널은 카드의 주소에 직접 연결되므로 라우팅이 제공하는 자격 증명과 형식 변환을 받을 수 없습니다. 라우팅을 켠 뒤 터미널에서 클라이언트를 직접 실행하세요",
     "openTerminalWithProvider": "이 공급자를 사용하여 터미널 열기",
     "terminalOpened": "터미널을 열었습니다",
     "terminalOpenFailed": "터미널을 열지 못했습니다.",
@@ -198,11 +199,12 @@
       "agySwitchTitle": "agy 로그인 계정이 변경됩니다",
       "agySwitchBody": "터미널을 열기 전에 agy 로그인 계정을 {{account}}(으)로 변경합니다. 이후 새로 실행하는 모든 agy는 이 계정을 사용합니다.",
       "agySwitchRunning": "실행 중인 agy가 감지되었습니다. 이미 실행 중인 agy는 기존 계정을 계속 사용하며, 기존 계정 정보를 로그인 설정에 다시 저장할 수도 있습니다. 먼저 해당 agy를 모두 종료하는 것이 좋습니다.",
-      "isolationBodyCopilot": "“{{name}}”의 엔드포인트, API 키와 모델은 이 터미널에서 실행하는 copilot에만 전달되고 어떤 파일에도 저장되지 않습니다. 다른 터미널에서 copilot을 직접 실행하면 GitHub 로그인을 계속 사용합니다.",
+      "isolationBodyCopilot": "이 터미널의 copilot은 --model로 「{{name}}」의 첫 번째 모델을 선택해 실행되며 이번 세션에만 적용됩니다. 엔드포인트와 키는 Copilot의 providers.json에서 읽으므로 다른 터미널에서도 /model로 선택할 수 있습니다.",
       "skipPermissions": "권한 확인 건너뛰기",
       "extraArgs": "추가 인수(선택 사항)",
       "extraArgsPlaceholder": "예: --debug --append-system-prompt \"간결하게 답변하세요\"",
-      "extraArgsHint": "실행 명령 뒤에 추가되며, 이번에 여는 터미널에만 적용됩니다. 인수는 공백으로 구분하고, 공백이 포함된 값은 따옴표로 묶으세요."
+      "extraArgsHint": "실행 명령 뒤에 추가되며, 이번에 여는 터미널에만 적용됩니다. 인수는 공백으로 구분하고, 공백이 포함된 값은 따옴표로 묶으세요.",
+      "isolationBodyAgy": "The key and endpoint of \"{{name}}\" are used only for agy in this terminal, not saved to Antigravity settings or a persistent launcher. macOS/Linux briefly use a 0600 temporary environment file, deleted after reading. Running agy directly in another terminal still uses your Google sign-in."
     },
     "name": "이름",
     "namePlaceholder": "예: Claude 공식",
@@ -228,7 +230,8 @@
         "account": "계정",
         "accountFollow": "agy의 현재 로그인 따르기",
         "accountMissing": "이 컴퓨터에 없는 계정",
-        "accountHelp": "계정을 선택하면 ‘터미널 열기’ 실행 전에 agy의 로그인을 해당 계정으로 전환합니다. 이는 전역적으로 적용되며 이후 시작한 agy 세션도 이 계정을 사용합니다. 계정은 인증 센터에서 추가하세요."
+        "accountHelp": "계정을 선택하면 ‘터미널 열기’ 실행 전에 agy의 로그인을 해당 계정으로 전환합니다. 이는 전역적으로 적용되며 이후 시작한 agy 세션도 이 계정을 사용합니다. 계정은 인증 센터에서 추가하세요.",
+        "envFileHint": "Only the API key and endpoint are passed to the agy session opened from this card, not saved to native settings or a persistent launcher. macOS/Linux briefly use a 0600 temporary environment file, deleted after reading. Other environment variables are not applied."
       },
       "gemini": {
         "model": "모델",
@@ -397,7 +400,10 @@
       "thirdPartyBucket": "타사 공급자",
       "migrationFinished": "이전 세션 {{count}}개를 옮겼습니다. Codex를 다시 시작하면 이어갈 수 있습니다.",
       "migrationFailed": "이전 세션을 옮기지 못했습니다: {{error}}. 다음에 CC Switch를 실행하면 자동으로 다시 시도합니다."
-    }
+    },
+    "providerResourcesWarning": "Configuration applied, but some provider resources failed to sync",
+    "providerResourcesSynced": "Provider resources synced",
+    "proxyReasonClaudeDesktop": "Using Claude Desktop local routing mode"
   },
   "confirm": {
     "deleteProvider": "공급자 삭제",
@@ -436,7 +442,8 @@
       "title": "자동 동기화 활성화",
       "message": "자동 동기화가 활성화되면 모든 데이터베이스 변경 사항이 WebDAV 서버에 자동으로 업로드됩니다.\n\n이로 인해 상당한 네트워크 트래픽이 발생할 수 있습니다. 네트워크와 WebDAV 서비스가 빈번한 데이터 전송을 처리할 수 있는지 확인하세요.",
       "confirm": "확인하고 활성화하기"
-    }
+    },
+    "ompDefaultProviderWarning": "Oh My Pi's global default currently points to this provider. Continuing may make that default unavailable; use /model in Oh My Pi to select another model or /login to sign in to another provider."
   },
   "settings": {
     "title": "설정",
@@ -464,7 +471,11 @@
       "trayStyleMenu": "메뉴",
       "trayStyleHelp": "트레이 아이콘을 클릭할 때 열리는 화면입니다. Windows에서는 왼쪽 클릭으로 항상 메인 창을 열고, 오른쪽 클릭으로 선택한 스타일을 엽니다. 패널에서는 각 앱의 사용 중인 공급자, 할당량 및 사용량을 확인하고 검색과 전환을 할 수 있습니다. 메뉴는 시스템 기본 메뉴를 사용합니다. 즉시 적용됩니다.",
       "minimizeToTrayHelp": "켜면 닫기 버튼을 눌러도 창만 숨겨지고 CC Switch는 시스템 트레이에서 계속 실행됩니다(경량 모드는 트레이 메뉴에서 선택할 수 있습니다). 끄면 닫기 버튼을 누를 때 CC Switch가 종료됩니다.",
-      "terminalHelp": "공급자 카드의 ‘터미널 열기’에 사용할 터미널입니다. 사용할 수 없으면 시스템 기본 터미널을 사용합니다."
+      "terminalHelp": "공급자 카드의 ‘터미널 열기’에 사용할 터미널입니다. 사용할 수 없으면 시스템 기본 터미널을 사용합니다.",
+      "sharedInstructionsPathHint": "Use an absolute path or ~/path/to/AGENTS.md. Leave empty to remove managed blocks.",
+      "sharedInstructions": "Shared agent instructions",
+      "sharedInstructionsFile": "Source file",
+      "sharedInstructionsHelp": "Keep instructions in your own file and synchronize a CC Switch-managed block into each agent. Existing user content is preserved."
     },
     "tabGeneral": "일반",
     "tabAuth": "인증",
@@ -966,7 +977,9 @@
           "otty": "Otty",
           "wezterm": "WezTerm",
           "kaku": "Kaku",
-          "warp": "Warp"
+          "warp": "Warp",
+          "rex-zh": "Rex Beta",
+          "rex": "Rex Beta"
         },
         "windows": {
           "cmd": "명령 프롬프트",
@@ -981,7 +994,8 @@
           "kitty": "Kitty",
           "ghostty": "Ghostty"
         }
-      }
+      },
+      "rexHelp": "Automatically detects Rex Beta.app or Rex Beta 中文.app and uses its bundled CLI. Renaming the Chinese app or deleting the English app needs no PATH setup. For automatic switching to new sessions, enable Settings → Rex Server → Remote Control in Rex; otherwise select the running CC-Switch session in its sidebar."
     },
     "configDirectoryOverride": "설정 디렉터리 재정의(고급)",
     "configDirectoryDescription": "WSL과 같은 환경에서 Claude Code 또는 Codex를 사용하는 경우 설정 디렉터리를 WSL의 설정 디렉터리로 수동으로 지정하여 공급자 데이터를 기본 환경과 일관되게 유지할 수 있습니다.",
@@ -1159,7 +1173,43 @@
     },
     "data": {
       "location": "저장 위치"
-    }
+    },
+    "searchMcp": {
+      "installFailed": "Search settings were saved, but adding to clients failed: {{error}}",
+      "quotaHint": "Quota lookup currently supports Tavily. Other sources or failed lookups are unknown, never treated as zero.",
+      "unknown": "Unknown",
+      "running": "Shared local proxy running",
+      "moveUp": "Move up",
+      "maxChars": "Maximum returned characters",
+      "saved": "Web search settings saved",
+      "clients": "Add to these clients’ MCP lists",
+      "unlimited": "Unlimited",
+      "dailyLimit": "Daily tool-call limit per gateway key, UTC (0 for unlimited)",
+      "keyNumber": "Key {{number}}",
+      "keys": "API keys",
+      "moveDown": "Move down",
+      "serviceUnavailable": "Search MCP enabled; proxy stopped",
+      "proxyStatusUnknown": "Shared local proxy status awaiting refresh",
+      "readQuota": "Check saved-key quotas",
+      "clearKeys": "Clear saved keys",
+      "timeout": "Total timeout (5–120 seconds)",
+      "backoff": "Deprioritize rejected or rate-limited keys temporarily",
+      "baseUrlLabel": "Search source URL",
+      "enabled": "Enable shared web search MCP",
+      "install": "Save and add to MCP",
+      "stopped": "Shared local proxy stopped",
+      "description": "Share web_search and web_fetch across clients, trying search sources in the order below. Off by default; existing client search stays available.",
+      "baseUrl": "Custom API base URL (blank for official endpoint)",
+      "serviceEnabled": "Search MCP enabled",
+      "serviceDisabled": "Search MCP disabled",
+      "keysPlaceholder": "{{count}} saved keys; leave blank to keep them, or enter comma-separated replacements",
+      "endpoint": "Shared MCP address",
+      "pendingEnabled": "The enable setting has unsaved changes. Save to apply.",
+      "orderedKeys": "Use keys in order (off for rotation)",
+      "instanceUrl": "SearXNG instance URL (required)",
+      "gatewayHint": "Search MCP shares the local proxy with model routing. A running proxy does not mean search is enabled; disabling search keeps model routing running. Saving with search enabled starts the proxy. LAN access needs a gateway key permitting web-search; page fetching excludes private networks."
+    },
+    "preserveCodexOfficialAuthOnSwitchDescription": "Keep the official login on the next direct switch to a third-party provider. Proxy mode always keeps an existing native login. This setting does not sign you in."
   },
   "apps": {
     "claude": "Claude",
@@ -1345,7 +1395,7 @@
     "defaultModelPlaceholder": "예: grok-4.5",
     "defaultModelHint": "Grok Build가 기본으로 요청할 모델입니다. 언제든지 변경할 수 있습니다.",
     "reasoningEffortHint": "업스트림이 low/high/max 같은 추론 수준을 지원할 때 켜세요. 추론 모드도 함께 켜고 요청의 reasoning effort를 업스트림 Chat 매개변수로 변환합니다.",
-    "maxOutputTokensHint": "기본 제한인 8192에서는 긴 답변이나 깊은 추론이 잘릴 수 있습니다. 이 값은 Anthropic의 max_tokens로 전송됩니다.",
+    "maxOutputTokensHint": "기본값은 32000이며 추론도 여기에 포함됩니다. 게이트웨이의 출력 한도가 더 낮으면 400을 반환하므로 여기에 지원되는 값을 입력하세요. 이 값은 Anthropic의 max_tokens로 전송됩니다.",
     "keyFieldsHint": "기본 모델(models.default)과 해당 모델 테이블은 공급자를 전환하면 함께 바뀝니다. 나머지는 Grok Build 전역 설정이며 저장하면 모든 공급자에 적용됩니다.",
     "inactiveFieldsHint": "이전 버전에서 이 공급자에 저장한 설정으로, 이제 공급자를 전환해도 적용되지 않습니다. 항목을 선택하여 TOML을 복사한 뒤 필요한 경우 위에 붙여 넣으세요.",
     "inactiveFieldCopied": "복사됨",
@@ -1636,7 +1686,14 @@
       "collapseContent": "접기"
     },
     "copilotDeleteHint": "세션 저장소의 일관성을 유지하려면 GitHub Copilot CLI에서 이 세션을 삭제하세요.",
-    "dshMergedNote": "DeepSeek Harness의 Web과 Desktop은 동일한 세션 기록을 공유합니다. 이 기록은 여기에 통합하여 표시됩니다."
+    "dshMergedNote": "DeepSeek Harness의 Web과 Desktop은 동일한 세션 기록을 공유합니다. 이 기록은 여기에 통합하여 표시됩니다.",
+    "subagents": {
+      "expand": "Expand subagent sessions for {{title}}",
+      "readOnlyHint": "Subagent sessions are read only. Continue in the parent session.",
+      "readOnly": "Subagent · Read only",
+      "count": "Subagents: {{count}}",
+      "collapse": "Collapse subagent sessions for {{title}}"
+    }
   },
   "console": {
     "providerSwitchReceived": "수신된 공급자 전환 이벤트:",
@@ -1889,7 +1946,9 @@
     "reasoningEffortOff": "전송하지 않음",
     "reasoningEffortPassthrough": "그대로 전송",
     "directModeFormatInUse": "이 카드는 현재 직접 연결로 사용 중입니다. 이 형식으로 저장하면 요청이 실패합니다. 먼저 라우팅 또는 통합 모드로 전환하세요.",
-    "directModeFormatSwitch": "이 형식은 직접 연결 모드에서 사용할 수 없습니다. 이 카드를 사용하려면 라우팅 또는 통합 모드로 전환하세요."
+    "directModeFormatSwitch": "이 형식은 직접 연결 모드에서 사용할 수 없습니다. 이 카드를 사용하려면 라우팅 또는 통합 모드로 전환하세요.",
+    "toolCallBridgeHint": "For OpenAI-compatible endpoints without native tools/tool_calls support: write tool definitions into the prompt and parse the model JSON back into tool calls.",
+    "toolCallBridge": "Tool-call bridge"
   },
   "copilot": {
     "automaticFormat": "모델에 따라 자동 선택",
@@ -1926,6 +1985,9 @@
     "copyCode": "코드 복사",
     "migrationFailed": "레거시 인증 마이그레이션 실패: {{error}}",
     "loadModelsFailed": "Copilot 모델을 로드하지 못했습니다.",
+    "noPickerModels": "이 GitHub 계정에는 사용할 수 있는 Copilot 모델이 없습니다. Copilot Free 계정에서 흔히 발생하므로 계정에 Copilot Pro 이상 요금제가 있는지 확인하세요.",
+    "noPickerModelsClaude": "이 GitHub 계정에는 사용할 수 있는 Copilot 모델이 없습니다. Copilot Free 계정에서 흔히 발생하므로 계정에 Copilot Pro 이상 요금제가 있는지 확인하세요. 모델 입력란에 gpt-4.1 또는 gpt-4o를 직접 입력해 사용할 수도 있습니다.",
+    "noModelsForApiFormat": "이 계정의 Copilot 모델 중 선택한 업스트림 형식을 지원하는 모델이 없습니다. 다른 업스트림 형식을 선택해 보세요.",
     "deploymentType": "GitHub 배포 유형",
     "deploymentGitHubCom": "GitHub.com",
     "deploymentEnterprise": "GitHub Enterprise Server",
@@ -1933,24 +1995,36 @@
     "form": {
       "officialTitle": "Copilot CLI 자체의 GitHub 로그인 사용",
       "officialHint": "‘터미널 열기’는 이 카드의 모델로 copilot을 시작합니다. 인증 센터 계정을 연결하면 해당 계정으로 시작합니다.",
-      "byokTitle": "이 카드에서 연 터미널에서만 적용됩니다",
-      "byokHint": "Copilot CLI는 사용자 지정 모델을 환경 변수에서만 읽으므로 Copilot 자체 파일에는 아무것도 기록하지 않습니다.",
+      "byokTitle": "추가하면 Copilot의 providers.json에 기록됩니다",
+      "byokHint": "「추가」는 이 공급자와 모델을 Copilot 자체 providers.json(이 컴퓨터의 현재 사용자만 읽을 수 있음)에 기록합니다. 이후 어떤 방식으로 실행한 copilot에서도 /model에서 「카드 ID/모델」을 선택할 수 있습니다. 「제거」는 이 공급자의 항목만 삭제하고 파일의 나머지 내용은 그대로 둡니다.",
       "apiFormat": "API 형식",
       "baseUrl": "API 엔드포인트",
       "baseUrlHint": "OpenAI 호환 엔드포인트는 보통 /v1로 끝납니다(예: Ollama http://localhost:11434/v1). Anthropic은 호스트만 입력합니다(https://api.anthropic.com).",
       "model": "모델",
       "officialModelHint": "비워 두면 Copilot의 현재 모델을 사용합니다. 이번 세션에만 --model로 전달되며, copilot 안의 /model은 그대로 사용할 수 있습니다.",
-      "byokModelHint": "엔드포인트에서 요구하는 모델 ID(COPILOT_MODEL)입니다.",
       "reasoningEffort": "추론 수준",
       "reasoningEffortDefault": "Copilot 기본값",
       "reasoningEffortHint": "터미널을 열 때 --reasoning-effort로 전달됩니다. none을 선택하면 Copilot이 Responses 요청에 reasoning.summary를 보내지 않으며, 일부 중계 서버는 이 필드를 거부합니다.",
       "maxPromptTokens": "최대 입력 토큰",
       "maxOutputTokens": "최대 출력 토큰",
-      "envJsonHint": "고급: 모든 COPILOT_PROVIDER_* 변수(예: COPILOT_PROVIDER_MODEL_ID, COPILOT_PROVIDER_BEARER_TOKEN)는 그대로 copilot에 전달됩니다."
+      "byokModelsHint": "각 모델은 Copilot의 /model에 「{{id}}/모델 ID」로 표시되며 하나 이상 필요합니다. 모델 ID가 그대로 엔드포인트에 보내는 이름이 되며, 다르게 보내려면 행을 펼쳐 「업스트림 모델 이름」을 입력하세요. 이 카드로 터미널을 열면 첫 번째 모델을 사용합니다.",
+      "providerIdHint": "Copilot에서의 공급자 이름이기도 하며 /model에는 「{{id}}/모델」로 표시됩니다. 저장 후에는 바꿀 수 없습니다. 영문자, 숫자, 점, 밑줄, 하이픈만 사용할 수 있습니다.",
+      "duplicateModelId": "모델 ID가 중복됩니다: {{model}}",
+      "wireModel": "업스트림 모델 이름",
+      "wireModelHint": "엔드포인트에 보내는 모델 이름(wireModel)입니다. 비워 두면 모델 ID를 사용합니다.",
+      "maxContextWindowTokens": "컨텍스트 창",
+      "azureApiVersion": "Azure API 버전"
     },
     "quota": {
       "accountNotInAuthCenter": "Copilot CLI에 로그인된 계정 {{login}}이(가) 인증 센터에 없습니다. 인증 센터에 추가하거나 이 카드에 계정을 연결하세요.",
       "notSignedIn": "Copilot CLI에 로그인되어 있지 않습니다. copilot을 실행해 /login으로 로그인하거나 이 카드에 인증 센터 계정을 연결하세요."
+    },
+    "defaultCannotRemove": "Copilot의 기본 모델이 이 공급자의 것이라 제거하거나 삭제할 수 없습니다. 먼저 copilot에서 /model로 다른 공급자의 모델을 선택하세요.",
+    "terminalNeedsAdd": "터미널에서 모델을 선택할 수 있도록 먼저 이 공급자를 Copilot에 추가하세요.",
+    "section": {
+      "official": "공식 로그인 · {{count}}",
+      "officialHelpTitle": "공식 로그인",
+      "officialHelp": "Copilot CLI 자체 GitHub 로그인을 사용하며 파일에 아무것도 쓰지 않습니다. 「터미널 열기」는 카드의 모델과 연결된 계정으로 copilot을 실행합니다."
     }
   },
   "codexOauth": {
@@ -2094,8 +2168,8 @@
     "impersonateClaudeCodeLabel": "Claude Code 클라이언트 에뮬레이션",
     "impersonateClaudeCodeHint": "게이트웨이가 Claude Code만 수락할 때 켜기: Claude Code의 요청 헤더를 보내고 해당 ID를 시스템 프롬프트의 첫 번째 줄에 넣습니다.",
     "maxOutputTokensLabel": "최대 출력 토큰",
-    "maxOutputTokensPlaceholder": "기본값 8192를 사용하려면 비워 두세요.",
-    "maxOutputTokensHint": "Codex는 출력 한도를 전송하지 않으므로 기본값인 8192에서는 긴 답변이나 심층 추론이 중간에 잘릴 수 있습니다. 이 값은 Anthropic의 max_tokens로 전송됩니다.",
+    "maxOutputTokensPlaceholder": "기본값 32000을 사용하려면 비워 두세요.",
+    "maxOutputTokensHint": "Codex는 출력 한도를 전송하지 않으므로 기본값 32000이 전송되며 추론도 여기에 포함됩니다. 게이트웨이의 출력 한도가 더 낮으면 400을 반환하므로 여기에 지원되는 값을 입력하세요. 이 값은 Anthropic의 max_tokens로 전송됩니다.",
     "promptCacheRoutingLabel": "프롬프트 캐시 라우팅",
     "promptCacheRoutingAuto": "자동(권장)",
     "promptCacheRoutingEnabled": "활성화됨",
@@ -2153,7 +2227,52 @@
     "inactiveFieldCopied": "복사됨",
     "upstreamFormatCopilotRouteHint": "모든 모드에는 Copilot 계정 자격 증명을 삽입하는 라우팅이 필요합니다. 명시적으로 선택한 프로토콜은 해당 프로토콜을 지원하지 않는 모델에서는 실패합니다.",
     "maxOutputTokensWarning": "모델이나 게이트웨이의 실제 출력 한도를 초과하면 요청에 400 오류가 반환됩니다.",
-    "routeOnlySettingsHint": "아래 두 설정은 라우팅 및 통합 모드에서만 적용됩니다."
+    "routeOnlySettingsHint": "아래 두 설정은 라우팅 및 통합 모드에서만 적용됩니다.",
+    "instructionsFileEditTitle": "Edit model instructions file",
+    "instructionsFileDeleteTitle": "Delete model instructions file",
+    "instructionsFileDuplicate": "This file is already in the list",
+    "autoReviewModelHint": "The model Codex uses for Approve for me. Enter a model ID or fetch models from this provider without adding them to the model list. Blank uses codex-auto-review. Save the provider and restart Codex after changes. Aggregation mode uses its separate settings.",
+    "instructionsFileSaveSuccess": "Model instructions file saved",
+    "instructionsFileStateEmpty": "File is empty",
+    "instructionsFileStateMissing": "File not found",
+    "instructionsFileEnabledName": "Enabled: {{name}}",
+    "instructionsFileDialogHint": "Create or edit .md/.txt files directly. Relative paths use the directory containing config.toml as their base.",
+    "instructionsFileDeleteConfirm": "This permanently deletes {{path}} from disk and removes it from the current provider. This action cannot be undone.",
+    "instructionsFileAdd": "New file",
+    "instructionsFileBrowseFailed": "Could not choose the model instructions file: {{error}}",
+    "instructionsFileNoneEnabled": "No file enabled",
+    "instructionsFileDeleteConfirmButton": "Delete file",
+    "instructionsFileAddTitle": "New model instructions file",
+    "instructionsFileBrowse": "Choose a Markdown or text file",
+    "instructionsFileStateChecking": "Checking file",
+    "autoReviewModelEmptyHint": "No need to add it to the model list. Save the provider and restart Codex to apply.",
+    "instructionsFilePath": "File path",
+    "instructionsFileEmpty": "No model instructions files",
+    "instructionsFileRemove": "Delete file",
+    "instructionsFileStateUnreadable": "File is unreadable",
+    "instructionsFileDeleteFailed": "Could not delete the model instructions file: {{error}}",
+    "instructionsFilePlaceholder": "./instruction_5.6.md or an absolute path",
+    "instructionsFileStateInvalid": "File content is invalid",
+    "instructionsFileSaveFailed": "Could not save the model instructions file: {{error}}",
+    "instructionsFileStateValid": "File available",
+    "instructionsFileCount": "{{count}} files",
+    "autoReviewModelFetch": "Fetch models",
+    "instructionsFileStateWithSize": "{{state}} · {{size}} B",
+    "autoReviewModelPlaceholder": "Blank uses codex-auto-review",
+    "instructionsFileReadFailed": "Could not read the model instructions file: {{error}}",
+    "instructionsFileToggle": "Enable or disable {{name}}",
+    "instructionsFileLoadingContent": "Loading file...",
+    "instructionsFileDeleteSuccess": "Model instructions file deleted",
+    "instructionsFileLabel": "Model instructions file",
+    "autoReviewModelSelect": "Select review model",
+    "instructionsFileContentPlaceholder": "Enter model instructions for Codex...",
+    "instructionsFileEdit": "Edit file",
+    "instructionsFileContent": "File content",
+    "instructionsFileHint": "Enabling a file replaces Codex's built-in base instructions for the selected model. Use this only when a custom model requires dedicated instructions.",
+    "autoReviewModelNoList": "No model list is required. Enter a reviewer model directly; blank uses codex-auto-review.",
+    "instructionsFileStateNotFile": "Path is not a file",
+    "instructionsFileReadRetry": "The file could not be read, so it cannot be saved safely. Close and retry or check its permissions.",
+    "instructionsFileStateCheckFailed": "File check failed"
   },
   "geminiConfig": {
     "envFile": "환경 변수(.env)",
@@ -2796,7 +2915,8 @@
     "fieldExtra": "• extra: 문자열, 사용자 지정 표시 텍스트",
     "tip1": "• {{apiKey}} 및 {{baseUrl}} 변수는 자동으로 치환됩니다.",
     "tip2": "• extractor 함수는 샌드박스 환경에서 실행되며 ES2020+ 문법을 지원합니다",
-    "tip3": "• 객체 리터럴 표현식을 형성하려면 전체 설정을 ()로 묶어야 합니다."
+    "tip3": "• 객체 리터럴 표현식을 형성하려면 전체 설정을 ()로 묶어야 합니다.",
+    "officialSubscriptionHintAgy": "Queries the official quota using account tokens saved in the Auth Center. If the current sign-in cannot be identified or the platform does not support account switching, falls back to agy's /usage command (about 10 seconds). Disabled by default; runs after you enable it."
   },
   "dbUpgrade": {
     "title": "데이터베이스 버전이 너무 최신입니다.",
@@ -3114,7 +3234,10 @@
       "imported": "{{path}}의 콘텐츠를 가져왔습니다. 파일은 변경되지 않았습니다",
       "importedPi": "AGENTS.md를 라이브러리에 저장했습니다. 파일은 변경되지 않았습니다",
       "copied": "\"{{name}}\"을(를) {{apps}}에 복사했습니다."
-    }
+    },
+    "managedImportHint": "Stores this preset under ~/.claude/cc-switch/prompts and updates only CC Switch's import block. Other CLAUDE.md content is preserved.",
+    "managedImport": "Preserve CLAUDE.md with a managed import",
+    "managedImportDisabledHint": "Disabled uses the existing direct mode: enabling this preset replaces the complete CLAUDE.md file."
   },
   "profiles": {
     "switcherAriaLabel": "프로젝트: {{name}}",
@@ -3677,7 +3800,8 @@
       "description": "설명",
       "contentPreview": "콘텐츠 미리보기",
       "enabledWarning": "가져온 후에는 이 프롬프트가 즉시 활성화되고 다른 프롬프트는 비활성화됩니다.",
-      "enableAfterImport": "가져온 후 활성화"
+      "enableAfterImport": "가져온 후 활성화",
+      "appendContentPreview": "Separate Claude Append Instruction File Preview"
     },
     "skill": {
       "title": "Claude 스킬 저장소 추가",
@@ -3890,6 +4014,9 @@
         "active": "{{appLabel}} 라우팅 중 - {{address}}:{{port}}\n공급자를 전환해도 라우팅 대상만 바뀌며 직접 연결 공급자는 유지됩니다",
         "broken": "{{appLabel}}가 라우팅 중이지만 라우팅 서비스가 실행되고 있지 않습니다.",
         "inactive": "{{appLabel}}의 요청을 로컬 라우팅으로 전달합니다."
+      },
+      "codexChatgptAuth": {
+        "directSwitchHint": "Keep the official login on the next direct switch to a third-party provider. Proxy mode always keeps an existing native login. This setting does not sign you in."
       }
     },
     "stackMode": {
@@ -3984,7 +4111,239 @@
       "stopFailed": "라우팅 서비스 중지 실패: {{detail}}"
     },
     "stoppedWithRestore": "라우팅 서비스가 중지되었습니다. 모든 앱이 다시 직접 연결로 돌아왔습니다",
-    "stopWithRestoreFailed": "중지 실패: {{detail}}"
+    "stopWithRestoreFailed": "중지 실패: {{detail}}",
+    "respMiddleware": {
+      "saveFailed": "Save failed",
+      "title": "Programmable response middleware",
+      "hint": "Run your own scripts on upstream responses: onResponse rewrites non-streaming JSON bodies, onEvent rewrites each event of a streaming SSE response. Each hook toggles independently; off by default, fail-open.",
+      "on": "On",
+      "onEvent": {
+        "title": "onEvent (streaming)",
+        "warn": "The script runs once per SSE event (50ms CPU budget); keep the logic minimal. Any error, timeout, or non-object return passes the event through unchanged and never interrupts your stream."
+      },
+      "security": "Scripts run in an isolated sandbox: no network, no filesystem. onResponse only applies to non-streaming JSON; non-JSON (including compressed/binary) responses always pass through untouched.",
+      "onResponse": {
+        "title": "onResponse (non-streaming)"
+      },
+      "contract": "Each script must evaluate to a function: onResponse is (response, meta) => any, onEvent is (event, meta) => any. Return a JSON object to replace; return a non-object to pass through unchanged.",
+      "off": "Off",
+      "saved": "Response middleware saved"
+    },
+    "lanGateway": {
+      "rotateFailed": "Rotation failed",
+      "rotate": "Rotate",
+      "capsHint": "Restrict what this key may use; each field \"empty = unrestricted\".",
+      "rotateMessage": "The old token stops working immediately; clients using it must switch to the new token. This cannot be undone.",
+      "removeFailed": "Delete failed",
+      "revealTitle": "New key (the full token is shown only once — copy it now)",
+      "securityWarning": "Enabling sharing exposes a proxy that carries your upstream API key to the local network. Only enable it on trusted networks, and create a separate key per client so you can disable or revoke them individually.",
+      "window": {
+        "week": "Per week",
+        "day": "Per day",
+        "month": "Per month",
+        "none": "No limit"
+      },
+      "limitWindow": "Window",
+      "newKeyName": "New key name (optional, name it per client)",
+      "limitsSaved": "Quota saved",
+      "enabled": "Enabled",
+      "saveLimits": "Save quota",
+      "copyFailed": "Copy failed",
+      "caps": "Permissions",
+      "copyMasked": "Copy masked value",
+      "shareToggle": "Allow local network sharing",
+      "limitCost": "Cost cap (USD, empty = unlimited)",
+      "removeMessage": "Clients using this token will lose access, and it cannot be recovered.",
+      "toggleKeyFailed": "Failed to toggle key state",
+      "limitsHint": "Cap usage per local calendar window; over the limit returns 429. Each cap \"empty = unlimited\".",
+      "disabled": "Disabled",
+      "addFailed": "Failed to add key",
+      "hint": "By default only this machine can use the proxy. After you enable \"Share on local network\", non-loopback requests must carry an enabled gateway key or get 401; while sharing stays off, non-loopback requests always get 403. Create a separate key per client so you can disable or revoke them individually.",
+      "copied": "Copied",
+      "noKeys": "No keys yet. After enabling sharing you must create at least one key for remote clients to connect.",
+      "limitsSaveFailed": "Failed to save quota",
+      "saveCaps": "Save permissions",
+      "capsSaveFailed": "Failed to save permissions",
+      "addKey": "Add key",
+      "rotateTitle": "Rotate this key's token?",
+      "capModels": "Allowed model globs (comma-separated, e.g. anthropic/*, empty = unrestricted)",
+      "toggleFailed": "Failed to toggle LAN sharing",
+      "shareHelp": "Off: only this machine (loopback) can reach the proxy; non-loopback requests always get 403. On: non-loopback requests must carry one of the enabled gateway keys below (Bearer / x-api-key / x-goog-api-key / ?key=), otherwise 401. Local CLIs never need a key.",
+      "title": "LAN gateway",
+      "limitTokens": "Token cap (empty = unlimited)",
+      "capsSaved": "Permissions saved",
+      "keyNamePlaceholder": "Key name (optional)",
+      "rotateConfirm": "Rotate",
+      "capApps": "Apps",
+      "removeTitle": "Delete this key?",
+      "webSearch": "Web search MCP",
+      "capProviders": "Allowed provider IDs (comma-separated, empty = unrestricted)"
+    },
+    "accountFailover": {
+      "off": "Off",
+      "saved": "Account failover saved",
+      "saveFailed": "Failed to save account failover",
+      "title": "In-subscription account failover",
+      "hint": "When on, if one account in a subscription (Copilot / ChatGPT / xAI managed accounts) is rate-limited or its auth fails (401/403/429), that account is briefly cooled down and later requests in the same pool automatically switch to another healthy account. Off by default; when off, account selection is identical to before.",
+      "on": "On"
+    },
+    "middleware": {
+      "contract": "The script must be an expression that evaluates to a function with the signature (request, meta) => any. Return an object to use it as the new body; return a non-object to pass through unchanged.",
+      "saved": "Middleware saved",
+      "saveFailed": "Failed to save middleware",
+      "on": "On",
+      "title": "Programmable request middleware",
+      "hint": "Run your own onRequest script against the outbound request body for param overrides, model mapping, system-prompt injection, and more. The toggle and script take effect together on Save.",
+      "off": "Off",
+      "security": "The script runs in an isolated sandbox: no network, no filesystem, 1s CPU limit. Any error or timeout passes the original request through without interrupting forwarding."
+    },
+    "pii": {
+      "addRule": "Add rule",
+      "placeholder": "Placeholder template, supports {label}; empty = [REDACTED:{label}]",
+      "saveFailed": "Save failed",
+      "title": "Outbound redaction",
+      "hint": "Before forwarding upstream, replace sensitive matches in message text with a placeholder. Only message text is touched, never model/role/tool structure; default off, fail-open on bad regex.",
+      "builtins": "Built-in patterns (high-confidence)",
+      "on": "On",
+      "builtin": {
+        "iban": "IBAN",
+        "email": "Email",
+        "awsAccessKeyId": "AWS Access Key",
+        "creditCard": "Credit card",
+        "usSsn": "US SSN",
+        "jwt": "JWT",
+        "privateKeyBlock": "Private key block"
+      },
+      "rulePattern": "Regex, e.g. sk-[A-Za-z0-9]+",
+      "ruleName": "Label (optional)",
+      "off": "Off",
+      "noRules": "No custom rules. Add regex patterns as needed.",
+      "customRules": "Custom regex",
+      "saved": "Redaction config saved"
+    },
+    "routingSticky": {
+      "on": "On",
+      "title": "Conversation stickiness",
+      "off": "Off",
+      "saved": "Conversation stickiness saved",
+      "saveFailed": "Failed to save conversation stickiness",
+      "hint": "When on, a conversation stays on the provider that answered its previous turn, so rotate/least-used strategies don't switch providers every request and invalidate the upstream cache. Recommended with Rotate or Least used."
+    },
+    "intentRouting": {
+      "title": "Intent routing",
+      "pred": {
+        "day": {
+          "0": "Mon",
+          "3": "Thu",
+          "1": "Tue",
+          "5": "Sat",
+          "6": "Sun",
+          "2": "Wed",
+          "4": "Fri"
+        },
+        "minTokens": "Min estimated input tokens (blank = any)",
+        "hasTool": "Has a tool (type/name contains this substring; blank = any)",
+        "fieldContains": "Contains substring",
+        "compaction": "Compaction",
+        "timeWindow": "Time window",
+        "fieldPath": "Body field path, e.g. metadata.user_id",
+        "hasImage": "Has image",
+        "modelGlob": "Model-name glob, e.g. *haiku* (blank = any)"
+      },
+      "hint": "Route a request to a chosen provider (as the head of the failover chain) based on its \"intent\", optionally rewriting the upstream model. The first matching rule wins. Off by default; on no-match or missing target the request passes through unchanged.",
+      "ruleName": "Rule name (optional)",
+      "selectProvider": "Select target provider",
+      "rules": "Rules (first match wins, in order)",
+      "intent": {
+        "background": "Background / lightweight (warmup·compact)",
+        "long-context": "Long context (estimated ≥100,000 tokens)",
+        "subagent": "Subagent",
+        "web-search": "Web search tool",
+        "thinking": "Extended thinking / reasoning"
+      },
+      "off": "Off",
+      "noProviders": "No providers",
+      "matcherIntent": "Semantic intent",
+      "matcherPredicate": "Custom predicate",
+      "saved": "Intent routing saved",
+      "matcher": "Match by",
+      "addRule": "Add rule",
+      "saveFailed": "Save failed",
+      "modelOverride": "Rewrite model (optional)",
+      "empty": "No rules. Once added, matching requests are routed to the chosen provider.",
+      "on": "On"
+    },
+    "reliability": {
+      "nonApi": {
+        "title": "Non-API response failover",
+        "desc": "When a 2xx response is actually an HTML/Cloudflare challenge page, turn it into a retryable error and fail over instead of relaying the error page."
+      },
+      "on": "On",
+      "saved": "Reliability config saved",
+      "loopGuard": {
+        "desc": "Cleanly cut a streaming reply stuck in a phrase-level loop (skips separators/whitespace; high threshold).",
+        "title": "Loop guard"
+      },
+      "title": "Proxy reliability",
+      "hint": "Three streaming hardening options: SSE keep-alive while upstream is silent, loop-guard that cuts a stuck stream, and failover when a 2xx response is a non-API (HTML/CF challenge) page. Each default-off.",
+      "keepalive": {
+        "desc": "Periodically send an SSE comment line while the upstream is silent, to avoid ~125s idle disconnects by intermediaries (Cloudflare/proxies). Comments are ignored by clients.",
+        "title": "SSE keep-alive",
+        "hint": "blank/0 = 15; max 300",
+        "interval": "Interval (sec)"
+      },
+      "off": "Off",
+      "saveFailed": "Save failed"
+    },
+    "rewrite": {
+      "system": {
+        "append": "Append",
+        "claudeOnly": "Applies to Claude only (Anthropic native system field); use the programmable script for other apps.",
+        "off": "Off",
+        "replace": "Replace",
+        "placeholder": "System text to inject",
+        "title": "System prompt injection",
+        "prepend": "Prepend"
+      },
+      "modelMap": {
+        "title": "Model name mapping",
+        "to": "Target model",
+        "add": "Add rule",
+        "from": "Source model / *",
+        "empty": "No rules. Use * as the \"from\" to catch any model that no exact rule matched."
+      },
+      "saveFailed": "Failed to save",
+      "on": "On",
+      "saved": "Presets saved",
+      "params": {
+        "title": "Param overrides",
+        "hint": "A top-level JSON object that overrides/adds outbound params; set a value to null to delete that param."
+      },
+      "title": "Ready-made request middleware (no code)",
+      "paramsInvalid": "Param overrides must be a valid JSON object",
+      "hint": "Handle the three most common rewrites with structured config: remap the model name, override params, inject a system prompt — no scripting needed. Runs before the programmable script; default off, fail-safe.",
+      "off": "Off"
+    },
+    "routingStrategy": {
+      "desc": {
+        "pace": "Quota-aware (pace): prefer the provider with the most remaining quota per hour until reset, spreading the window evenly so it is not spent too early. Reads the latest usage snapshot and falls back to Order when quota is unknown.",
+        "usage": "Least-used first: prefer the provider picked the fewest times during this run.",
+        "rotate": "Round-robin: shift the primary route by one across healthy providers on each request to spread load.",
+        "smart": "Quota-aware (smart): among providers that still have quota, prefer the one resetting soonest so the about-to-reset quota is used up with the least waste. Reads the latest usage snapshot and falls back to Order when quota is unknown.",
+        "order": "Follow the failover queue order: always prefer P1, then fall back in sequence."
+      },
+      "option": {
+        "pace": "Pace (even quota)",
+        "usage": "Least used",
+        "rotate": "Rotate",
+        "smart": "Smart (save quota)",
+        "order": "Order"
+      },
+      "saved": "Routing strategy saved",
+      "saveFailed": "Failed to save routing strategy",
+      "hint": "When auto failover is on and the queue has multiple providers, this decides the primary route and failover order. No effect with a single provider.",
+      "title": "Routing strategy"
+    }
   },
   "streamCheck": {
     "reachable": "{{providerName}}에 연결할 수 있습니다({{responseTimeMs}}ms).",
@@ -5125,6 +5484,13 @@
     "openBrowser": {
       "title": "로그인 시 브라우저 자동 열기",
       "description": "이 옵션을 끄면 로그인 링크만 복사되며, 원하는 브라우저에서 직접 열 수 있습니다. 별도의 브라우저 프로필로 여러 계정을 관리할 때 유용합니다."
+    },
+    "nativeCodex": {
+      "imported": "Imported the local ChatGPT login",
+      "title": "Detected a local ChatGPT login",
+      "hint": "You're already signed in to ChatGPT via Codex ({{who}}). Import it to use it in cc-switch directly — no need to log in again.",
+      "import": "Import",
+      "importFailed": "Import failed"
     }
   },
   "kimi": {
@@ -5154,7 +5520,8 @@
       "current": "Kimi에서 사용 중",
       "primaryShort": "Kimi Code 자체 로그인",
       "empty": "아직 Kimi 계정이 없습니다. Kimi Code에 로그인된 계정이 자동으로 여기에 표시됩니다.",
-      "help": "Kimi 코딩 요금제 계정을 여러 개 추가할 수 있습니다. 각 계정에는 Kimi Code의 개별 공급자와 모델이 생깁니다. “이 계정 사용”을 누르면 Kimi Code의 기본 모델이 해당 계정의 모델로 변경되며 이후 새 세션에서 사용됩니다. Kimi Code 자체 로그인 계정은 자동으로 표시되며 웹 검색과 웹 페이지 가져오기에 항상 사용됩니다. 여기에서 제거해도 목록에서만 숨겨지며 Kimi Code에서 로그아웃되지 않습니다."
+      "help": "Kimi 코딩 요금제 계정을 여러 개 추가할 수 있습니다. 각 계정에는 Kimi Code의 개별 공급자와 모델이 생깁니다. “이 계정 사용”을 누르면 Kimi Code의 기본 모델이 해당 계정의 모델로 변경되며 이후 새 세션에서 사용됩니다. Kimi Code 자체 로그인 계정은 자동으로 표시되며 웹 검색과 웹 페이지 가져오기에 항상 사용됩니다. 여기에서 제거해도 목록에서만 숨겨지며 Kimi Code에서 로그아웃되지 않습니다.",
+      "removeConfirm": "Remove {{name}}? Its provider, models and local card are removed. Independent credentials are deleted only when no other provider or service references them. Other accounts are not affected."
     },
     "modelSelectionHint": "공급자 카드의 전환 버튼을 눌러 기본 공급자를 선택하세요. 다른 모델을 지정하려면 Kimi Code에서 /model을 사용하세요.",
     "contextSize": "컨텍스트 창",
@@ -5253,5 +5620,154 @@
       "editDisabled": "DeepSeek Harness가 이 계정으로 사용할 수 있는 모델을 자동으로 제공하므로 편집할 필요가 없습니다.",
       "managedHint": "이 계정은 인증 센터에서 관리합니다. 로그아웃하면 이 카드가 사라집니다."
     }
+  },
+  "claudeAppendInstructions": {
+    "shellWrapperUpgrade": "Update",
+    "duplicate": "This file is already listed",
+    "stateNotFile": "Path is not a file",
+    "shellWrapperInstallSuccess": "Shell integration installed in {{path}}. Restart the terminal to apply it.",
+    "shellWrapperConfigFile": "Configuration file",
+    "shellWrapperUpdating": "Updating...",
+    "empty": "No Claude append instruction files",
+    "shellWrapperCopyFailed": "Could not copy configuration: {{error}}",
+    "summaryHint": "Manage --append-system-prompt-file separately for each Claude provider. Changes apply when the provider is saved and do not modify ordinary CLAUDE.md prompt presets.",
+    "noneEnabled": "No file enabled",
+    "shellWrapperUpgradeSuccess": "Shell integration updated in {{path}}. Restart the terminal to apply it.",
+    "deleteSuccess": "Claude append instruction file deleted",
+    "browseFailed": "Could not choose a Claude append instruction file: {{error}}",
+    "shellWrapperNotInstalledHint": "Install the shell integration to apply the current provider's enabled system and append instructions when Claude Code starts.",
+    "shellWrapperNeedsUpgrade": "Update available",
+    "shellWrapperConflictHint": "A claude-keysmith wrapper manages Claude Code; CC Switch will not overwrite its runtime instruction configuration.",
+    "shellWrapperInstructions": "Manual configuration",
+    "deleteConfirm": "This permanently deletes {{path}} from disk and removes it from this provider's list. This cannot be undone.",
+    "shellWrapperInstallFailed": "Could not install shell integration: {{error}}",
+    "shellWrapperUninstallSuccess": "Shell integration removed from {{path}}. Restart the terminal to apply it.",
+    "pathPlaceholder": "./cc-switch/append-instructions/default.md or an absolute path",
+    "disableSuccess": "Claude append instructions disabled",
+    "stateInvalid": "File content is invalid",
+    "loading": "Loading...",
+    "shellWrapperCopied": "Copied",
+    "shellWrapperNeedsUpgradeHint": "Update the older CC Switch wrapper to avoid duplicate or stale launch behavior.",
+    "loadFailed": "Failed to load Claude append instructions: {{error}}",
+    "shellWrapperHideInstructions": "Hide configuration",
+    "saveSuccess": "Claude append instruction file saved",
+    "title": "Claude append instruction files",
+    "deleteFailed": "Could not delete the Claude append instruction file: {{error}}",
+    "emptyHint": "Create a file above, save it, then enable it.",
+    "shellWrapperShowInstructions": "Show configuration",
+    "enabledName": "Enabled: {{name}}",
+    "shellWrapperConflict": "External wrapper detected",
+    "dialogHint": "The content is passed through Claude Code's --append-system-prompt-file; editing writes to the original file.",
+    "path": "File path",
+    "remove": "Delete file",
+    "shellWrapperNotInstalled": "Not installed",
+    "shellWrapperInstalled": "Installed",
+    "edit": "Edit file",
+    "readFailed": "Could not read the Claude append instruction file: {{error}}",
+    "stateUnreadable": "File is unreadable",
+    "stateValid": "File available",
+    "deleteButton": "Delete file",
+    "shellWrapperStatusFailed": "Could not check shell integration: {{error}}",
+    "summaryTitle": "Claude runtime append instructions",
+    "shellWrapperInstalledHint": "Terminal launches load the current provider's enabled system and append instruction files.",
+    "stateMissing": "File not found",
+    "enableSuccess": "Claude append instructions enabled",
+    "configFailed": "Could not update Claude append instruction state: {{error}}",
+    "shellWrapperChecking": "Checking shell integration...",
+    "shellWrapperProcessing": "Processing...",
+    "shellWrapperInstructionsFailed": "Could not load manual configuration: {{error}}",
+    "readRetry": "The file could not be read, so it cannot be safely overwritten. Close and retry or check permissions.",
+    "addTitle": "New Claude append instruction file",
+    "stateCheckFailed": "File check failed",
+    "shellWrapperUninstallConfirm": "Uninstall the Claude shell integration?",
+    "loadingContent": "Reading file...",
+    "toggle": "Enable or disable {{name}}",
+    "shellWrapperTitle": "Claude shell integration",
+    "add": "New file",
+    "browse": "Choose a Markdown or text file",
+    "stateChecking": "Checking file",
+    "shellWrapperInstall": "Install",
+    "stateEmpty": "File is empty",
+    "shellWrapperUninstallFailed": "Could not uninstall shell integration: {{error}}",
+    "contentPlaceholder": "Enter runtime instructions to append to Claude Code...",
+    "editTitle": "Edit Claude append instruction file",
+    "deleteTitle": "Delete Claude append instruction file",
+    "shellWrapperUninstall": "Uninstall",
+    "count": "{{count}} files",
+    "manage": "Claude append instructions",
+    "shellWrapperInstalling": "Installing...",
+    "content": "File content",
+    "saveFailed": "Could not save the Claude append instruction file: {{error}}"
+  },
+  "claudeSystemInstructions": {
+    "add": "New file",
+    "browse": "Choose a Markdown or text file",
+    "stateChecking": "Checking file",
+    "contentPlaceholder": "Enter runtime instructions to load through Claude Code's --system-prompt-file...",
+    "editTitle": "Edit Claude system instruction file",
+    "deleteTitle": "Delete Claude system instruction file",
+    "count": "{{count}} files",
+    "content": "File content",
+    "addTitle": "New Claude system instruction file",
+    "duplicate": "This file is already listed",
+    "stateNotFile": "Path is not a file",
+    "empty": "No Claude system instruction files",
+    "summaryHint": "Manage --system-prompt-file separately for each Claude provider. Changes apply when the provider is saved and do not modify ordinary CLAUDE.md prompt presets.",
+    "stateEmpty": "File is empty",
+    "noneEnabled": "No file enabled",
+    "deleteSuccess": "Claude system instruction file deleted",
+    "browseFailed": "Could not choose a Claude system instruction file: {{error}}",
+    "deleteConfirm": "This permanently deletes {{path}} from disk and removes it from this provider's system instruction list. This cannot be undone.",
+    "pathPlaceholder": "./cc-switch/system-instructions/default.md or an absolute path",
+    "saveFailed": "Could not save the Claude system instruction file: {{error}}",
+    "stateInvalid": "File content is invalid",
+    "deleteFailed": "Could not delete the Claude system instruction file: {{error}}",
+    "enabledName": "Enabled: {{name}}",
+    "dialogHint": "The content is passed through Claude Code's --system-prompt-file; editing writes to the original file.",
+    "path": "File path",
+    "remove": "Delete file",
+    "edit": "Edit file",
+    "readFailed": "Could not read the Claude system instruction file: {{error}}",
+    "stateUnreadable": "File is unreadable",
+    "stateValid": "File available",
+    "deleteButton": "Delete file",
+    "summaryTitle": "Claude runtime system instructions",
+    "stateMissing": "File not found",
+    "saveSuccess": "Claude system instruction file saved",
+    "readRetry": "The file could not be read, so it cannot be safely overwritten. Close and retry or check permissions.",
+    "stateCheckFailed": "File check failed",
+    "loadingContent": "Reading file...",
+    "toggle": "Enable or disable {{name}}"
+  },
+  "requestDiagnostics": {
+    "response": "Upstream response",
+    "phases": {
+      "content": "First content",
+      "prepare": "Local preparation",
+      "receive": "Read response",
+      "headers": "Upstream headers"
+    },
+    "request": "Upstream request",
+    "truncated": "Preview truncated at the capture limit.",
+    "attemptsTruncated": "Additional attempts were omitted from this preview.",
+    "captureOn": "Enabled",
+    "capture": "Request and response previews",
+    "upstream": "These previews show the last upstream attempt, before client protocol conversion. Authorization headers are never captured.",
+    "loadFailed": "Could not load or save diagnostics.",
+    "title": "Request diagnostics",
+    "scope": "Recent 40 proxy requests only. Bodies are off by default, masked in memory, and capped at 128 KiB each. Enabling capture affects future requests; turning it off clears previews.",
+    "unavailable": "No diagnostics remain for this request. Historical and imported session records are not captured.",
+    "captureOff": "Disabled",
+    "canceled": "Response reading stopped before completion.",
+    "noBody": "No readable preview was captured."
+  },
+  "modelAlias": {
+    "sourcePlaceholder": "e.g. codex-auto-review",
+    "title": "Exact model aliases",
+    "hint": "Rewrites the source model name to the target model name (exact match) before forwarding. Independent of model mapping and the menu catalog, and it also covers the native Responses passthrough path. Common use: rewrite Codex's internal review model codex-auto-review to your real model.",
+    "targetPlaceholder": "e.g. gpt-5.6-sol",
+    "sourceColumn": "Source model",
+    "targetColumn": "Target model",
+    "add": "Add alias"
   }
 }

@@ -1013,14 +1013,14 @@ fn account_local_reads_hold_the_switch_lock_and_resolve_the_current_slot() {
     let (a, a_dir) = f.account("a", "org-a", "rt-a");
     let (b, b_dir) = f.account("b", "org-b", "rt-b");
     f.sign_in_default("a", "org-a", "rt-a");
-    let first = with_account_slot_in(&f.data, &f.default(), &f.accounts, &a, |slot| {
+    let first = with_account_slot_in(&f.data, &f.default(), &f.accounts, &f.store, &a, |slot| {
         assert!(SWITCH.try_lock().is_err());
         Ok(slot.clone())
     })
     .unwrap();
     assert_eq!(first, Some(f.default()));
     check_out(&f.ctx(), &b, &b_dir).unwrap();
-    let second = with_account_slot_in(&f.data, &f.default(), &f.accounts, &a, |slot| {
+    let second = with_account_slot_in(&f.data, &f.default(), &f.accounts, &f.store, &a, |slot| {
         Ok(slot.clone())
     })
     .unwrap();
@@ -1038,7 +1038,7 @@ fn account_local_reads_reject_a_directory_signed_in_as_another_account() {
     .unwrap();
     let called = std::cell::Cell::new(false);
     assert!(
-        with_account_slot_in(&f.data, &f.default(), &f.accounts, &a, |_| {
+        with_account_slot_in(&f.data, &f.default(), &f.accounts, &f.store, &a, |_| {
             called.set(true);
             Ok(())
         })
@@ -1052,7 +1052,7 @@ fn account_local_reads_discard_results_if_the_profile_changed_during_the_read() 
     let f = Fixture::new();
     let (a, _) = f.account("a", "org", "rt-a");
     assert!(
-        with_account_slot_in(&f.data, &f.default(), &f.accounts, &a, |slot| {
+        with_account_slot_in(&f.data, &f.default(), &f.accounts, &f.store, &a, |slot| {
             std::fs::write(
                 slot.global_config(),
                 serde_json::to_vec(&json!({"oauthAccount": profile("b", "org")})).unwrap(),
@@ -1082,7 +1082,7 @@ fn account_local_reads_reject_unfinished_switches_without_running_the_callback()
     .unwrap();
     let called = std::cell::Cell::new(false);
     assert!(
-        with_account_slot_in(&f.data, &f.default(), &f.accounts, &a, |_| {
+        with_account_slot_in(&f.data, &f.default(), &f.accounts, &f.store, &a, |_| {
             called.set(true);
             Ok(())
         })
@@ -1167,6 +1167,18 @@ fn a_switch_does_not_overwrite_a_journal_whose_target_profile_is_missing() {
 }
 
 #[test]
+fn quota_slot_is_the_default_slot_when_its_credential_is_that_account() {
+    let fx = Fixture::new();
+    fx.sign_in_default("me", "org-me", "rt-me");
+    let (me, me_dir) = fx.account("me", "org-me", "rt-parked");
+
+    assert_eq!(
+        resolve_slot(&me, &fx.default(), &fx.store, || Some(me_dir.clone())),
+        Some(fx.default())
+    );
+}
+
+#[test]
 fn completed_operation_receipts_only_confirm_the_exact_journal() {
     let f = Fixture::new();
     let (target, target_dir) = f.account("target", "org-target", "rt-target");
@@ -1205,4 +1217,45 @@ fn already_live_and_noop_replacement_do_not_return_an_unrelated_receipt() {
         vacate_receipted(&f.ctx(), &target, &target_dir).unwrap(),
         Some(receipt)
     );
+}
+
+#[test]
+fn quota_slot_skips_a_default_credential_that_belongs_to_someone_else() {
+    let fx = Fixture::new();
+    // 默认资料写着 me，默认凭据却是另一个组织（另一个号）的：读默认槽位会把别人的额度当成 me 的
+    fx.sign_in_default("me", "org-me", "rt-me");
+    fx.store.put(&fx.default(), secret("org-other", "rt-other"));
+    let (me, me_dir) = fx.account("me", "org-me", "rt-parked");
+
+    assert_eq!(
+        resolve_slot(&me, &fx.default(), &fx.store, || Some(me_dir.clone())),
+        Some(Slot::Account(me_dir.clone()))
+    );
+}
+
+#[test]
+fn quota_slot_skips_the_default_slot_when_its_profile_is_another_account() {
+    let fx = Fixture::new();
+    fx.sign_in_default("other", "org-other", "rt-other");
+    let (me, me_dir) = fx.account("me", "org-me", "rt-me");
+
+    assert_eq!(
+        resolve_slot(&me, &fx.default(), &fx.store, || Some(me_dir.clone())),
+        Some(Slot::Account(me_dir.clone()))
+    );
+}
+
+#[test]
+fn quota_slot_skips_the_default_slot_without_a_credential() {
+    let fx = Fixture::new();
+    fx.sign_in_default("me", "org-me", "rt-me");
+    fx.store.delete(&fx.default()).unwrap();
+    let (me, me_dir) = fx.account("me", "org-me", "rt-parked");
+
+    assert_eq!(
+        resolve_slot(&me, &fx.default(), &fx.store, || Some(me_dir.clone())),
+        Some(Slot::Account(me_dir.clone()))
+    );
+    // 本机没有这个账号目录时没有槽位可读
+    assert_eq!(resolve_slot(&me, &fx.default(), &fx.store, || None), None);
 }

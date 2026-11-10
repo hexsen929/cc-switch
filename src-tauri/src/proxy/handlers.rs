@@ -99,12 +99,16 @@ pub async fn get_status(State(state): State<ProxyState>) -> Result<Json<ProxySta
 /// cc-switch–owned `model_catalog_json`, using the same path ownership rules as
 /// Codex live-setting import.
 ///
+/// 没有 CC Switch 的目录、路由的是官方卡时，转给官方上游（见
+/// [`super::codex_models_passthrough`]）：官方列表按账号返回，Codex 自带的列表缺账号
+/// 专属的模型和 Daybreak 权限。
+///
 /// Claude Code 的模型发现（`CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY`）也打到这里：
 /// 按 [`is_claude_model_discovery`] 认出来，返回 Anthropic 形状的 Stack 模型列表。
 pub async fn handle_models(
     State(state): State<ProxyState>,
     request: axum::extract::Request,
-) -> Result<Json<Value>, ProxyError> {
+) -> Result<axum::response::Response, ProxyError> {
     let (parts, _body) = request.into_parts();
     let uri = parts.uri;
     let headers = parts.headers;
@@ -118,7 +122,7 @@ pub async fn handle_models(
     if is_claude_model_discovery(&uri, &headers) {
         let mut discovery = claude_model_discovery(&state);
         filter_models_by_caps(&mut discovery, authed.as_ref());
-        return Ok(Json(discovery));
+        return Ok(Json(discovery).into_response());
     }
     let config_dir = crate::codex_config::get_codex_config_dir();
     let active_catalog_path = match crate::codex_config::read_codex_config_text() {
@@ -139,6 +143,20 @@ pub async fn handle_models(
             }
         }
     } else {
+        let mut headers = headers;
+        let restricted = authed.as_ref().is_some_and(|key| !key.allowed_models.is_empty());
+        if restricted {
+            // A cached or compressed upstream response cannot bypass per-key filtering.
+            headers.remove(axum::http::header::IF_NONE_MATCH);
+            headers.remove(axum::http::header::IF_MODIFIED_SINCE);
+            headers.remove(axum::http::header::ACCEPT_ENCODING);
+        }
+        if let Some(response) =
+            super::codex_models_passthrough::forward_if_official_route(&state.db, &uri, &headers)
+                .await
+        {
+            return filter_official_models_response(response, authed.as_ref()).await;
+        }
         if active_catalog_path.is_none() {
             log::debug!(
                 "[models] stale guard: catalog not served (model_catalog_json not set to cc-switch catalog)"
@@ -147,7 +165,36 @@ pub async fn handle_models(
         json!({"models": []})
     };
     filter_models_by_caps(&mut catalog, authed.as_ref());
-    Ok(Json(catalog))
+    Ok(Json(catalog).into_response())
+}
+
+/// Preserve official model metadata while applying the gateway key's model scope.
+async fn filter_official_models_response(
+    response: axum::response::Response,
+    authed: Option<&crate::proxy::gateway_auth::AuthedKey>,
+) -> Result<axum::response::Response, ProxyError> {
+    if !response.status().is_success()
+        || !authed.is_some_and(|key| !key.allowed_models.is_empty())
+    {
+        return Ok(response);
+    }
+    let (mut parts, body) = response.into_parts();
+    let bytes = axum::body::to_bytes(body, 8 * 1024 * 1024)
+        .await
+        .map_err(|error| ProxyError::ForwardFailed(error.to_string()))?;
+    let mut catalog: Value = serde_json::from_slice(&bytes)
+        .map_err(|error| ProxyError::ForwardFailed(error.to_string()))?;
+    filter_models_by_caps(&mut catalog, authed);
+    strip_entity_headers_for_rebuilt_body(&mut parts.headers);
+    parts.headers.remove(axum::http::header::ETAG);
+    parts.headers.remove(axum::http::header::LAST_MODIFIED);
+    parts.headers.insert(
+        axum::http::header::CACHE_CONTROL,
+        axum::http::HeaderValue::from_static("private, no-store"),
+    );
+    let body = serde_json::to_vec(&catalog)
+        .map_err(|error| ProxyError::Internal(error.to_string()))?;
+    Ok(axum::response::Response::from_parts(parts, axum::body::Body::from(body)))
 }
 
 /// 按 AuthedKey 的 allowed_models 过滤 /v1/models 输出（就地）。
@@ -6467,10 +6514,42 @@ mod stack_tests {
             .header("anthropic-version", "2023-06-01")
             .body(axum::body::Body::empty())
             .unwrap();
-        let Json(body) = handle_models(State(proxy_state()), req)
+        let response = handle_models(State(proxy_state()), req)
             .await
             .expect("models");
+        let (_, body) = json_of(response).await;
         assert_eq!(body, json!({ "data": [], "has_more": false }));
+    }
+
+    #[tokio::test]
+    async fn official_model_metadata_survives_gateway_filtering_without_stale_entity_headers() {
+        use crate::proxy::gateway_auth::AuthedKey;
+        let key = AuthedKey {
+            id: "fixture".into(),
+            name: "fixture".into(),
+            allowed_apps: vec![],
+            allowed_providers: vec![],
+            allowed_models: vec!["gpt-allowed".into()],
+            limit_window: "none".into(),
+            limit_tokens: None,
+            limit_cost_usd: None,
+        };
+        let allowed = json!({"slug":"gpt-allowed","available_access_programs":["daybreak"]});
+        let mut response = Json(json!({
+            "models":[allowed.clone(),{"slug":"gpt-hidden"}],
+            "account_metadata":{"plan":"fixture"}
+        }))
+        .into_response();
+        response.headers_mut().insert("etag", "fixture".parse().unwrap());
+        response.headers_mut().insert("content-length", "999".parse().unwrap());
+        let response = filter_official_models_response(response, Some(&key)).await.unwrap();
+        assert!(!response.headers().contains_key("etag"));
+        assert!(!response.headers().contains_key("content-length"));
+        assert_eq!(response.headers()["cache-control"], "private, no-store");
+        let (status, body) = json_of(response).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body["models"], json!([allowed]));
+        assert_eq!(body["account_metadata"]["plan"], "fixture");
     }
 
     #[test]

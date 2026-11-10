@@ -273,11 +273,12 @@
       "extraArgs": "Ek bağımsız değişkenler (isteğe bağlı)",
       "extraArgsHint": "Yalnızca bu terminal için başlatma komutunun sonuna eklenir. Boşluklarla ayırın; boşluk içeren değerleri tırnak içine alın.",
       "extraArgsPlaceholder": "ör. --debug --append-system-prompt \"Kısa yanıt ver\"",
-      "isolationBodyCopilot": "\"{{name}}\" kartının uç noktası, anahtarı ve modeli yalnızca bu terminaldeki copilot'a iletilir ve hiçbir dosyaya yazılmaz; başka bir terminalde doğrudan copilot çalıştırmak yine GitHub oturumunuzu kullanır."
+      "isolationBodyCopilot": "Bu terminaldeki copilot, yalnızca bu oturum için --model ile \"{{name}}\" sağlayıcısının ilk modeliyle başlar. Uç nokta ve anahtar Copilot'un providers.json dosyasından okunur; diğer terminaller de /model ile seçebilir."
     },
     "openTerminalIsolated": "Bu sağlayıcıyla terminal aç (yalıtılmış)",
     "liveConfigReadFailed": "{{app}} yapılandırma dosyası okunamadı",
-    "liveConfigReadFailedHint": "Yapılandırma dosyası düzeltilene kadar sağlayıcı ekleme ve kaldırma işlemleri başarısız olur."
+    "liveConfigReadFailedHint": "Yapılandırma dosyası düzeltilene kadar sağlayıcı ekleme ve kaldırma işlemleri başarısız olur.",
+    "openTerminalNeedsRoute": "Bu kart yalnızca Yönlendirme üzerinden çalışır: terminal doğrudan kartın adresine bağlanır ve Yönlendirmenin sağladığı kimlik bilgilerini ve biçim dönüştürmeyi alamaz. Yönlendirmeyi açın, ardından istemciyi terminalde doğrudan çalıştırın"
   },
   "claudeCode": {
     "needsRouting": "Yönlendirme Gerekiyor",
@@ -399,7 +400,10 @@
       "thirdPartyBucket": "üçüncü taraf sağlayıcılar",
       "migrationFinished": "{{count}} eski oturum taşındı. Devam etmek için Codex’i yeniden başlatın.",
       "migrationFailed": "Eski oturumlar taşınamadı: {{error}}. CC Switch bir sonraki açılışta yeniden deneyecek."
-    }
+    },
+    "providerResourcesWarning": "Configuration applied, but some provider resources failed to sync",
+    "providerResourcesSynced": "Provider resources synced",
+    "proxyReasonClaudeDesktop": "Using Claude Desktop local routing mode"
   },
   "confirm": {
     "deleteProvider": "Sağlayıcıyı Sil",
@@ -926,7 +930,7 @@
       "invalid": "1 ile 99 arasında tam sayılar girin."
     },
     "preserveCodexOfficialAuthOnSwitch": "Doğrudan geçişler için resmi giriş bilgilerini koruyun",
-    "preserveCodexOfficialAuthOnSwitchDescription": "Yerel yönlendirme kapalıyken üçüncü taraf anahtarları kontrol eder. Devralma yönlendirmesi her zaman Codex resmi giriş bilgilerini korur.",
+    "preserveCodexOfficialAuthOnSwitchDescription": "Keep the official login on the next direct switch to a third-party provider. Proxy mode always keeps an existing native login. This setting does not sign you in.",
     "unifyCodexSessionHistory": "Birleşik Codex oturum geçmişi",
     "unifyCodexSessionHistoryDescription": "Resmî abonelik, üçüncü taraf sağlayıcılarla aynı \"custom\" sağlayıcı kimliğiyle çalışır; böylece tüm oturumlar tek bir grupta toplanır. Yeni Codex sürümleri (masaüstü 26.1103 / CLI 0.167 ve sonrası) yalnızca geçerli sağlayıcının grubundaki oturumlara devam edebilir; diğer grup salt okunur olur ve CLI'nin devam listesi yalnızca geçerli grubu gösterir. Resmî ve üçüncü taraf sağlayıcılar arasında geçiş yapıyorsanız açın. İsteğe bağlı olarak resmî oturumları paylaşılan gruba taşıyabilir (önce yedeklenir) ve kapatırken yedekten geri yükleyebilirsiniz. Not: eski bir oturumun sağlayıcılar arasında sürdürülmesi başarısız olabilir, çünkü encrypted_content mantığının şifresi yalnızca onu oluşturan arka uç tarafından çözülebilir.",
     "codexStackClassicSubagents": "Birleştirmedaki klasik alt ajan araçları",
@@ -1391,7 +1395,7 @@
     "defaultModelPlaceholder": "örneğin grok-4.5",
     "defaultModelHint": "Grok Build modeli varsayılan olarak talep eder; istediğiniz zaman değiştirin.",
     "reasoningEffortHint": "Yukarı akış, düşük/yüksek/maks. gibi düşünme derinliğini desteklediğinde açın. Ayrıca düşünme modunu açar ve isteğin akıl yürütme çabasını yukarı akış Sohbet parametresine eşler.",
-    "maxOutputTokensHint": "Varsayılan sınır olan 8192, uzun yanıtları veya derin düşünmeyi engelleyebilir. Bu değer Anthropic'nin max_tokens'ı olarak gönderilir.",
+    "maxOutputTokensHint": "Varsayılan sınır 32000'dir ve düşünme de buna dahildir. Ağ geçidinin çıkış sınırı daha düşükse 400 döner; burada desteklediği değeri girin. Bu değer Anthropic'nin max_tokens'ı olarak gönderilir.",
     "keyFieldsHint": "Sağlayıcıyı takip etmek için varsayılan model (models.default) ve işaret ettiği model tablosu; geri kalan her şey Grok Build genel ayarlarıdır ve kaydettikten sonra her sağlayıcı için geçerlidir.",
     "inactiveFieldsHint": "Bu sağlayıcıya daha eski bir sürümle kaydedilmiş; geçiş artık bunları uygulamamaktadır. TOML'yi kopyalamak ve ihtiyacınız varsa yukarıya yapıştırmak için birine tıklayın.",
     "inactiveFieldCopied": "Kopyalandı",
@@ -1942,7 +1946,9 @@
     "reasoningEffortAuto": "Otomatik (önerilen)",
     "reasoningEffortHelp": "Yönlendirme istekleri OpenAI biçimine dönüştürdüğünde istemcide seçilen düşünme düzeyinin üst sunucuya nasıl gönderileceğini belirler. Otomatik: üst sunucunun desteklediği bir düzey gönderilir; tanınmayan sunuculara en fazla high gönderilir ve düşünme kapalıysa parametre gönderilmez. Olduğu gibi gönder: istemcinin seçtiği düzey aynen iletilir; xhigh veya max desteklemeyen sunucular hata verir. Gönderme: üst sunucu bu parametreyi reddediyorsa kullanın.",
     "reasoningEffortOff": "Gönderme",
-    "reasoningEffortPassthrough": "Olduğu gibi gönder"
+    "reasoningEffortPassthrough": "Olduğu gibi gönder",
+    "toolCallBridgeHint": "For OpenAI-compatible endpoints without native tools/tool_calls support: write tool definitions into the prompt and parse the model JSON back into tool calls.",
+    "toolCallBridge": "Tool-call bridge"
   },
   "copilot": {
     "automaticFormat": "Yönlendirme tarafından otomatik seçilir",
@@ -1986,24 +1992,39 @@
     "form": {
       "officialTitle": "Copilot CLI'nin GitHub oturumunu kullanır",
       "officialHint": "\"Terminal aç\", copilot'u bu kartın modeliyle başlatır; Yetki Merkezi'nden bir hesap bağlarsanız o hesapla başlatır.",
-      "byokTitle": "Yalnızca bu karttan açılan terminallerde geçerlidir",
-      "byokHint": "Copilot CLI özel modelleri yalnızca ortam değişkenlerinden okur; Copilot'un kendi dosyalarına hiçbir şey yazılmaz.",
+      "byokTitle": "Eklendiğinde Copilot'un providers.json dosyasına yazılır",
+      "byokHint": "Ekle, bu sağlayıcıyı ve modellerini Copilot'un kendi providers.json dosyasına yazar (yalnızca kullanıcı hesabınız okuyabilir). Ardından nasıl başlatılırsa başlatılsın copilot, /model içinde \"kart kimliği/model\" seçebilir. Kaldır yalnızca bu sağlayıcının girdilerini siler, dosyanın geri kalanına dokunmaz.",
       "apiFormat": "API biçimi",
       "baseUrl": "API uç noktası",
       "baseUrlHint": "OpenAI uyumlu uç noktalar genellikle /v1 ile biter (ör. Ollama http://localhost:11434/v1); Anthropic için yalnızca sunucu adresi (https://api.anthropic.com).",
       "model": "Model",
       "officialModelHint": "Boş bırakırsanız Copilot'un geçerli modeli kullanılır. Yalnızca bu oturum için --model olarak iletilir; copilot içindeki /model çalışmaya devam eder.",
-      "byokModelHint": "Uç noktanızın beklediği model kimliği (COPILOT_MODEL).",
       "reasoningEffort": "Akıl yürütme düzeyi",
       "reasoningEffortDefault": "Copilot varsayılanı",
       "reasoningEffortHint": "Terminal açılırken --reasoning-effort olarak iletilir. none seçildiğinde Copilot, Responses isteklerinde reasoning.summary göndermez; bazı aktarıcılar bu alanı kabul etmez.",
       "maxPromptTokens": "En fazla istem token'ı",
       "maxOutputTokens": "En fazla çıktı token'ı",
-      "envJsonHint": "Gelişmiş: her COPILOT_PROVIDER_* değişkeni (ör. COPILOT_PROVIDER_MODEL_ID veya COPILOT_PROVIDER_BEARER_TOKEN) copilot'a olduğu gibi iletilir."
+      "byokModelsHint": "Her model Copilot'un /model listesinde \"{{id}}/model kimliği\" olarak görünür; en az bir tane ekleyin. Satırı açıp bir üst akış model adı girmediğiniz sürece model kimliği uç noktaya gönderilen addır. Bu karttan terminal açıldığında ilk model kullanılır.",
+      "providerIdHint": "Copilot'taki sağlayıcı adıdır da; /model içinde \"{{id}}/model\" olarak görünür. Kaydettikten sonra değiştirilemez. Yalnızca harf, rakam, nokta, alt çizgi ve kısa çizgi kullanılabilir.",
+      "duplicateModelId": "Yinelenen model kimliği: {{model}}",
+      "wireModel": "Üst akış model adı",
+      "wireModelHint": "Uç noktaya gönderilen model adı (wireModel). Boş bırakılırsa model kimliği kullanılır.",
+      "maxContextWindowTokens": "Bağlam penceresi",
+      "azureApiVersion": "Azure API sürümü"
     },
     "quota": {
       "accountNotInAuthCenter": "Copilot CLI'nin oturum açtığı {{login}} hesabı Yetki Merkezi'nde yok. Yetki Merkezi'ne ekleyin veya bu kartta bir hesap bağlayın.",
       "notSignedIn": "Copilot CLI'de oturum açılmamış. copilot'u çalıştırıp /login ile oturum açın veya bu kartta bir Yetki Merkezi hesabı bağlayın."
+    },
+    "noPickerModels": "Bu GitHub hesabında kullanılabilir Copilot modeli yok. Bu durum Copilot Free hesaplarında olağandır; lütfen hesabın Copilot Pro veya daha üst bir plana sahip olduğundan emin olun.",
+    "noPickerModelsClaude": "Bu GitHub hesabında kullanılabilir Copilot modeli yok. Bu durum Copilot Free hesaplarında olağandır; lütfen hesabın Copilot Pro veya daha üst bir plana sahip olduğundan emin olun. Model alanına gpt-4.1 veya gpt-4o'yu elle de yazabilirsiniz.",
+    "noModelsForApiFormat": "Bu hesabın Copilot modellerinin hiçbiri seçilen yukarı akış biçimini desteklemiyor. Farklı bir yukarı akış biçimi deneyin.",
+    "defaultCannotRemove": "Copilot'un varsayılan modeli bu sağlayıcıya ait olduğundan kaldırılamaz veya silinemez. Önce copilot içinde /model ile başka bir sağlayıcının modelini seçin.",
+    "terminalNeedsAdd": "Terminalin modelini seçebilmesi için önce bu sağlayıcıyı Copilot'a ekleyin.",
+    "section": {
+      "official": "Resmi oturum · {{count}}",
+      "officialHelpTitle": "Resmi oturum",
+      "officialHelp": "Copilot CLI'nin kendi GitHub oturumunu kullanır ve hiçbir dosyaya yazmaz. Terminal Aç, copilot'u kartın modeli ve bağlı hesabıyla başlatır."
     }
   },
   "codexOauth": {
@@ -2147,8 +2168,8 @@
     "impersonateClaudeCodeLabel": "Claude Code istemcisini taklit edin",
     "impersonateClaudeCodeHint": "Ağ geçidi yalnızca Claude Code'yi kabul ettiğinde açılır: Claude Code'nin istek başlıklarını gönderir ve kimliğini sistem isteminin ilk satırına koyar.",
     "maxOutputTokensLabel": "Maksimum çıkış tokenları",
-    "maxOutputTokensPlaceholder": "Varsayılan 8192'yi kullanmak için boş bırakın",
-    "maxOutputTokensHint": "Codex hiçbir çıkış sınırı göndermez, dolayısıyla varsayılan 8192 uzun cevapları veya derin düşünmeyi kesebilir. Bu değer Anthropic'nin max_tokens'ı olarak gönderilir.",
+    "maxOutputTokensPlaceholder": "Varsayılan 32000'i kullanmak için boş bırakın",
+    "maxOutputTokensHint": "Codex hiçbir çıkış sınırı göndermez, bu yüzden varsayılan olarak 32000 gönderilir ve düşünme de buna dahildir. Ağ geçidinin çıkış sınırı daha düşükse 400 döner; burada desteklediği değeri girin. Bu değer Anthropic'nin max_tokens'ı olarak gönderilir.",
     "promptCacheRoutingLabel": "İstemi önbellek yönlendirmesi",
     "promptCacheRoutingAuto": "Otomatik (önerilir)",
     "promptCacheRoutingEnabled": "Etkin",
@@ -2165,7 +2186,7 @@
     "autoReviewModelNoList": "Model listesi gerekmez. İnceleme modelini doğrudan girin; boş bırakıldığında codex-auto-review kullanılır.",
     "autoReviewModelMainDefault": "Ana model kendini inceler (varsayılan)",
     "autoReviewModelCodexDefault": "Codex varsayılanı (codex-auto-review)",
-    "autoReviewModelHint": "Otomatik onay (Benim yerime onayla) açıkken bir işlemin devam edip edemeyeceğine karar veren Codex modeli. Onay istekleri konuşmayla aynı sağlayıcıya gönderilir; bu nedenle yalnızca bu kartın model listesindeki modeller seçilebilir. Birleştirme modunda bu ayar yok sayılır ve Birleştirme sekmesindeki Otomatik inceleme modeli kullanılır. Değişikliklerden sonra Codex'i yeniden başlatın.",
+    "autoReviewModelHint": "The model Codex uses for Approve for me. Enter a model ID or fetch models from this provider without adding them to the model list. Blank uses codex-auto-review. Save the provider and restart Codex after changes. Aggregation mode uses its separate settings.",
     "autoReviewModelEmptyHint": "Model listesine eklemeniz gerekmez. Uygulamak için sağlayıcıyı kaydedip Codex’i yeniden başlatın.",
     "autoReviewModelSelect": "İnceleme modeli seç",
     "autoReviewModelFetch": "Modelleri getir",
@@ -2212,7 +2233,46 @@
     "maxOutputTokensWarning": "Modelin veya ağ geçidinin gerçek çıkış sınırını aşmayın, aksi halde istekler 400 değerini döndürür.",
     "routeOnlySettingsHint": "Aşağıdaki iki ayar yalnızca yönlendirme ve Birleştirme modlarında geçerlidir.",
     "officialSpeedTiersLabel": "Resmî Fast hız düzeyini koru",
-    "officialSpeedTiersHint": "Model listesindeki GPT modellerinin resmî Fast hız düzeyini korur; Codex’te Fast seçilince service_tier=priority gönderilir. Yalnızca resmî ChatGPT hesaplarına yönlendiren aktarım hizmetleri (CPA gibi) bunu kabul eder ve kota daha hızlı tükenir. Diğer sağlayıcılar isteği reddedebilir veya daha yüksek ücret uygulayabilir. Açıldığında resmî kartta önceden seçilen Fast bu sağlayıcıda hemen etkinleşir. Birleştirme modunda kullanılmaz. Değişiklikten sonra Codex’i yeniden başlatın."
+    "officialSpeedTiersHint": "Model listesindeki GPT modellerinin resmî Fast hız düzeyini korur; Codex’te Fast seçilince service_tier=priority gönderilir. Yalnızca resmî ChatGPT hesaplarına yönlendiren aktarım hizmetleri (CPA gibi) bunu kabul eder ve kota daha hızlı tükenir. Diğer sağlayıcılar isteği reddedebilir veya daha yüksek ücret uygulayabilir. Açıldığında resmî kartta önceden seçilen Fast bu sağlayıcıda hemen etkinleşir. Birleştirme modunda kullanılmaz. Değişiklikten sonra Codex’i yeniden başlatın.",
+    "instructionsFileEditTitle": "Edit model instructions file",
+    "instructionsFileDeleteTitle": "Delete model instructions file",
+    "instructionsFileDuplicate": "This file is already in the list",
+    "instructionsFileSaveSuccess": "Model instructions file saved",
+    "instructionsFileStateEmpty": "File is empty",
+    "instructionsFileStateMissing": "File not found",
+    "instructionsFileEnabledName": "Enabled: {{name}}",
+    "instructionsFileDialogHint": "Create or edit .md/.txt files directly. Relative paths use the directory containing config.toml as their base.",
+    "instructionsFileDeleteConfirm": "This permanently deletes {{path}} from disk and removes it from the current provider. This action cannot be undone.",
+    "instructionsFileAdd": "New file",
+    "instructionsFileBrowseFailed": "Could not choose the model instructions file: {{error}}",
+    "instructionsFileNoneEnabled": "No file enabled",
+    "instructionsFileDeleteConfirmButton": "Delete file",
+    "instructionsFileAddTitle": "New model instructions file",
+    "instructionsFileBrowse": "Choose a Markdown or text file",
+    "instructionsFileStateChecking": "Checking file",
+    "instructionsFilePath": "File path",
+    "instructionsFileEmpty": "No model instructions files",
+    "instructionsFileRemove": "Delete file",
+    "instructionsFileStateUnreadable": "File is unreadable",
+    "instructionsFileDeleteFailed": "Could not delete the model instructions file: {{error}}",
+    "instructionsFilePlaceholder": "./instruction_5.6.md or an absolute path",
+    "instructionsFileStateInvalid": "File content is invalid",
+    "instructionsFileSaveFailed": "Could not save the model instructions file: {{error}}",
+    "instructionsFileStateValid": "File available",
+    "instructionsFileCount": "{{count}} files",
+    "instructionsFileStateWithSize": "{{state}} · {{size}} B",
+    "instructionsFileReadFailed": "Could not read the model instructions file: {{error}}",
+    "instructionsFileToggle": "Enable or disable {{name}}",
+    "instructionsFileLoadingContent": "Loading file...",
+    "instructionsFileDeleteSuccess": "Model instructions file deleted",
+    "instructionsFileLabel": "Model instructions file",
+    "instructionsFileContentPlaceholder": "Enter model instructions for Codex...",
+    "instructionsFileEdit": "Edit file",
+    "instructionsFileContent": "File content",
+    "instructionsFileHint": "Enabling a file replaces Codex's built-in base instructions for the selected model. Use this only when a custom model requires dedicated instructions.",
+    "instructionsFileStateNotFile": "Path is not a file",
+    "instructionsFileReadRetry": "The file could not be read, so it cannot be saved safely. Close and retry or check its permissions.",
+    "instructionsFileStateCheckFailed": "File check failed"
   },
   "geminiConfig": {
     "envFile": "Ortam Değişkenleri (.env)",
@@ -2754,7 +2814,18 @@
       "rateInvalid": "0'dan büyük bir sayı girin",
       "currency": "Para birimi",
       "rateHint": "Elle girilir ve yalnızca görüntüleme amacıyla kullanılır; maliyetler USD olarak kaydedilmeye devam eder.",
-      "rate": "Döviz kuru"
+      "rate": "Döviz kuru",
+      "rateSource": "Kur kaynağı",
+      "rateSources": {
+        "auto": "Otomatik (günlük)",
+        "manual": "Elle"
+      },
+      "rateAutoHint": "Günde bir kez otomatik olarak alınır ve yalnızca görüntüleme amacıyla kullanılır; maliyetler USD olarak kaydedilmeye devam eder.",
+      "rateAutoUpdated": "Son güncelleme: {{time}}",
+      "rateAutoNever": "Henüz kur alınmadı",
+      "rateAutoFailed": "Yeni kur alınamadı; önceki kur kullanılmaya devam ediliyor.",
+      "rateAttribution": "Kurlar {{provider}} tarafından sağlanır.",
+      "rateRefresh": "Şimdi güncelle"
     }
   },
   "usageScript": {
@@ -3001,7 +3072,10 @@
       "commandRequired": "Lütfen komutu girin",
       "singleServerObjectRequired": "Lütfen tek bir MCP sunucu nesnesi yapıştırın (üst düzey mcpServers alanını dahil etmeyin)",
       "saveFailed": "Kaydetme başarısız oldu",
-      "deleteFailed": "Silinemedi"
+      "deleteFailed": "Silinemedi",
+      "piSseUnsupported": "Pi, SSE MCP sunucularını desteklemez. Bunun yerine HTTP (streamable HTTP) kullanın",
+      "piInvalidName": "Pi MCP sunucu adları yalnızca harf, rakam, _ ve - içerebilir: {{id}}",
+      "piNameConflict": "Pi, yalnızca - ve _ ile farklılaşan sunucu adlarını aynı sunucu olarak kabul eder: {{id}}, mevcut {{other}} ile çakışıyor"
     },
     "validation": {
       "ok": "Komut mevcut",
@@ -3160,7 +3234,10 @@
       "imported": "{{path}}'nin içeriği içe aktarıldı; dosya değişmedi",
       "importedPi": "AGENTS.md kütüphaneye kaydedildi; dosya değişmedi",
       "copied": "\"{{name}}\" {{apps}}'ye kopyalandı"
-    }
+    },
+    "managedImportHint": "Stores this preset under ~/.claude/cc-switch/prompts and updates only CC Switch's import block. Other CLAUDE.md content is preserved.",
+    "managedImport": "Preserve CLAUDE.md with a managed import",
+    "managedImportDisabledHint": "Disabled uses the existing direct mode: enabling this preset replaces the complete CLAUDE.md file."
   },
   "profiles": {
     "switcherAriaLabel": "Proje: {{name}}",
@@ -3716,7 +3793,8 @@
       "description": "Açıklama",
       "contentPreview": "İçerik Önizlemesi",
       "enabledWarning": "İçe aktarmanın ardından bu istem hemen etkinleştirilecek ve diğer istemler devre dışı bırakılacak",
-      "enableAfterImport": "İçe aktardıktan sonra etkinleştir"
+      "enableAfterImport": "İçe aktardıktan sonra etkinleştir",
+      "appendContentPreview": "Separate Claude Append Instruction File Preview"
     },
     "skill": {
       "title": "Claude Beceri Deposu Ekle",
@@ -3936,6 +4014,9 @@
         "active": "{{appLabel}} yönlendiriyor - {{address}}:{{port}}\nSağlayıcıları değiştirmek yalnızca rotayı değiştirir; doğrudan sağlayıcı kalır",
         "broken": "{{appLabel}} yönlendirme yapıyor ancak yönlendirme hizmeti çalışmıyor",
         "inactive": "{{appLabel}}'nin isteklerini yerel yönlendirme yoluyla yönlendirin"
+      },
+      "codexChatgptAuth": {
+        "directSwitchHint": "Keep the official login on the next direct switch to a third-party provider. Proxy mode always keeps an existing native login. This setting does not sign you in."
       }
     },
     "stackMode": {
@@ -4032,7 +4113,236 @@
     "stoppedWithRestore": "Yönlendirme hizmeti durduruldu; tüm uygulamalar doğrudan bağlantılara geri döndü",
     "stopWithRestoreFailed": "Durdurma başarısız oldu: {{detail}}",
     "lanGateway": {
-      "webSearch": "Web arama MCP"
+      "webSearch": "Web arama MCP",
+      "rotateFailed": "Rotation failed",
+      "rotate": "Rotate",
+      "capsHint": "Restrict what this key may use; each field \"empty = unrestricted\".",
+      "rotateMessage": "The old token stops working immediately; clients using it must switch to the new token. This cannot be undone.",
+      "removeFailed": "Delete failed",
+      "revealTitle": "New key (the full token is shown only once — copy it now)",
+      "securityWarning": "Enabling sharing exposes a proxy that carries your upstream API key to the local network. Only enable it on trusted networks, and create a separate key per client so you can disable or revoke them individually.",
+      "window": {
+        "week": "Per week",
+        "day": "Per day",
+        "month": "Per month",
+        "none": "No limit"
+      },
+      "limitWindow": "Window",
+      "newKeyName": "New key name (optional, name it per client)",
+      "limitsSaved": "Quota saved",
+      "enabled": "Enabled",
+      "saveLimits": "Save quota",
+      "copyFailed": "Copy failed",
+      "caps": "Permissions",
+      "copyMasked": "Copy masked value",
+      "shareToggle": "Allow local network sharing",
+      "limitCost": "Cost cap (USD, empty = unlimited)",
+      "removeMessage": "Clients using this token will lose access, and it cannot be recovered.",
+      "toggleKeyFailed": "Failed to toggle key state",
+      "limitsHint": "Cap usage per local calendar window; over the limit returns 429. Each cap \"empty = unlimited\".",
+      "disabled": "Disabled",
+      "addFailed": "Failed to add key",
+      "hint": "By default only this machine can use the proxy. After you enable \"Share on local network\", non-loopback requests must carry an enabled gateway key or get 401; while sharing stays off, non-loopback requests always get 403. Create a separate key per client so you can disable or revoke them individually.",
+      "copied": "Copied",
+      "noKeys": "No keys yet. After enabling sharing you must create at least one key for remote clients to connect.",
+      "limitsSaveFailed": "Failed to save quota",
+      "saveCaps": "Save permissions",
+      "capsSaveFailed": "Failed to save permissions",
+      "addKey": "Add key",
+      "rotateTitle": "Rotate this key's token?",
+      "capModels": "Allowed model globs (comma-separated, e.g. anthropic/*, empty = unrestricted)",
+      "toggleFailed": "Failed to toggle LAN sharing",
+      "shareHelp": "Off: only this machine (loopback) can reach the proxy; non-loopback requests always get 403. On: non-loopback requests must carry one of the enabled gateway keys below (Bearer / x-api-key / x-goog-api-key / ?key=), otherwise 401. Local CLIs never need a key.",
+      "title": "LAN gateway",
+      "limitTokens": "Token cap (empty = unlimited)",
+      "capsSaved": "Permissions saved",
+      "keyNamePlaceholder": "Key name (optional)",
+      "rotateConfirm": "Rotate",
+      "capApps": "Apps",
+      "removeTitle": "Delete this key?",
+      "capProviders": "Allowed provider IDs (comma-separated, empty = unrestricted)"
+    },
+    "respMiddleware": {
+      "saveFailed": "Save failed",
+      "title": "Programmable response middleware",
+      "hint": "Run your own scripts on upstream responses: onResponse rewrites non-streaming JSON bodies, onEvent rewrites each event of a streaming SSE response. Each hook toggles independently; off by default, fail-open.",
+      "on": "On",
+      "onEvent": {
+        "title": "onEvent (streaming)",
+        "warn": "The script runs once per SSE event (50ms CPU budget); keep the logic minimal. Any error, timeout, or non-object return passes the event through unchanged and never interrupts your stream."
+      },
+      "security": "Scripts run in an isolated sandbox: no network, no filesystem. onResponse only applies to non-streaming JSON; non-JSON (including compressed/binary) responses always pass through untouched.",
+      "onResponse": {
+        "title": "onResponse (non-streaming)"
+      },
+      "contract": "Each script must evaluate to a function: onResponse is (response, meta) => any, onEvent is (event, meta) => any. Return a JSON object to replace; return a non-object to pass through unchanged.",
+      "off": "Off",
+      "saved": "Response middleware saved"
+    },
+    "accountFailover": {
+      "off": "Off",
+      "saved": "Account failover saved",
+      "saveFailed": "Failed to save account failover",
+      "title": "In-subscription account failover",
+      "hint": "When on, if one account in a subscription (Copilot / ChatGPT / xAI managed accounts) is rate-limited or its auth fails (401/403/429), that account is briefly cooled down and later requests in the same pool automatically switch to another healthy account. Off by default; when off, account selection is identical to before.",
+      "on": "On"
+    },
+    "middleware": {
+      "contract": "The script must be an expression that evaluates to a function with the signature (request, meta) => any. Return an object to use it as the new body; return a non-object to pass through unchanged.",
+      "saved": "Middleware saved",
+      "saveFailed": "Failed to save middleware",
+      "on": "On",
+      "title": "Programmable request middleware",
+      "hint": "Run your own onRequest script against the outbound request body for param overrides, model mapping, system-prompt injection, and more. The toggle and script take effect together on Save.",
+      "off": "Off",
+      "security": "The script runs in an isolated sandbox: no network, no filesystem, 1s CPU limit. Any error or timeout passes the original request through without interrupting forwarding."
+    },
+    "pii": {
+      "addRule": "Add rule",
+      "placeholder": "Placeholder template, supports {label}; empty = [REDACTED:{label}]",
+      "saveFailed": "Save failed",
+      "title": "Outbound redaction",
+      "hint": "Before forwarding upstream, replace sensitive matches in message text with a placeholder. Only message text is touched, never model/role/tool structure; default off, fail-open on bad regex.",
+      "builtins": "Built-in patterns (high-confidence)",
+      "on": "On",
+      "builtin": {
+        "iban": "IBAN",
+        "email": "Email",
+        "awsAccessKeyId": "AWS Access Key",
+        "creditCard": "Credit card",
+        "usSsn": "US SSN",
+        "jwt": "JWT",
+        "privateKeyBlock": "Private key block"
+      },
+      "rulePattern": "Regex, e.g. sk-[A-Za-z0-9]+",
+      "ruleName": "Label (optional)",
+      "off": "Off",
+      "noRules": "No custom rules. Add regex patterns as needed.",
+      "customRules": "Custom regex",
+      "saved": "Redaction config saved"
+    },
+    "routingSticky": {
+      "on": "On",
+      "title": "Conversation stickiness",
+      "off": "Off",
+      "saved": "Conversation stickiness saved",
+      "saveFailed": "Failed to save conversation stickiness",
+      "hint": "When on, a conversation stays on the provider that answered its previous turn, so rotate/least-used strategies don't switch providers every request and invalidate the upstream cache. Recommended with Rotate or Least used."
+    },
+    "intentRouting": {
+      "title": "Intent routing",
+      "pred": {
+        "day": {
+          "0": "Mon",
+          "3": "Thu",
+          "1": "Tue",
+          "5": "Sat",
+          "6": "Sun",
+          "2": "Wed",
+          "4": "Fri"
+        },
+        "minTokens": "Min estimated input tokens (blank = any)",
+        "hasTool": "Has a tool (type/name contains this substring; blank = any)",
+        "fieldContains": "Contains substring",
+        "compaction": "Compaction",
+        "timeWindow": "Time window",
+        "fieldPath": "Body field path, e.g. metadata.user_id",
+        "hasImage": "Has image",
+        "modelGlob": "Model-name glob, e.g. *haiku* (blank = any)"
+      },
+      "hint": "Route a request to a chosen provider (as the head of the failover chain) based on its \"intent\", optionally rewriting the upstream model. The first matching rule wins. Off by default; on no-match or missing target the request passes through unchanged.",
+      "ruleName": "Rule name (optional)",
+      "selectProvider": "Select target provider",
+      "rules": "Rules (first match wins, in order)",
+      "intent": {
+        "background": "Background / lightweight (warmup·compact)",
+        "long-context": "Long context (estimated ≥100,000 tokens)",
+        "subagent": "Subagent",
+        "web-search": "Web search tool",
+        "thinking": "Extended thinking / reasoning"
+      },
+      "off": "Off",
+      "noProviders": "No providers",
+      "matcherIntent": "Semantic intent",
+      "matcherPredicate": "Custom predicate",
+      "saved": "Intent routing saved",
+      "matcher": "Match by",
+      "addRule": "Add rule",
+      "saveFailed": "Save failed",
+      "modelOverride": "Rewrite model (optional)",
+      "empty": "No rules. Once added, matching requests are routed to the chosen provider.",
+      "on": "On"
+    },
+    "reliability": {
+      "nonApi": {
+        "title": "Non-API response failover",
+        "desc": "When a 2xx response is actually an HTML/Cloudflare challenge page, turn it into a retryable error and fail over instead of relaying the error page."
+      },
+      "on": "On",
+      "saved": "Reliability config saved",
+      "loopGuard": {
+        "desc": "Cleanly cut a streaming reply stuck in a phrase-level loop (skips separators/whitespace; high threshold).",
+        "title": "Loop guard"
+      },
+      "title": "Proxy reliability",
+      "hint": "Three streaming hardening options: SSE keep-alive while upstream is silent, loop-guard that cuts a stuck stream, and failover when a 2xx response is a non-API (HTML/CF challenge) page. Each default-off.",
+      "keepalive": {
+        "desc": "Periodically send an SSE comment line while the upstream is silent, to avoid ~125s idle disconnects by intermediaries (Cloudflare/proxies). Comments are ignored by clients.",
+        "title": "SSE keep-alive",
+        "hint": "blank/0 = 15; max 300",
+        "interval": "Interval (sec)"
+      },
+      "off": "Off",
+      "saveFailed": "Save failed"
+    },
+    "rewrite": {
+      "system": {
+        "append": "Append",
+        "claudeOnly": "Applies to Claude only (Anthropic native system field); use the programmable script for other apps.",
+        "off": "Off",
+        "replace": "Replace",
+        "placeholder": "System text to inject",
+        "title": "System prompt injection",
+        "prepend": "Prepend"
+      },
+      "modelMap": {
+        "title": "Model name mapping",
+        "to": "Target model",
+        "add": "Add rule",
+        "from": "Source model / *",
+        "empty": "No rules. Use * as the \"from\" to catch any model that no exact rule matched."
+      },
+      "saveFailed": "Failed to save",
+      "on": "On",
+      "saved": "Presets saved",
+      "params": {
+        "title": "Param overrides",
+        "hint": "A top-level JSON object that overrides/adds outbound params; set a value to null to delete that param."
+      },
+      "title": "Ready-made request middleware (no code)",
+      "paramsInvalid": "Param overrides must be a valid JSON object",
+      "hint": "Handle the three most common rewrites with structured config: remap the model name, override params, inject a system prompt — no scripting needed. Runs before the programmable script; default off, fail-safe.",
+      "off": "Off"
+    },
+    "routingStrategy": {
+      "desc": {
+        "pace": "Quota-aware (pace): prefer the provider with the most remaining quota per hour until reset, spreading the window evenly so it is not spent too early. Reads the latest usage snapshot and falls back to Order when quota is unknown.",
+        "usage": "Least-used first: prefer the provider picked the fewest times during this run.",
+        "rotate": "Round-robin: shift the primary route by one across healthy providers on each request to spread load.",
+        "smart": "Quota-aware (smart): among providers that still have quota, prefer the one resetting soonest so the about-to-reset quota is used up with the least waste. Reads the latest usage snapshot and falls back to Order when quota is unknown.",
+        "order": "Follow the failover queue order: always prefer P1, then fall back in sequence."
+      },
+      "option": {
+        "pace": "Pace (even quota)",
+        "usage": "Least used",
+        "rotate": "Rotate",
+        "smart": "Smart (save quota)",
+        "order": "Order"
+      },
+      "saved": "Routing strategy saved",
+      "saveFailed": "Failed to save routing strategy",
+      "hint": "When auto failover is on and the queue has multiple providers, this decides the primary route and failover order. No effect with a single provider.",
+      "title": "Routing strategy"
     }
   },
   "streamCheck": {
@@ -4591,7 +4901,6 @@
       "defaultWhileRouting": "Yönlendirme sırasında varsayılan, yönlendirdiğiniz sağlayıcıdır. Birleştirme'ya geçerken başka bir tane seçebilirsiniz.",
       "needsRoute": "Yönlendirme gerekiyor: {{reason}}; doğrudan bağlanamıyorum.",
       "defaultCannotRemove": "Varsayılan kaldırılamaz. Önce başka bir sağlayıcıyı varsayılan yapın.",
-      "currentCannotRemove": "Kullanılan sağlayıcı kaldırılamaz. Önce başka birini etkinleştirin.",
       "inUseCannotDelete": "Kullanılan sağlayıcı silinemez. Önce diğerine geçin.",
       "noFailover": "Resmi hesaplar yedek sağlayıcıya geçiş kuyruğuna katılamaz: İstemcinin kendi oturum açma bilgilerini kullanırlar ve diğer sağlayıcılarla dönüşümlü olarak çalışamazlar.",
       "directDefaultCannotDelete": "Yönlendirmeden çıkıldığında bu sağlayıcıya dönülür; bu nedenle silinemez. Önce doğrudan bağlantı sayfasında başka bir sağlayıcı için \"Doğrudan bağlantıya dön ve kullan\" seçeneğini seçin."
@@ -5129,7 +5438,11 @@
       "open": "Yetkilendirme sayfasını açın",
       "note": "Tarayıcınızda yetkilendirme sayfası açık; bitirdiğinizde bu kendi kendine güncellenir. {{service}}'nin kullanım koşullarına dikkat edin.",
       "browserNote": "{{service}} oturum açma sayfası tarayıcınızda açık. Oturum açıp erişim izni verin; bu bilgi otomatik olarak güncellenir.",
-      "reopen": "Oturum açma sayfasını yeniden aç"
+      "reopen": "Oturum açma sayfasını yeniden aç",
+      "copyLink": "Oturum açma bağlantısını kopyala",
+      "linkCopied": "Oturum açma bağlantısı kopyalandı.",
+      "linkNote": "Oturum açma bağlantısı kopyalandı. Kullanmak istediğiniz tarayıcıda açın, oturum açıp erişim izni verin; bu bilgi otomatik olarak güncellenir.",
+      "linkCodeNote": "Oturum açma bağlantısı kopyalandı. Kullanmak istediğiniz tarayıcıda açın ve kodu girin; bitirdiğinizde bu kendi kendine güncellenir. {{service}} kullanım koşullarına dikkat edin."
     },
     "toast": {
       "added": "{{service}} hesabı eklendi.",
@@ -5167,6 +5480,17 @@
       "empty": "Henüz Claude hesabı yok. Birden fazla abonelik hesabı arasında geçiş yapmak için burada oturum açın.",
       "removeNote": "Yalnızca CC Switch’in bu hesap için kaydettiği oturumu kaldırır; başka yerdeki oturum kapatılmaz ve Claude Code’un mevcut oturumuna (~/.claude) dokunulmaz. Bu hesaba bağlı kartlar Claude Code’un mevcut oturumunu kullanır.",
       "wslUnsupported": "Claude yapılandırma klasörü WSL içinde. Burada Claude hesabı ekleme ve hesaplar arasında geçiş henüz desteklenmiyor."
+    },
+    "openBrowser": {
+      "title": "Oturum açarken tarayıcıyı aç",
+      "description": "Yalnızca oturum açma bağlantısını kopyalayıp istediğiniz tarayıcıda açmak için kapatın; hesapları ayrı tarayıcı profillerinde tutuyorsanız kullanışlıdır."
+    },
+    "nativeCodex": {
+      "imported": "Imported the local ChatGPT login",
+      "title": "Detected a local ChatGPT login",
+      "hint": "You're already signed in to ChatGPT via Codex ({{who}}). Import it to use it in cc-switch directly — no need to log in again.",
+      "import": "Import",
+      "importFailed": "Import failed"
     }
   },
   "requestDiagnostics": {
@@ -5318,5 +5642,132 @@
       "managedHint": "Hesap Yetkilendirme Merkezi'nde yönetilir; oturumu kapatınca bu kart kendiliğinden kaybolur."
     },
     "deleteSessionHint": "Geçmişin tutarlı kalması için bu oturumu DeepSeek Harness içinde silin."
+  },
+  "claudeAppendInstructions": {
+    "shellWrapperUpgrade": "Update",
+    "duplicate": "This file is already listed",
+    "stateNotFile": "Path is not a file",
+    "shellWrapperInstallSuccess": "Shell integration installed in {{path}}. Restart the terminal to apply it.",
+    "shellWrapperConfigFile": "Configuration file",
+    "shellWrapperUpdating": "Updating...",
+    "empty": "No Claude append instruction files",
+    "shellWrapperCopyFailed": "Could not copy configuration: {{error}}",
+    "summaryHint": "Manage --append-system-prompt-file separately for each Claude provider. Changes apply when the provider is saved and do not modify ordinary CLAUDE.md prompt presets.",
+    "noneEnabled": "No file enabled",
+    "shellWrapperUpgradeSuccess": "Shell integration updated in {{path}}. Restart the terminal to apply it.",
+    "deleteSuccess": "Claude append instruction file deleted",
+    "browseFailed": "Could not choose a Claude append instruction file: {{error}}",
+    "shellWrapperNotInstalledHint": "Install the shell integration to apply the current provider's enabled system and append instructions when Claude Code starts.",
+    "shellWrapperNeedsUpgrade": "Update available",
+    "shellWrapperConflictHint": "A claude-keysmith wrapper manages Claude Code; CC Switch will not overwrite its runtime instruction configuration.",
+    "shellWrapperInstructions": "Manual configuration",
+    "deleteConfirm": "This permanently deletes {{path}} from disk and removes it from this provider's list. This cannot be undone.",
+    "shellWrapperInstallFailed": "Could not install shell integration: {{error}}",
+    "shellWrapperUninstallSuccess": "Shell integration removed from {{path}}. Restart the terminal to apply it.",
+    "pathPlaceholder": "./cc-switch/append-instructions/default.md or an absolute path",
+    "disableSuccess": "Claude append instructions disabled",
+    "stateInvalid": "File content is invalid",
+    "loading": "Loading...",
+    "shellWrapperCopied": "Copied",
+    "shellWrapperNeedsUpgradeHint": "Update the older CC Switch wrapper to avoid duplicate or stale launch behavior.",
+    "loadFailed": "Failed to load Claude append instructions: {{error}}",
+    "shellWrapperHideInstructions": "Hide configuration",
+    "saveSuccess": "Claude append instruction file saved",
+    "title": "Claude append instruction files",
+    "deleteFailed": "Could not delete the Claude append instruction file: {{error}}",
+    "emptyHint": "Create a file above, save it, then enable it.",
+    "shellWrapperShowInstructions": "Show configuration",
+    "enabledName": "Enabled: {{name}}",
+    "shellWrapperConflict": "External wrapper detected",
+    "dialogHint": "The content is passed through Claude Code's --append-system-prompt-file; editing writes to the original file.",
+    "path": "File path",
+    "remove": "Delete file",
+    "shellWrapperNotInstalled": "Not installed",
+    "shellWrapperInstalled": "Installed",
+    "edit": "Edit file",
+    "readFailed": "Could not read the Claude append instruction file: {{error}}",
+    "stateUnreadable": "File is unreadable",
+    "stateValid": "File available",
+    "deleteButton": "Delete file",
+    "shellWrapperStatusFailed": "Could not check shell integration: {{error}}",
+    "summaryTitle": "Claude runtime append instructions",
+    "shellWrapperInstalledHint": "Terminal launches load the current provider's enabled system and append instruction files.",
+    "stateMissing": "File not found",
+    "enableSuccess": "Claude append instructions enabled",
+    "configFailed": "Could not update Claude append instruction state: {{error}}",
+    "shellWrapperChecking": "Checking shell integration...",
+    "shellWrapperProcessing": "Processing...",
+    "shellWrapperInstructionsFailed": "Could not load manual configuration: {{error}}",
+    "readRetry": "The file could not be read, so it cannot be safely overwritten. Close and retry or check permissions.",
+    "addTitle": "New Claude append instruction file",
+    "stateCheckFailed": "File check failed",
+    "shellWrapperUninstallConfirm": "Uninstall the Claude shell integration?",
+    "loadingContent": "Reading file...",
+    "toggle": "Enable or disable {{name}}",
+    "shellWrapperTitle": "Claude shell integration",
+    "add": "New file",
+    "browse": "Choose a Markdown or text file",
+    "stateChecking": "Checking file",
+    "shellWrapperInstall": "Install",
+    "stateEmpty": "File is empty",
+    "shellWrapperUninstallFailed": "Could not uninstall shell integration: {{error}}",
+    "contentPlaceholder": "Enter runtime instructions to append to Claude Code...",
+    "editTitle": "Edit Claude append instruction file",
+    "deleteTitle": "Delete Claude append instruction file",
+    "shellWrapperUninstall": "Uninstall",
+    "count": "{{count}} files",
+    "manage": "Claude append instructions",
+    "shellWrapperInstalling": "Installing...",
+    "content": "File content",
+    "saveFailed": "Could not save the Claude append instruction file: {{error}}"
+  },
+  "claudeSystemInstructions": {
+    "add": "New file",
+    "browse": "Choose a Markdown or text file",
+    "stateChecking": "Checking file",
+    "contentPlaceholder": "Enter runtime instructions to load through Claude Code's --system-prompt-file...",
+    "editTitle": "Edit Claude system instruction file",
+    "deleteTitle": "Delete Claude system instruction file",
+    "count": "{{count}} files",
+    "content": "File content",
+    "addTitle": "New Claude system instruction file",
+    "duplicate": "This file is already listed",
+    "stateNotFile": "Path is not a file",
+    "empty": "No Claude system instruction files",
+    "summaryHint": "Manage --system-prompt-file separately for each Claude provider. Changes apply when the provider is saved and do not modify ordinary CLAUDE.md prompt presets.",
+    "stateEmpty": "File is empty",
+    "noneEnabled": "No file enabled",
+    "deleteSuccess": "Claude system instruction file deleted",
+    "browseFailed": "Could not choose a Claude system instruction file: {{error}}",
+    "deleteConfirm": "This permanently deletes {{path}} from disk and removes it from this provider's system instruction list. This cannot be undone.",
+    "pathPlaceholder": "./cc-switch/system-instructions/default.md or an absolute path",
+    "saveFailed": "Could not save the Claude system instruction file: {{error}}",
+    "stateInvalid": "File content is invalid",
+    "deleteFailed": "Could not delete the Claude system instruction file: {{error}}",
+    "enabledName": "Enabled: {{name}}",
+    "dialogHint": "The content is passed through Claude Code's --system-prompt-file; editing writes to the original file.",
+    "path": "File path",
+    "remove": "Delete file",
+    "edit": "Edit file",
+    "readFailed": "Could not read the Claude system instruction file: {{error}}",
+    "stateUnreadable": "File is unreadable",
+    "stateValid": "File available",
+    "deleteButton": "Delete file",
+    "summaryTitle": "Claude runtime system instructions",
+    "stateMissing": "File not found",
+    "saveSuccess": "Claude system instruction file saved",
+    "readRetry": "The file could not be read, so it cannot be safely overwritten. Close and retry or check permissions.",
+    "stateCheckFailed": "File check failed",
+    "loadingContent": "Reading file...",
+    "toggle": "Enable or disable {{name}}"
+  },
+  "modelAlias": {
+    "sourcePlaceholder": "e.g. codex-auto-review",
+    "title": "Exact model aliases",
+    "hint": "Rewrites the source model name to the target model name (exact match) before forwarding. Independent of model mapping and the menu catalog, and it also covers the native Responses passthrough path. Common use: rewrite Codex's internal review model codex-auto-review to your real model.",
+    "targetPlaceholder": "e.g. gpt-5.6-sol",
+    "sourceColumn": "Source model",
+    "targetColumn": "Target model",
+    "add": "Add alias"
   }
 }
