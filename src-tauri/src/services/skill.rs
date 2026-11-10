@@ -2694,7 +2694,11 @@ impl SkillService {
                 if !Self::is_sync_managed_app(&app)
                     || matches!(
                         app,
-                        AppType::Mcode | AppType::Agy | AppType::Kimi | AppType::Dsh | AppType::Copilot
+                        AppType::Mcode
+                            | AppType::Agy
+                            | AppType::Kimi
+                            | AppType::Dsh
+                            | AppType::Copilot
                     )
                 {
                     continue;

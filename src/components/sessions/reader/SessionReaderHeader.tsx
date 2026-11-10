@@ -355,7 +355,9 @@ export const SessionReaderHeader = memo(function SessionReaderHeader({
         </DropdownMenuItem>
         {!deletable &&
           (readOnly ||
-            ["mcode", "agy", "dsh", "copilot"].includes(session.providerId)) && (
+            ["mcode", "agy", "dsh", "copilot"].includes(
+              session.providerId,
+            )) && (
             <p className="px-2.5 pb-1.5 text-caption text-fg-2">
               {readOnly
                 ? t("sessionManager.subagents.readOnlyHint", {

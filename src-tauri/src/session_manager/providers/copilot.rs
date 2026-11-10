@@ -134,6 +134,7 @@ fn parse_session(path: &Path) -> Option<SessionMeta> {
         created_at,
         last_active_at: last_event_at.max(workspace.updated_at).or(created_at),
         source_path: Some(path.to_string_lossy().into_owned()),
+        ..SessionMeta::default()
     })
 }
 

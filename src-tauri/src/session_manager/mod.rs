@@ -86,6 +86,7 @@ pub fn resume_session_target(
         "mcode" => mcode::scan_sessions(),
         "kimi" => kimi::scan_sessions(),
         "agy" => agy::scan_sessions(),
+        "copilot" => copilot::scan_sessions(),
         _ => return Err("This application does not support session resume".to_string()),
     };
     let mut matching = sessions.into_iter().filter(|session| {

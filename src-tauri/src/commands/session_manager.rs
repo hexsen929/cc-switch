@@ -419,6 +419,62 @@ mod tests {
 
     #[test]
     #[serial_test::serial]
+    fn copilot_resume_requires_a_fresh_native_source_command_and_cwd() {
+        struct RestoreCopilotHome(Option<std::ffi::OsString>);
+        impl Drop for RestoreCopilotHome {
+            fn drop(&mut self) {
+                match &self.0 {
+                    Some(previous) => std::env::set_var("COPILOT_HOME", previous),
+                    None => std::env::remove_var("COPILOT_HOME"),
+                }
+            }
+        }
+        let tmp = tempfile::tempdir().unwrap();
+        let _restore = RestoreCopilotHome(std::env::var_os("COPILOT_HOME"));
+        std::env::set_var("COPILOT_HOME", tmp.path());
+        let dir = tmp.path().join("session-state/session-main");
+        std::fs::create_dir_all(&dir).unwrap();
+        let events = dir.join("events.jsonl");
+        std::fs::write(
+            &events,
+            serde_json::json!({"type":"session.start","data":{
+                "sessionId":"session-main","context":{"cwd":"/native/project"}
+            }})
+            .to_string(),
+        )
+        .unwrap();
+        let source = events.to_string_lossy().into_owned();
+        let command = "copilot --resume=session-main";
+        assert_eq!(
+            validated_resume_target(
+                command,
+                Some("/native/project"),
+                "copilot",
+                "session-main",
+                Some(&source),
+            )
+            .unwrap(),
+            (command.to_string(), Some("/native/project".to_string()))
+        );
+        for candidate in [
+            "copilot --resume=other",
+            "copilot --resume=session-main; echo injected",
+        ] {
+            assert!(validated_resume_target(
+                candidate,
+                Some("/native/project"),
+                "copilot",
+                "session-main",
+                Some(&source),
+            )
+            .is_err());
+        }
+        std::fs::remove_file(&events).unwrap();
+        assert!(session_manager::resume_session_target("copilot", "session-main", &source).is_err());
+    }
+
+    #[test]
+    #[serial_test::serial]
     fn kimi_resume_requires_a_fresh_native_source_command_and_cwd() {
         struct RestoreKimiHome(Option<std::ffi::OsString>);
         impl Drop for RestoreKimiHome {
