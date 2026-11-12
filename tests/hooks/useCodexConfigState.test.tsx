@@ -134,8 +134,18 @@ describe("useCodexConfigState", () => {
         },
       },
     };
-    const { result } = renderHook(() => useCodexConfigState({ initialData }));
+    const snapshots: ReturnType<typeof useCodexConfigState>[] = [];
+    const { result } = renderHook(() => {
+      const state = useCodexConfigState({ initialData });
+      snapshots.push(state);
+      return state;
+    });
 
+    expect(snapshots[0].codexAutoReviewModel).toBe("review-model");
+    expect(snapshots[0].codexModelInstructionsFile).toBe("./active.md");
+    expect(serializeModelAliases(snapshots[0].codexModelAliases)).toEqual(
+      initialData.settingsConfig.modelAliases,
+    );
     expect(result.current.codexAutoReviewModel).toBe("review-model");
     expect(serializeModelAliases(result.current.codexModelAliases)).toEqual(
       initialData.settingsConfig.modelAliases,

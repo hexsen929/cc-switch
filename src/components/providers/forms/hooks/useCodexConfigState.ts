@@ -158,34 +158,89 @@ function normalizeCatalogModels(rawModels: unknown): CodexCatalogModel[] {
     : [];
 }
 
+/** 编辑已有供应商时，从它的 settingsConfig 读出表单的初始值；没有可用的配置时为 null */
+function readCodexInitialState(
+  initialData: UseCodexConfigStateProps["initialData"],
+) {
+  const config = initialData?.settingsConfig;
+  if (typeof config !== "object" || config === null) return null;
+  const configStr =
+    typeof (config as any).config === "string" ? (config as any).config : "";
+  const auth = (config as any).auth || {};
+  const modelCatalog = (config as any).modelCatalog;
+  const activeInstructionsFile =
+    extractCodexTopLevelString(
+      configStr,
+      MODEL_INSTRUCTIONS_FIELD,
+    )?.trim() || "";
+  const instructionFiles = normalizeCodexModelInstructionsFiles(
+    (config as any).modelInstructionsFiles,
+    activeInstructionsFile,
+  );
+  const hasIndependentReviewer = Object.prototype.hasOwnProperty.call(
+    config,
+    "autoReviewModel",
+  );
+  const hasLegacyReviewer = Boolean(
+    modelCatalog &&
+      typeof modelCatalog === "object" &&
+      Object.prototype.hasOwnProperty.call(modelCatalog, "autoReviewModel"),
+  );
+  return {
+    config: configStr as string,
+    auth: JSON.stringify(auth, null, 2),
+    catalogModels: normalizeCatalogModels(modelCatalog?.models),
+    aliases: parseModelAliasesFromValue((config as any).modelAliases),
+    instructionFiles,
+    instructionsEnabled: Boolean(activeInstructionsFile),
+    instructionsFile: activeInstructionsFile || instructionFiles[0] || "",
+    hasStoredReviewer: hasIndependentReviewer || hasLegacyReviewer,
+    autoReviewModel: hasIndependentReviewer
+      ? typeof config.autoReviewModel === "string"
+        ? config.autoReviewModel.trim()
+        : ""
+      : typeof modelCatalog?.autoReviewModel === "string"
+        ? modelCatalog.autoReviewModel.trim()
+        : "",
+    officialSpeedTiers: modelCatalog?.officialSpeedTiers === true,
+    baseUrl: extractCodexBaseUrl(configStr) || "",
+    apiKey: pickCodexApiKey(auth, configStr),
+  };
+}
+
 /**
  * 管理 Codex 配置状态
  * Codex 配置包含两部分：auth.json (JSON) 和 config.toml (TOML 字符串)
  */
 export function useCodexConfigState({ initialData }: UseCodexConfigStateProps) {
-  const [codexAuth, setCodexAuthState] = useState("");
-  const [codexConfig, setCodexConfigState] = useState("");
-  const [codexApiKey, setCodexApiKey] = useState("");
-  const [codexBaseUrl, setCodexBaseUrl] = useState("");
-  const [codexModel, setCodexModel] = useState("");
+  // 初始值直接按 initialData 算好，不在挂载后的 effect 里再设一遍：那样每次打开编辑页
+  // 整张表单都要多渲染几轮。
+  const [initial] = useState(() => readCodexInitialState(initialData));
+  const [codexAuth, setCodexAuthState] = useState(initial?.auth ?? "");
+  const [codexConfig, setCodexConfigState] = useState(initial?.config ?? "");
+  const [codexApiKey, setCodexApiKey] = useState(initial?.apiKey ?? "");
+  const [codexBaseUrl, setCodexBaseUrl] = useState(initial?.baseUrl ?? "");
+  const [codexModel, setCodexModel] = useState(
+    () => extractCodexModelName(initial?.config ?? "") || "",
+  );
   const [codexCatalogModels, setCodexCatalogModels] = useState<
     CodexCatalogModel[]
-  >([]);
+  >(initial?.catalogModels ?? []);
   const [codexModelAliases, setCodexModelAliases] = useState<ModelAliasEntry[]>(
-    [],
+    initial?.aliases ?? [],
   );
   const [codexModelInstructionsEnabled, setCodexModelInstructionsEnabled] =
-    useState(false);
+    useState(initial?.instructionsEnabled ?? false);
   const [codexModelInstructionsFile, setCodexModelInstructionsFile] =
-    useState("");
+    useState(initial?.instructionsFile ?? "");
   const [codexModelInstructionsFiles, setCodexModelInstructionsFilesState] =
-    useState<string[]>([]);
+    useState<string[]>(initial?.instructionFiles ?? []);
   // Independent reviewer model; older cards stored it in modelCatalog.
   // An explicit empty top-level value selects codex-auto-review, not the old value.
   const [codexAutoReviewModelDraft, setCodexAutoReviewModelDraft] =
-    useState("");
+    useState(initial?.autoReviewModel ?? "");
   const [hasStoredCodexAutoReviewModel, setHasStoredCodexAutoReviewModel] =
-    useState(false);
+    useState(initial?.hasStoredReviewer ?? false);
   const [codexAutoReviewModelEdited, setCodexAutoReviewModelEdited] =
     useState(false);
   const shouldSaveCodexAutoReviewModel =
@@ -200,99 +255,51 @@ export function useCodexConfigState({ initialData }: UseCodexConfigStateProps) {
     setCodexAutoReviewModelEdited(true);
   }, []);
   // 保留官方 Fast 档：`modelCatalog.officialSpeedTiers`，默认关
-  const [codexOfficialSpeedTiers, setCodexOfficialSpeedTiers] = useState(false);
+  const [codexOfficialSpeedTiers, setCodexOfficialSpeedTiers] = useState(
+    initial?.officialSpeedTiers ?? false,
+  );
   const [codexAuthError, setCodexAuthError] = useState("");
 
   const isUpdatingCodexBaseUrlRef = useRef(false);
   const isUpdatingCodexModelRef = useRef(false);
 
-  // 初始化 Codex 配置（编辑模式）
+  // initialData 之后换了（编辑模式）：重新读一遍。挂载时的那份已经用作初始值。
+  const initializedFor = useRef(initialData);
   useEffect(() => {
-    if (!initialData) return;
-
-    const config = initialData.settingsConfig;
-    if (typeof config === "object" && config !== null) {
-      // 设置 config.toml
-      const configStr =
-        typeof (config as any).config === "string"
-          ? (config as any).config
-          : "";
-      setCodexConfigState(configStr);
-
-      const activeInstructionsFile =
-        extractCodexTopLevelString(
-          configStr,
-          MODEL_INSTRUCTIONS_FIELD,
-        )?.trim() || "";
-      const savedInstructionsFiles = normalizeCodexModelInstructionsFiles(
-        (config as any).modelInstructionsFiles,
-        activeInstructionsFile,
-      );
-      setCodexModelInstructionsEnabled(Boolean(activeInstructionsFile));
-      setCodexModelInstructionsFile(
-        activeInstructionsFile || savedInstructionsFiles[0] || "",
-      );
-      setCodexModelInstructionsFilesState((current) =>
-        stringArraysEqual(current, savedInstructionsFiles)
-          ? current
-          : savedInstructionsFiles,
-      );
-
-      // 设置 auth.json
-      const auth = (config as any).auth || {};
-      setCodexAuthState(JSON.stringify(auth, null, 2));
-
-      const modelCatalog = (config as any).modelCatalog;
-      const nextCatalogModels = normalizeCatalogModels(modelCatalog?.models);
-      setCodexCatalogModels((current) =>
-        catalogModelsEqual(current, nextCatalogModels)
-          ? current
-          : nextCatalogModels,
-      );
-
-      const nextAliases = parseModelAliasesFromValue(
-        (config as any).modelAliases,
-      );
-      setCodexModelAliases((current) =>
-        modelAliasesEqual(
-          serializeModelAliases(current),
-          serializeModelAliases(nextAliases),
-        )
-          ? current
-          : nextAliases,
-      );
-      const hasIndependentReviewer = Object.prototype.hasOwnProperty.call(
-        config,
-        "autoReviewModel",
-      );
-      const hasLegacyReviewer = Boolean(
-        modelCatalog &&
-          typeof modelCatalog === "object" &&
-          Object.prototype.hasOwnProperty.call(modelCatalog, "autoReviewModel"),
-      );
-      setHasStoredCodexAutoReviewModel(
-        hasIndependentReviewer || hasLegacyReviewer,
-      );
-      setCodexAutoReviewModelEdited(false);
-      setCodexAutoReviewModelDraft(
-        hasIndependentReviewer
-          ? typeof (config as any).autoReviewModel === "string"
-            ? (config as any).autoReviewModel.trim()
-            : ""
-          : typeof modelCatalog?.autoReviewModel === "string"
-            ? modelCatalog.autoReviewModel.trim()
-            : "",
-      );
-      setCodexOfficialSpeedTiers(modelCatalog?.officialSpeedTiers === true);
-
-      // 提取 Base URL
-      const initialBaseUrl = extractCodexBaseUrl(configStr);
-      if (initialBaseUrl) {
-        setCodexBaseUrl(initialBaseUrl);
-      }
-
-      setCodexApiKey(pickCodexApiKey(auth, configStr));
+    if (initializedFor.current === initialData) return;
+    initializedFor.current = initialData;
+    const next = readCodexInitialState(initialData);
+    if (!next) return;
+    setCodexConfigState(next.config);
+    setCodexAuthState(next.auth);
+    setCodexCatalogModels((current) =>
+      catalogModelsEqual(current, next.catalogModels)
+        ? current
+        : next.catalogModels,
+    );
+    setCodexModelAliases((current) =>
+      modelAliasesEqual(
+        serializeModelAliases(current),
+        serializeModelAliases(next.aliases),
+      )
+        ? current
+        : next.aliases,
+    );
+    setCodexModelInstructionsEnabled(next.instructionsEnabled);
+    setCodexModelInstructionsFile(next.instructionsFile);
+    setCodexModelInstructionsFilesState((current) =>
+      stringArraysEqual(current, next.instructionFiles)
+        ? current
+        : next.instructionFiles,
+    );
+    setHasStoredCodexAutoReviewModel(next.hasStoredReviewer);
+    setCodexAutoReviewModelEdited(false);
+    setCodexAutoReviewModelDraft(next.autoReviewModel);
+    setCodexOfficialSpeedTiers(next.officialSpeedTiers);
+    if (next.baseUrl) {
+      setCodexBaseUrl(next.baseUrl);
     }
+    setCodexApiKey(next.apiKey);
   }, [initialData]);
 
   // Keep the dedicated control synchronized when config.toml is edited by hand.

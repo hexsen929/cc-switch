@@ -8,6 +8,7 @@ import type { CodexLoginMethod, ManagedLoginMethod } from "@/lib/api/auth";
 import { deliverLoginLink, readAuthOpenBrowser } from "@/lib/authLoginLink";
 import { copyText } from "@/lib/clipboard";
 import { resetAgyCurrentQuota } from "@/lib/query/agyCurrentQuota";
+import { subscriptionKeys } from "@/lib/query/subscription";
 import type {
   ManagedAuthProvider,
   ManagedAuthStatus,
@@ -351,6 +352,12 @@ export function useManagedAuth(
       }
       await refetchStatus();
       await queryClient.invalidateQueries({ queryKey });
+      // 没绑账号的 Antigravity 官方卡查的是「agy 现在登着的号」，切完重查，别留着上个号的额度
+      if (authProvider === "agy_oauth") {
+        await queryClient.invalidateQueries({
+          queryKey: subscriptionKeys.quota("agy"),
+        });
+      }
     },
     onError: async (e) => {
       console.error("[ManagedAuth] Failed to set default account:", e);

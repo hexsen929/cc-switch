@@ -31,6 +31,7 @@ pub mod media_sanitizer;
 pub mod model_mapper;
 pub mod opaque_state_rectifier;
 pub mod pii_redaction;
+pub mod privacy_filter;
 pub mod provider_router;
 pub mod providers;
 pub mod reliability;

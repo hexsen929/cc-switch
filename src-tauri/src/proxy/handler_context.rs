@@ -9,7 +9,10 @@ use crate::proxy::{
     extract_session_id,
     forwarder::RequestForwarder,
     server::ProxyState,
-    types::{AppProxyConfig, CopilotOptimizerConfig, OptimizerConfig, RectifierConfig},
+    types::{
+        AppProxyConfig, CopilotOptimizerConfig, OptimizerConfig, PrivacyFilterConfig,
+        RectifierConfig,
+    },
     ProxyError,
 };
 use axum::http::HeaderMap;
@@ -91,6 +94,8 @@ pub struct RequestContext {
     pub reliability: crate::proxy::reliability::ReliabilityConfig,
     /// 订阅内多账号故障转移开关（Fork 扩展，默认关闭）
     pub subscription_account_failover: bool,
+    /// 隐私过滤器配置
+    pub privacy_filter_config: PrivacyFilterConfig,
     /// Stack 模型的请求（`mode::stack`）：直达 Stack 里的那一家，不读也不写任何路由状态。
     pub is_stack: bool,
     /// Fork：命中的局域网网关密钥 id（非环回且带有效 key 时存在）。用于把本次请求的用量
@@ -188,6 +193,7 @@ impl RequestContext {
         let rectifier_config = state.db.get_rectifier_config().unwrap_or_default();
         let optimizer_config = state.db.get_optimizer_config().unwrap_or_default();
         let copilot_optimizer_config = state.db.get_copilot_optimizer_config().unwrap_or_default();
+        let privacy_filter_config = state.db.get_privacy_filter_config().unwrap_or_default();
 
         // Fork 扩展：读取用户 onRequest 中间件配置（关闭时跳过脚本读取，省一次 DB 访问）
         let request_middleware = {
@@ -518,9 +524,35 @@ impl RequestContext {
             pii_redaction,
             reliability,
             subscription_account_failover,
+            privacy_filter_config,
             is_stack,
             gateway_key_id: authed.map(|ak| ak.id.clone()),
         })
+    }
+
+    /// 隐私过滤：开关打开时脱敏用户输入和系统提示里的 PII / 密钥，工具结果看子开关
+    ///
+    /// 在上下文创建之后调用，Session ID 与模型名仍按原始请求体提取。
+    /// 占位符跟随界面语言（没设过语言时按系统区域，与托盘一致）。
+    pub fn apply_privacy_filter(&self, body: &mut serde_json::Value) {
+        if !self.privacy_filter_config.enabled {
+            return;
+        }
+        let language = crate::tray::tray_language();
+        let placeholders = crate::proxy::privacy_filter::Placeholders::for_language(&language);
+        let count = crate::proxy::privacy_filter::redact_request_body(
+            body,
+            placeholders,
+            self.privacy_filter_config.filter_tool_results,
+        );
+        if count > 0 {
+            log::info!(
+                "[{}] Privacy filter redacted {} item(s), session: {}",
+                self.tag,
+                count,
+                self.session_id
+            );
+        }
     }
 
     /// 创建 RequestForwarder
