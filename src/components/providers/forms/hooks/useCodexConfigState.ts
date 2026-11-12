@@ -169,10 +169,8 @@ function readCodexInitialState(
   const auth = (config as any).auth || {};
   const modelCatalog = (config as any).modelCatalog;
   const activeInstructionsFile =
-    extractCodexTopLevelString(
-      configStr,
-      MODEL_INSTRUCTIONS_FIELD,
-    )?.trim() || "";
+    extractCodexTopLevelString(configStr, MODEL_INSTRUCTIONS_FIELD)?.trim() ||
+    "";
   const instructionFiles = normalizeCodexModelInstructionsFiles(
     (config as any).modelInstructionsFiles,
     activeInstructionsFile,
@@ -231,14 +229,16 @@ export function useCodexConfigState({ initialData }: UseCodexConfigStateProps) {
   );
   const [codexModelInstructionsEnabled, setCodexModelInstructionsEnabled] =
     useState(initial?.instructionsEnabled ?? false);
-  const [codexModelInstructionsFile, setCodexModelInstructionsFile] =
-    useState(initial?.instructionsFile ?? "");
+  const [codexModelInstructionsFile, setCodexModelInstructionsFile] = useState(
+    initial?.instructionsFile ?? "",
+  );
   const [codexModelInstructionsFiles, setCodexModelInstructionsFilesState] =
     useState<string[]>(initial?.instructionFiles ?? []);
   // Independent reviewer model; older cards stored it in modelCatalog.
   // An explicit empty top-level value selects codex-auto-review, not the old value.
-  const [codexAutoReviewModelDraft, setCodexAutoReviewModelDraft] =
-    useState(initial?.autoReviewModel ?? "");
+  const [codexAutoReviewModelDraft, setCodexAutoReviewModelDraft] = useState(
+    initial?.autoReviewModel ?? "",
+  );
   const [hasStoredCodexAutoReviewModel, setHasStoredCodexAutoReviewModel] =
     useState(initial?.hasStoredReviewer ?? false);
   const [codexAutoReviewModelEdited, setCodexAutoReviewModelEdited] =
