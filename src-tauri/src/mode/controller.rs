@@ -4407,9 +4407,14 @@ model_provider = "c"
             let mut settings = crate::settings::get_settings();
             settings.unify_codex_session_history = true;
             crate::settings::update_settings(settings).unwrap();
-            assert!(!crate::services::provider::reapply_current_codex_session_routing(&state)
-                .unwrap());
-            assert_eq!(codex_text(), direct_before, "third-party direct config stays intact");
+            assert!(
+                !crate::services::provider::reapply_current_codex_session_routing(&state).unwrap()
+            );
+            assert_eq!(
+                codex_text(),
+                direct_before,
+                "third-party direct config stays intact"
+            );
             let mut settings = crate::settings::get_settings();
             settings.unify_codex_session_history = false;
             crate::settings::update_settings(settings).unwrap();
@@ -4417,15 +4422,17 @@ model_provider = "c"
             assert!(codex_doc().get("model_provider").is_none());
             let before = mode(&AppType::Codex);
             let stack_before = settled_stack(&AppType::Codex).unwrap();
-            let row_before = serde_json::to_value(state.db.get_provider_by_id("a", "codex").unwrap())
-                .unwrap();
+            let row_before =
+                serde_json::to_value(state.db.get_provider_by_id("a", "codex").unwrap()).unwrap();
 
             for unified in [true, false, true] {
                 let mut settings = crate::settings::get_settings();
                 settings.unify_codex_session_history = unified;
                 crate::settings::update_settings(settings).unwrap();
-                assert!(crate::services::provider::reapply_current_codex_session_routing(&state)
-                    .unwrap());
+                assert!(
+                    crate::services::provider::reapply_current_codex_session_routing(&state)
+                        .unwrap()
+                );
                 let doc = codex_doc();
                 assert_eq!(
                     doc.get("model_provider").and_then(|value| value.as_str()),
@@ -4445,9 +4452,13 @@ model_provider = "c"
                 assert_eq!(after.proxy_route, before.proxy_route);
                 assert_eq!(settled_stack(&AppType::Codex).unwrap(), stack_before);
                 assert_eq!(codex_login_file(), Some(login.clone()));
-                assert_eq!(doc["mcp_servers"]["fs"]["command"].as_str(), Some("fs-server"));
                 assert_eq!(
-                    serde_json::to_value(state.db.get_provider_by_id("a", "codex").unwrap()).unwrap(),
+                    doc["mcp_servers"]["fs"]["command"].as_str(),
+                    Some("fs-server")
+                );
+                assert_eq!(
+                    serde_json::to_value(state.db.get_provider_by_id("a", "codex").unwrap())
+                        .unwrap(),
                     row_before
                 );
             }
