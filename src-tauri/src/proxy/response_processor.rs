@@ -1873,6 +1873,8 @@ mod tests {
             StreamingTimeoutConfig {
                 first_byte_timeout: 0,
                 idle_timeout: 0,
+                keepalive_secs: 0,
+                loop_guard: false,
             },
             None,
         );
