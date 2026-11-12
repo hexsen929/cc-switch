@@ -1746,7 +1746,7 @@ fn reapply_codex_official_live_rewrites_only_the_session_routing() {
     };
 
     set_unify(true);
-    assert!(cc_switch_lib::reapply_current_codex_official_live(&state).expect("reapply"));
+    assert!(cc_switch_lib::reapply_current_codex_session_routing(&state).expect("reapply"));
     let unified = read_live();
     let doc: toml::Value = toml::from_str(&unified).expect("parse");
     assert_eq!(doc["model_provider"].as_str(), Some("custom"), "{unified}");
@@ -1761,7 +1761,7 @@ fn reapply_codex_official_live_rewrites_only_the_session_routing() {
     );
 
     set_unify(false);
-    assert!(cc_switch_lib::reapply_current_codex_official_live(&state).expect("reapply"));
+    assert!(cc_switch_lib::reapply_current_codex_session_routing(&state).expect("reapply"));
     let direct = read_live();
     let doc: toml::Value = toml::from_str(&direct).expect("parse");
     assert!(doc.get("model_provider").is_none(), "{direct}");

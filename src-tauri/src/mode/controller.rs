@@ -4388,6 +4388,73 @@ model_provider = "c"
         }
     }
 
+    #[tokio::test]
+    #[serial]
+    async fn codex_session_history_toggle_reapplies_third_party_proxy_and_stack_routes() {
+        for stack in [false, true] {
+            let _home = Home::new();
+            crate::settings::update_settings(crate::settings::AppSettings {
+                preserve_codex_official_auth_on_switch: true,
+                ..Default::default()
+            })
+            .unwrap();
+            let login = chatgpt_login("acct");
+            seed_codex(CODEX_USER_LIVE, Some(&login));
+            let [a, b] = codex_a_b();
+            let state = state_with(AppType::Codex, &[a.clone(), b], "a").await;
+            ProviderService::switch(&state, AppType::Codex, "a").unwrap();
+            let direct_before = codex_text();
+            let mut settings = crate::settings::get_settings();
+            settings.unify_codex_session_history = true;
+            crate::settings::update_settings(settings).unwrap();
+            assert!(!crate::services::provider::reapply_current_codex_session_routing(&state)
+                .unwrap());
+            assert_eq!(codex_text(), direct_before, "third-party direct config stays intact");
+            let mut settings = crate::settings::get_settings();
+            settings.unify_codex_session_history = false;
+            crate::settings::update_settings(settings).unwrap();
+            enter(&state, &AppType::Codex, stack).await.unwrap();
+            assert!(codex_doc().get("model_provider").is_none());
+            let before = mode(&AppType::Codex);
+            let stack_before = settled_stack(&AppType::Codex).unwrap();
+            let row_before = serde_json::to_value(state.db.get_provider_by_id("a", "codex").unwrap())
+                .unwrap();
+
+            for unified in [true, false, true] {
+                let mut settings = crate::settings::get_settings();
+                settings.unify_codex_session_history = unified;
+                crate::settings::update_settings(settings).unwrap();
+                assert!(crate::services::provider::reapply_current_codex_session_routing(&state)
+                    .unwrap());
+                let doc = codex_doc();
+                assert_eq!(
+                    doc.get("model_provider").and_then(|value| value.as_str()),
+                    unified.then_some("custom"),
+                    "stack={stack}, unified={unified}: {}",
+                    codex_text()
+                );
+                assert_eq!(doc.get("openai_base_url").is_some(), !unified);
+                if unified {
+                    assert_eq!(
+                        doc["model_providers"]["custom"]["requires_openai_auth"].as_bool(),
+                        Some(true)
+                    );
+                }
+                let after = mode(&AppType::Codex);
+                assert_eq!(after.mode, before.mode);
+                assert_eq!(after.proxy_route, before.proxy_route);
+                assert_eq!(settled_stack(&AppType::Codex).unwrap(), stack_before);
+                assert_eq!(codex_login_file(), Some(login.clone()));
+                assert_eq!(doc["mcp_servers"]["fs"]["command"].as_str(), Some("fs-server"));
+                assert_eq!(
+                    serde_json::to_value(state.db.get_provider_by_id("a", "codex").unwrap()).unwrap(),
+                    row_before
+                );
+            }
+            exit(&state, &AppType::Codex).await.unwrap();
+        }
+    }
+
     /// 暂停使用官方登录：官方路由和第三方路由都写成不要求登录的 custom 表（Codex 不按官方
     /// 额度锁发送键），登录留在 auth.json；关掉后回到内置 openai 的写法。
     #[tokio::test]

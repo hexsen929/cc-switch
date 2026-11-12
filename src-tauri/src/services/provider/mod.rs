@@ -88,10 +88,10 @@ pub fn official_provider_supports_proxy_takeover(app_type: &AppType, provider: &
         && crate::proxy::providers::is_codex_official_provider(provider)
 }
 
-/// 统一会话开关变更后，立即按新开关状态重写当前官方 Codex 供应商的选路（关键字段），
-/// 使开关即时生效，无需等下一次切换。当前供应商非官方（或不存在）时为 no-op：开关只
-/// 影响官方直连的选路。代理模式下 live 是代理契约，不受这个开关影响。
-pub fn reapply_current_codex_official_live(state: &AppState) -> Result<bool, AppError> {
+/// Apply the session-history setting to the active Codex route. Proxy contracts
+/// depend on this setting for both official and third-party providers; ordinary
+/// third-party direct connections retain their own configuration.
+pub fn reapply_current_codex_session_routing(state: &AppState) -> Result<bool, AppError> {
     let _switch_guard = crate::mode::controller::lock_settled_blocking(state, &AppType::Codex)?;
     let current_id = ProviderService::current(state, AppType::Codex)?;
     if current_id.is_empty() {
@@ -101,7 +101,7 @@ pub fn reapply_current_codex_official_live(state: &AppState) -> Result<bool, App
     let Some(provider) = providers.get(&current_id) else {
         return Ok(false);
     };
-    if !codex_direct::is_official(provider) {
+    if !codex_direct::is_official(provider) && !crate::mode::current::is_proxy(&AppType::Codex) {
         return Ok(false);
     }
     live::sync_live_for_provider_respecting_mode(state, &AppType::Codex, provider, None)?;

@@ -171,8 +171,8 @@ pub async fn save_settings(
         }
     }
 
-    // 统一会话开关变更时立即重写当前官方 Codex 供应商的 live 配置，
-    // 不必等下一次切换才生效。
+    // Rebuild the active Codex selection before migrating history. Proxy mode
+    // also changes third-party routes between the openai and custom buckets.
     if unify_codex_changed {
         // live 重写失败时回滚设置并把保存整体报失败：若设置保持已切换状态，
         // live 仍跑旧桶，后续的历史迁移/还原会让会话再次分裂（开启=历史
@@ -180,7 +180,7 @@ pub async fn save_settings(
         // 报错让前端 saved=false 短路还原；回滚是整次保存的事务语义
         // （本开关的保存只携带开关相关字段）。
         if let Err(err) =
-            crate::services::provider::reapply_current_codex_official_live(state.inner())
+            crate::services::provider::reapply_current_codex_session_routing(state.inner())
         {
             log::warn!("统一 Codex 会话历史开关变更后重写 live 配置失败，回滚设置: {err}");
             // Shared files and Stack settings may already have committed above.
