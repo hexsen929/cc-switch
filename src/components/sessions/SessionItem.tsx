@@ -24,6 +24,7 @@ import {
   canDeleteSession,
   canResumeSession,
   nativeDeleteHintKey,
+  nativeDeleteHintDefault,
   formatRelativeTime,
   formatSessionTitle,
   formatShortDateTime,
@@ -165,9 +166,13 @@ export function SessionItem({
       ? t("sessionManager.subagents.readOnlyHint", {
           defaultValue: "子代理会话仅供阅读，请在主会话中继续操作",
         })
-      : t(nativeDeleteHintKey(session.providerId) ?? "sessionManager.mcodeDeleteHint", {
-          defaultValue: "请在原客户端中删除",
-        })
+      : t(
+          nativeDeleteHintKey(session.providerId) ??
+            "sessionManager.mcodeDeleteHint",
+          {
+            defaultValue: nativeDeleteHintDefault(session.providerId),
+          },
+        )
     : null;
 
   const row = (

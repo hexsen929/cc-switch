@@ -62,22 +62,40 @@ export const canResumeSession = (session: SessionMeta) =>
   (Boolean(session.sourcePath) || session.providerId === "agy");
 
 /** 这些应用的会话只能在原软件里删（后端也会拒绝）：只删文件会让它们自己的索引失效。 */
-const NATIVE_DELETE_HINT_KEYS: Record<string, string> = {
-  mcode: "sessionManager.mcodeDeleteHint",
-  agy: "sessionManager.agyDeleteHint",
-  dsh: "dsh.deleteSessionHint",
-  copilot: "sessionManager.copilotDeleteHint",
-  workbuddy: "workbuddy.deleteSessionHint",
+const NATIVE_DELETE_HINTS: Record<string, { key: string; defaultValue: string }> = {
+  mcode: {
+    key: "sessionManager.mcodeDeleteHint",
+    defaultValue: "请在 MiniMax Code 中删除",
+  },
+  agy: {
+    key: "sessionManager.agyDeleteHint",
+    defaultValue: "请在 Antigravity 中删除",
+  },
+  dsh: {
+    key: "dsh.deleteSessionHint",
+    defaultValue: "请在 DeepSeek Harness 中删除",
+  },
+  copilot: {
+    key: "sessionManager.copilotDeleteHint",
+    defaultValue: "请在 GitHub Copilot CLI 中删除",
+  },
+  workbuddy: {
+    key: "workbuddy.deleteSessionHint",
+    defaultValue: "请在 WorkBuddy 中删除",
+  },
 };
 
 export const canDeleteSession = (session: SessionMeta) =>
   Boolean(session.sourcePath) &&
-  !(session.providerId in NATIVE_DELETE_HINT_KEYS) &&
+  !(session.providerId in NATIVE_DELETE_HINTS) &&
   !isReadOnlySession(session);
 
 /** 不能在 CC Switch 里删除时，提示去哪里删的文案 key。 */
 export const nativeDeleteHintKey = (providerId: string): string | undefined =>
-  NATIVE_DELETE_HINT_KEYS[providerId];
+  NATIVE_DELETE_HINTS[providerId]?.key;
+
+export const nativeDeleteHintDefault = (providerId: string): string =>
+  NATIVE_DELETE_HINTS[providerId]?.defaultValue ?? "请在原客户端中删除";
 
 export interface SessionProjectGroup {
   key: string;

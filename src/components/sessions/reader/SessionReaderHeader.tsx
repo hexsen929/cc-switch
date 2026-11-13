@@ -50,6 +50,7 @@ import {
   canDeleteSession,
   canResumeSession,
   nativeDeleteHintKey,
+  nativeDeleteHintDefault,
   formatClock,
   formatShortDateTime,
   isSessionAppId,
@@ -361,9 +362,13 @@ export const SessionReaderHeader = memo(function SessionReaderHeader({
                 ? t("sessionManager.subagents.readOnlyHint", {
                     defaultValue: "子代理会话仅供阅读，请在主会话中继续操作",
                   })
-                : t(nativeDeleteHintKey(session.providerId) ?? "sessionManager.mcodeDeleteHint", {
-                    defaultValue: "请在原客户端中删除",
-                  })}
+                : t(
+                    nativeDeleteHintKey(session.providerId) ??
+                      "sessionManager.mcodeDeleteHint",
+                    {
+                      defaultValue: nativeDeleteHintDefault(session.providerId),
+                    },
+                  )}
             </p>
           )}
       </DropdownMenuContent>
