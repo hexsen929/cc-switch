@@ -23,6 +23,7 @@ import type { SessionContentHit, SessionMeta } from "@/types";
 import {
   canDeleteSession,
   canResumeSession,
+  nativeDeleteHintKey,
   formatRelativeTime,
   formatSessionTitle,
   formatShortDateTime,
@@ -164,25 +165,9 @@ export function SessionItem({
       ? t("sessionManager.subagents.readOnlyHint", {
           defaultValue: "子代理会话仅供阅读，请在主会话中继续操作",
         })
-      : t(
-          session.providerId === "dsh"
-            ? "dsh.deleteSessionHint"
-            : session.providerId === "agy"
-              ? "sessionManager.agyDeleteHint"
-              : session.providerId === "copilot"
-                ? "sessionManager.copilotDeleteHint"
-                : "sessionManager.mcodeDeleteHint",
-          {
-            defaultValue:
-              session.providerId === "dsh"
-                ? "请在 DeepSeek Harness 中删除"
-                : session.providerId === "agy"
-                  ? "请在 Antigravity 中删除"
-                  : session.providerId === "copilot"
-                    ? "请在 GitHub Copilot CLI 中删除"
-                    : "请在 MiniMax Code 中删除",
-          },
-        )
+      : t(nativeDeleteHintKey(session.providerId) ?? "sessionManager.mcodeDeleteHint", {
+          defaultValue: "请在原客户端中删除",
+        })
     : null;
 
   const row = (

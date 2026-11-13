@@ -49,6 +49,7 @@ import {
   buildCdResumeCommand,
   canDeleteSession,
   canResumeSession,
+  nativeDeleteHintKey,
   formatClock,
   formatShortDateTime,
   isSessionAppId,
@@ -354,34 +355,15 @@ export const SessionReaderHeader = memo(function SessionReaderHeader({
           {t("sessionManager.deleteEllipsis", { defaultValue: "删除…" })}
         </DropdownMenuItem>
         {!deletable &&
-          (readOnly ||
-            ["mcode", "agy", "dsh", "copilot"].includes(
-              session.providerId,
-            )) && (
+          (readOnly || nativeDeleteHintKey(session.providerId)) && (
             <p className="px-2.5 pb-1.5 text-caption text-fg-2">
               {readOnly
                 ? t("sessionManager.subagents.readOnlyHint", {
                     defaultValue: "子代理会话仅供阅读，请在主会话中继续操作",
                   })
-                : t(
-                    session.providerId === "dsh"
-                      ? "dsh.deleteSessionHint"
-                      : session.providerId === "agy"
-                        ? "sessionManager.agyDeleteHint"
-                        : session.providerId === "copilot"
-                          ? "sessionManager.copilotDeleteHint"
-                          : "sessionManager.mcodeDeleteHint",
-                    {
-                      defaultValue:
-                        session.providerId === "dsh"
-                          ? "请在 DeepSeek Harness 中删除"
-                          : session.providerId === "agy"
-                            ? "请在 Antigravity 中删除"
-                            : session.providerId === "copilot"
-                              ? "请在 GitHub Copilot CLI 中删除"
-                              : "请在 MiniMax Code 中删除",
-                    },
-                  )}
+                : t(nativeDeleteHintKey(session.providerId) ?? "sessionManager.mcodeDeleteHint", {
+                    defaultValue: "请在原客户端中删除",
+                  })}
             </p>
           )}
       </DropdownMenuContent>

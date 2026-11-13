@@ -455,7 +455,6 @@ async fn handle_messages_for_app(
         extensions.get::<crate::proxy::gateway_auth::AuthedKey>(),
     )
     .await?;
-    ctx.apply_privacy_filter(&mut body);
 
     let raw_endpoint = uri
         .path_and_query()
@@ -806,12 +805,19 @@ async fn handle_claude_transform(
             // 用 ctx 的 app_type：Claude Desktop 网关也走此转换路径，硬编码
             // "claude" 会把 claude-desktop 的行错记到 claude 名下
             let app_type_str = ctx.app_type_str;
+            // Gemini 转换出的 message_delta 是最终 usage 快照，按它记账（见 parser 注释）。
+            let final_delta_authoritative = api_format == "gemini_native";
 
             Some(SseUsageCollector::new(
                 start_time,
                 Some(claude_stream_usage_event_filter),
                 move |events, first_token_ms| {
-                    if let Some(usage) = TokenUsage::from_claude_stream_events(&events) {
+                    let parsed = if final_delta_authoritative {
+                        TokenUsage::from_converted_claude_stream_events(&events)
+                    } else {
+                        TokenUsage::from_claude_stream_events(&events)
+                    };
+                    if let Some(usage) = parsed {
                         let model = usage
                             .model
                             .clone()
@@ -1382,7 +1388,6 @@ pub async fn handle_chat_completions(
         extensions.get::<crate::proxy::gateway_auth::AuthedKey>(),
     )
     .await?;
-    ctx.apply_privacy_filter(&mut body);
     let endpoint = endpoint_with_query(&uri, "/chat/completions");
 
     let is_stream = body
@@ -1506,7 +1511,6 @@ async fn handle_responses_for_app(
         extensions.get::<crate::proxy::gateway_auth::AuthedKey>(),
     )
     .await?;
-    ctx.apply_privacy_filter(&mut body);
     let endpoint = endpoint_with_query(&uri, "/responses");
 
     let is_stream = body
@@ -1761,7 +1765,7 @@ async fn handle_codex_standalone_passthrough(
         .map_err(|e| ProxyError::Internal(format!("Failed to read request body: {e}")))?
         .to_bytes();
     let body_bytes = decode_codex_request_body(&mut headers, body_bytes)?;
-    let mut body: Value = serde_json::from_slice(&body_bytes)
+    let body: Value = serde_json::from_slice(&body_bytes)
         .map_err(|e| ProxyError::InvalidRequest(format!("Failed to parse request body: {e}")))?;
     drop(body_bytes);
 
@@ -1776,7 +1780,6 @@ async fn handle_codex_standalone_passthrough(
         extensions.get::<crate::proxy::gateway_auth::AuthedKey>(),
     )
     .await?;
-    ctx.apply_privacy_filter(&mut body);
     let endpoint = endpoint_with_query(&uri, canonical_endpoint);
 
     let forwarder = ctx.create_forwarder(&state);
@@ -1871,7 +1874,6 @@ async fn handle_responses_compact_for_app(
         extensions.get::<crate::proxy::gateway_auth::AuthedKey>(),
     )
     .await?;
-    ctx.apply_privacy_filter(&mut body);
     let endpoint = endpoint_with_query(&uri, "/responses/compact");
 
     let is_stream = body
@@ -3250,7 +3252,7 @@ pub async fn handle_gemini(
         .to_bytes();
     // GET 类只读端点（/v1beta/models、/v1beta/models/<model> 等）没有请求体，
     // 不能强制 parse 为 JSON —— 否则空 body 会被拒绝。
-    let mut body: Value = if body_bytes.is_empty() {
+    let body: Value = if body_bytes.is_empty() {
         Value::Null
     } else {
         serde_json::from_slice(&body_bytes)
@@ -3268,7 +3270,6 @@ pub async fn handle_gemini(
         extensions.get::<crate::proxy::gateway_auth::AuthedKey>(),
     )
     .await?;
-    ctx.apply_privacy_filter(&mut body);
 
     // 提取完整的路径和查询参数
     let endpoint = uri
