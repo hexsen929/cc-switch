@@ -3676,7 +3676,7 @@
       "title": "스킬 저장소 관리",
       "description": "GitHub 스킬 저장소 추가 또는 제거",
       "url": "저장소 URL",
-      "urlPlaceholder": "owner/name 또는 https://github.com/owner/name",
+      "urlPlaceholder": "GitHub owner/name 또는 Codeberg / Forgejo HTTPS URL",
       "branch": "브랜치",
       "branchPlaceholder": "main",
       "path": "스킬 경로",

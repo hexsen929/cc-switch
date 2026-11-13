@@ -41,6 +41,7 @@ export interface SkillApps {
 
 /** 已安装的 Skill（v3.10.0+ 统一结构） */
 export interface InstalledSkill {
+  repoUrl?: string;
   id: string;
   name: string;
   description?: string;
@@ -70,6 +71,7 @@ export interface SkillBackupEntry {
 
 /** 可发现的 Skill（来自仓库） */
 export interface DiscoverableSkill {
+  repoUrl?: string;
   key: string;
   name: string;
   description: string;
@@ -97,6 +99,7 @@ export interface ImportSkillSelection {
 
 /** 技能对象（兼容旧 API） */
 export interface Skill {
+  repoUrl?: string;
   key: string;
   name: string;
   description: string;
@@ -118,6 +121,7 @@ export interface SkillUpdateInfo {
 
 /** 没有读到的仓库（发现、检查更新时逐仓库报告） */
 export interface SkillRepoFailure {
+  repoUrl?: string;
   owner: string;
   name: string;
   branch: string;
@@ -188,6 +192,8 @@ export interface SkillsShSearchResult {
 
 /** 仓库配置 */
 export interface SkillRepo {
+  /** Non-GitHub repository root; omitted for legacy GitHub sources. */
+  repoUrl?: string;
   owner: string;
   name: string;
   branch: string;
@@ -269,8 +275,9 @@ export const skillsApi = {
   async discoverRepo(
     owner: string,
     name: string,
+    repoUrl?: string,
   ): Promise<SkillDiscoveryResult> {
-    return await invoke("discover_repo_skills", { owner, name });
+    return await invoke("discover_repo_skills", { owner, name, ...(repoUrl ? { repoUrl } : {}) });
   },
 
   /** 检查 Skills 更新，附带没读到的仓库 */
@@ -366,8 +373,8 @@ export const skillsApi = {
   },
 
   /** 删除仓库 */
-  async removeRepo(owner: string, name: string): Promise<boolean> {
-    return await invoke("remove_skill_repo", { owner, name });
+  async removeRepo(owner: string, name: string, repoUrl?: string): Promise<boolean> {
+    return await invoke("remove_skill_repo", { owner, name, ...(repoUrl ? { repoUrl } : {}) });
   },
 
   // ========== ZIP 安装 ==========

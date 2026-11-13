@@ -26,6 +26,7 @@ import {
 } from "@/hooks/useSkills.helpers";
 import { readLocalCache, writeLocalCache } from "@/lib/localCache";
 import { runSequentialBulkAction } from "@/lib/utils/sequentialBulkAction";
+import { skillRepositoryKey, type SkillRepositoryRef } from "@/lib/skillRepository";
 
 /**
  * 查询所有已安装的 Skills
@@ -158,7 +159,7 @@ export function useRefreshDiscoverableSkills() {
  */
 async function patchRepoDiscovery(
   queryClient: QueryClient,
-  repo: { owner: string; name: string },
+  repo: SkillRepositoryRef,
   next?: SkillDiscoveryResult,
 ) {
   // Even an empty query cache can have a canceled request still finishing its
@@ -190,8 +191,8 @@ async function patchRepoDiscovery(
 // 同一仓库的增删改各记一个序号：单仓库发现要下载归档，期间如果又停用 /
 // 删除 / 改了分支，晚到的旧结果不能再写回缓存
 const repoMutationSeq = new Map<string, number>();
-const nextRepoMutation = (repo: { owner: string; name: string }) => {
-  const key = `${repo.owner}/${repo.name}`;
+const nextRepoMutation = (repo: SkillRepositoryRef) => {
+  const key = skillRepositoryKey(repo);
   const seq = (repoMutationSeq.get(key) ?? 0) + 1;
   repoMutationSeq.set(key, seq);
   return { key, seq };
@@ -444,7 +445,9 @@ export function useAddSkillRepo() {
       void queryClient.invalidateQueries({ queryKey: ["skills", "repos"] });
       if (!repo.enabled) return { skills: [], failures: [] };
       try {
-        return await skillsApi.discoverRepo(repo.owner, repo.name);
+        return await (repo.repoUrl
+          ? skillsApi.discoverRepo(repo.owner, repo.name, repo.repoUrl)
+          : skillsApi.discoverRepo(repo.owner, repo.name));
       } catch (error) {
         console.error("[useAddSkillRepo] discover repo failed", error);
         return null;
@@ -470,8 +473,8 @@ export function useAddSkillRepo() {
 export function useRemoveSkillRepo() {
   const queryClient = useQueryClient();
   return useMutation({
-    mutationFn: ({ owner, name }: { owner: string; name: string }) =>
-      skillsApi.removeRepo(owner, name),
+    mutationFn: ({ owner, name, repoUrl }: SkillRepositoryRef) =>
+      repoUrl ? skillsApi.removeRepo(owner, name, repoUrl) : skillsApi.removeRepo(owner, name),
     onMutate: nextRepoMutation,
     onSuccess: async (_result, repo, ctx) => {
       void queryClient.invalidateQueries({ queryKey: ["skills", "repos"] });

@@ -3676,7 +3676,7 @@
       "title": "Skill-Repositories verwalten",
       "description": "GitHub-Skill-Repository-Quellen hinzufügen oder entfernen",
       "url": "Repository-URL",
-      "urlPlaceholder": "owner/name oder https://github.com/owner/name",
+      "urlPlaceholder": "GitHub owner/name oder Codeberg / Forgejo HTTPS-URL",
       "branch": "Branch",
       "branchPlaceholder": "main",
       "path": "Skills-Pfad",

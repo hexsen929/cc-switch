@@ -23,7 +23,7 @@ impl Database {
             .prepare(
                 "SELECT id, name, description, directory, repo_owner, repo_name, repo_branch,
                         readme_url, enabled_claude, enabled_codex, enabled_gemini, enabled_grokbuild,
-                        enabled_opencode, enabled_hermes, installed_at, content_hash, updated_at, enabled_mcode, enabled_agy, enabled_kimi, enabled_dsh, enabled_copilot, enabled_workbuddy
+                        enabled_opencode, enabled_hermes, installed_at, content_hash, updated_at, enabled_mcode, enabled_agy, enabled_kimi, enabled_dsh, enabled_copilot, enabled_workbuddy, repo_url
                  FROM skills ORDER BY name ASC",
             )
             .map_err(|e| AppError::Database(e.to_string()))?;
@@ -31,6 +31,7 @@ impl Database {
         let skill_iter = stmt
             .query_map([], |row| {
                 Ok(InstalledSkill {
+                    repo_url: row.get(23)?,
                     id: row.get(0)?,
                     name: row.get(1)?,
                     description: row.get(2)?,
@@ -77,13 +78,14 @@ impl Database {
             .prepare(
                 "SELECT id, name, description, directory, repo_owner, repo_name, repo_branch,
                         readme_url, enabled_claude, enabled_codex, enabled_gemini, enabled_grokbuild,
-                        enabled_opencode, enabled_hermes, installed_at, content_hash, updated_at, enabled_mcode, enabled_agy, enabled_kimi, enabled_dsh, enabled_copilot, enabled_workbuddy
+                        enabled_opencode, enabled_hermes, installed_at, content_hash, updated_at, enabled_mcode, enabled_agy, enabled_kimi, enabled_dsh, enabled_copilot, enabled_workbuddy, repo_url
                  FROM skills WHERE id = ?1",
             )
             .map_err(|e| AppError::Database(e.to_string()))?;
 
         let result = stmt.query_row([id], |row| {
             Ok(InstalledSkill {
+                repo_url: row.get(23)?,
                 id: row.get(0)?,
                 name: row.get(1)?,
                 description: row.get(2)?,
@@ -128,8 +130,8 @@ impl Database {
             "INSERT OR REPLACE INTO skills
              (id, name, description, directory, repo_owner, repo_name, repo_branch,
               readme_url, enabled_claude, enabled_codex, enabled_gemini, enabled_grokbuild, enabled_opencode, enabled_hermes,
-              installed_at, content_hash, updated_at, enabled_mcode, enabled_agy, enabled_kimi, enabled_dsh, enabled_copilot, enabled_workbuddy)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23)",
+              installed_at, content_hash, updated_at, enabled_mcode, enabled_agy, enabled_kimi, enabled_dsh, enabled_copilot, enabled_workbuddy, repo_url)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24)",
             params![
                 skill.id,
                 skill.name,
@@ -154,6 +156,7 @@ impl Database {
                 skill.apps.dsh,
                 skill.apps.copilot,
                 skill.apps.workbuddy,
+                skill.repo_url,
             ],
         )
         .map_err(|e| AppError::Database(e.to_string()))?;
@@ -179,7 +182,8 @@ impl Database {
                      readme_url = ?7,
                      installed_at = ?8,
                      content_hash = ?9,
-                     updated_at = ?10
+                     updated_at = ?10,
+                     repo_url = ?13
                  WHERE id = ?11 AND installed_at = ?12",
                 params![
                     skill.name,
@@ -194,6 +198,7 @@ impl Database {
                     skill.updated_at,
                     skill.id,
                     skill.installed_at,
+                    skill.repo_url,
                 ],
             )
             .map_err(|e| AppError::Database(e.to_string()))?;
@@ -253,13 +258,14 @@ impl Database {
         let conn = lock_conn!(self.conn);
         let mut stmt = conn
             .prepare(
-                "SELECT owner, name, branch, enabled FROM skill_repos ORDER BY owner ASC, name ASC",
+                "SELECT owner, name, branch, enabled, repo_url FROM skill_repos ORDER BY repo_url, owner, name",
             )
             .map_err(|e| AppError::Database(e.to_string()))?;
 
         let repo_iter = stmt
             .query_map([], |row| {
                 Ok(SkillRepo {
+                    repo_url: Some(row.get::<_, String>(4)?).filter(|url| !url.is_empty()),
                     owner: row.get(0)?,
                     name: row.get(1)?,
                     branch: row.get(2)?,
@@ -277,10 +283,16 @@ impl Database {
 
     /// 保存 Skill 仓库
     pub fn save_skill_repo(&self, repo: &SkillRepo) -> Result<(), AppError> {
+        let repo_url = if repo.repo_url.is_some() {
+            repo.canonical_repo_url()
+                .map_err(|e| AppError::InvalidInput(e.to_string()))?
+        } else {
+            None
+        };
         let conn = lock_conn!(self.conn);
         conn.execute(
-            "INSERT OR REPLACE INTO skill_repos (owner, name, branch, enabled) VALUES (?1, ?2, ?3, ?4)",
-            params![repo.owner, repo.name, repo.branch, repo.enabled],
+            "INSERT OR REPLACE INTO skill_repos (owner, name, branch, enabled, repo_url) VALUES (?1, ?2, ?3, ?4, ?5)",
+            params![repo.owner, repo.name, repo.branch, repo.enabled, repo_url.unwrap_or_default()],
         )
         .map_err(|e| AppError::Database(e.to_string()))?;
         Ok(())
@@ -288,10 +300,19 @@ impl Database {
 
     /// 删除 Skill 仓库
     pub fn delete_skill_repo(&self, owner: &str, name: &str) -> Result<(), AppError> {
+        self.delete_skill_repo_at(owner, name, None)
+    }
+
+    pub fn delete_skill_repo_at(
+        &self,
+        owner: &str,
+        name: &str,
+        repo_url: Option<&str>,
+    ) -> Result<(), AppError> {
         let conn = lock_conn!(self.conn);
         conn.execute(
-            "DELETE FROM skill_repos WHERE owner = ?1 AND name = ?2",
-            params![owner, name],
+            "DELETE FROM skill_repos WHERE owner = ?1 AND name = ?2 AND repo_url = ?3",
+            params![owner, name, repo_url.unwrap_or_default()],
         )
         .map_err(|e| AppError::Database(e.to_string()))?;
         Ok(())
@@ -330,8 +351,46 @@ mod tests {
     use super::*;
     use crate::app_config::AppType;
 
+    #[test]
+    fn repository_sources_survive_sql_roundtrip_and_do_not_collide() {
+        let db = Database::memory().unwrap();
+        let github: SkillRepo = serde_json::from_value(serde_json::json!({
+            "owner": "owner", "name": "repo", "branch": "main", "enabled": false
+        }))
+        .unwrap();
+        let mut forgejo = github.clone();
+        forgejo.repo_url = Some("https://codeberg.org/owner/repo".into());
+        forgejo.enabled = true;
+        db.save_skill_repo(&github).unwrap();
+        db.save_skill_repo(&forgejo).unwrap();
+        assert_eq!(db.get_skill_repos().unwrap().len(), 2);
+        let mut installed = skill("forgejo:source:a", "a", SkillApps::default());
+        installed.repo_url = forgejo.repo_url.clone();
+        db.save_skill(&installed).unwrap();
+        let export = db.export_sql_string().unwrap();
+        let restored = Database::memory().unwrap();
+        restored.import_sql_string(&export).unwrap();
+        assert_eq!(
+            restored
+                .get_installed_skill(&installed.id)
+                .unwrap()
+                .unwrap()
+                .repo_url,
+            forgejo.repo_url
+        );
+        assert_eq!(restored.get_skill_repos().unwrap().len(), 2);
+        restored
+            .delete_skill_repo_at("owner", "repo", forgejo.repo_url.as_deref())
+            .unwrap();
+        let remaining = restored.get_skill_repos().unwrap();
+        assert_eq!(remaining.len(), 1);
+        assert!(remaining[0].repo_url.is_none());
+        assert!(!remaining[0].enabled);
+    }
+
     fn skill(id: &str, name: &str, apps: SkillApps) -> InstalledSkill {
         InstalledSkill {
+            repo_url: None,
             id: id.to_string(),
             name: name.to_string(),
             description: Some(format!("{name} description")),

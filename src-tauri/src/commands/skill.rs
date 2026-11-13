@@ -172,13 +172,14 @@ pub async fn discover_available_skills(
 pub async fn discover_repo_skills(
     owner: String,
     name: String,
+    repo_url: Option<String>,
     service: State<'_, SkillServiceState>,
     app_state: State<'_, AppState>,
 ) -> Result<SkillDiscoveryResult, String> {
     let repos = app_state.db.get_skill_repos().map_err(|e| e.to_string())?;
     let Some(repo) = repos
         .into_iter()
-        .find(|repo| repo.owner == owner && repo.name == name)
+        .find(|repo| repo.owner == owner && repo.name == name && repo.repo_url == repo_url)
     else {
         return Ok(SkillDiscoveryResult::default());
     };
@@ -431,8 +432,7 @@ pub async fn add_skill_repo(
 ) -> Result<bool, String> {
     // 整个结构体由前端反序列化而来，owner/name/branch 会被拼进归档下载 URL。
     // 主防线在 download_repo，这里让非法值当场报错而不是沉淀进表。
-    SkillService::validate_repo_ref(&repo.owner, &repo.name, &repo.branch)
-        .map_err(|e| e.to_string())?;
+    repo.validate().map_err(|e| e.to_string())?;
     run_db_task(&app_state, move |state| {
         state.db.save_skill_repo(&repo).map_err(|e| e.to_string())?;
         Ok(true)
@@ -444,12 +444,13 @@ pub async fn add_skill_repo(
 pub async fn remove_skill_repo(
     owner: String,
     name: String,
+    repo_url: Option<String>,
     app_state: State<'_, AppState>,
 ) -> Result<bool, String> {
     run_db_task(&app_state, move |state| {
         state
             .db
-            .delete_skill_repo(&owner, &name)
+            .delete_skill_repo_at(&owner, &name, repo_url.as_deref())
             .map_err(|e| e.to_string())?;
         Ok(true)
     })

@@ -1795,8 +1795,8 @@ fn migration_from_v24_adds_copilot_and_workbuddy_flags_without_changing_dsh_stat
 
     Database::apply_schema_migrations_on_conn(&conn).expect("upgrade v24 database");
     // v24 → v25（Copilot）→ v26（WorkBuddy）
-    assert_eq!(Database::get_user_version(&conn).unwrap(), 26);
-    assert_eq!(SCHEMA_VERSION, 26);
+    assert_eq!(Database::get_user_version(&conn).unwrap(), SCHEMA_VERSION);
+    assert_eq!(SCHEMA_VERSION, 27);
     for table in ["mcp_servers", "skills"] {
         let flags: (bool, bool, bool) = conn
             .query_row(
@@ -1815,6 +1815,43 @@ fn migration_from_v24_adds_copilot_and_workbuddy_flags_without_changing_dsh_stat
         .query_row("SELECT enabled_copilot FROM skills", [], |row| row
             .get::<_, bool>(0))
         .unwrap());
+}
+
+#[test]
+fn migration_from_v26_preserves_github_skill_repositories_and_app_flags() {
+    let conn = Connection::open_in_memory().unwrap();
+    Database::create_tables_on_conn(&conn).unwrap();
+    conn.execute_batch(
+        "DROP TABLE skill_repos;
+         CREATE TABLE skill_repos(owner TEXT NOT NULL, name TEXT NOT NULL,
+           branch TEXT NOT NULL DEFAULT 'main', enabled BOOLEAN NOT NULL DEFAULT 1,
+           PRIMARY KEY(owner,name));
+         INSERT INTO skill_repos VALUES('owner','repo','custom',0);
+         ALTER TABLE skills DROP COLUMN repo_url;
+         INSERT INTO skills(id,name,directory,repo_owner,repo_name,enabled_codex,enabled_claude)
+           VALUES('owner/repo:a','A','a','owner','repo',1,0);",
+    )
+    .unwrap();
+    Database::set_user_version(&conn, 26).unwrap();
+    Database::apply_schema_migrations_on_conn(&conn).unwrap();
+    assert_eq!(Database::get_user_version(&conn).unwrap(), SCHEMA_VERSION);
+    let row: (String, bool, String) = conn
+        .query_row(
+            "SELECT branch,enabled,repo_url FROM skill_repos WHERE owner='owner'",
+            [],
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+        )
+        .unwrap();
+    assert_eq!(row, ("custom".into(), false, "".into()));
+    let skill: (Option<String>, bool, bool) = conn
+        .query_row(
+            "SELECT repo_url,enabled_codex,enabled_claude FROM skills",
+            [],
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+        )
+        .unwrap();
+    assert_eq!(skill, (None, true, false));
+    conn.execute("INSERT INTO skill_repos(owner,name,repo_url) VALUES('owner','repo','https://codeberg.org/owner/repo')", []).unwrap();
 }
 
 #[test]

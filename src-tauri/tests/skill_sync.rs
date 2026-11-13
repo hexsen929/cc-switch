@@ -140,6 +140,7 @@ fn sync_to_app_removes_disabled_and_orphaned_ssot_symlinks() {
     state
         .db
         .save_skill(&InstalledSkill {
+            repo_url: None,
             id: "local:disabled-skill".to_string(),
             name: "Disabled".to_string(),
             description: None,
@@ -181,6 +182,7 @@ fn uninstall_skill_creates_backup_before_removing_ssot() {
     state
         .db
         .save_skill(&InstalledSkill {
+            repo_url: None,
             id: "local:backup-skill".to_string(),
             name: "Backup Skill".to_string(),
             description: Some("Back me up before uninstall".to_string()),
@@ -249,6 +251,7 @@ fn restore_skill_backup_restores_files_to_ssot_and_current_app() {
     state
         .db
         .save_skill(&InstalledSkill {
+            repo_url: None,
             id: "local:restore-skill".to_string(),
             name: "Restore Skill".to_string(),
             description: Some("Bring the files back".to_string()),
@@ -330,6 +333,7 @@ fn delete_skill_backup_removes_backup_directory() {
     state
         .db
         .save_skill(&InstalledSkill {
+            repo_url: None,
             id: "local:delete-backup-skill".to_string(),
             name: "Delete Backup Skill".to_string(),
             description: Some("Remove my backup".to_string()),

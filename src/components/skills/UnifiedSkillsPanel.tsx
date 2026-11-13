@@ -1,4 +1,5 @@
 import { createPortal } from "react-dom";
+import { skillRepositoryLabel } from "@/lib/skillRepository";
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { useDelayedFlag } from "@/hooks/useDelayedFlag";
 import { useTranslation } from "react-i18next";
@@ -299,7 +300,7 @@ const UnifiedSkillsPanel: React.FC<UnifiedSkillsPanelProps> = ({
   // ─── 来源 / 筛选 ────────────────────────────────────────────────────
   const sourceKey = (skill: InstalledSkill) =>
     skill.repoOwner && skill.repoName
-      ? `repo:${skill.repoOwner}/${skill.repoName}`
+      ? `repo:${skillRepositoryLabel({ owner: skill.repoOwner, name: skill.repoName, repoUrl: skill.repoUrl })}`
       : "local";
 
   const sourceLabel = (key: string) =>
@@ -877,7 +878,7 @@ const UnifiedSkillsPanel: React.FC<UnifiedSkillsPanelProps> = ({
 
   const openDocs = async (skill: InstalledSkill) => {
     const url =
-      skill.readmeUrl ||
+      skill.readmeUrl || skill.repoUrl ||
       (skill.repoOwner && skill.repoName
         ? `https://github.com/${skill.repoOwner}/${skill.repoName}`
         : undefined);
@@ -1289,7 +1290,7 @@ const UnifiedSkillsPanel: React.FC<UnifiedSkillsPanelProps> = ({
                     disabled={controlsDisabled}
                     sourceText={
                       skill.repoOwner && skill.repoName
-                        ? `${skill.repoOwner}/${skill.repoName}`
+                        ? skillRepositoryLabel({ owner: skill.repoOwner, name: skill.repoName, repoUrl: skill.repoUrl })
                         : t("skillsPage.source.local")
                     }
                     onPick={(checked) =>
@@ -1684,7 +1685,7 @@ const UnifiedSkillsPanel: React.FC<UnifiedSkillsPanelProps> = ({
               );
               const repo =
                 skill?.repoOwner && skill.repoName
-                  ? `${skill.repoOwner}/${skill.repoName}`
+                  ? skillRepositoryLabel({ owner: skill.repoOwner, name: skill.repoName, repoUrl: skill.repoUrl })
                   : null;
               return (
                 <li

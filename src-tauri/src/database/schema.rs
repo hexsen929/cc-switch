@@ -133,6 +133,7 @@ impl Database {
             repo_owner TEXT,
             repo_name TEXT,
             repo_branch TEXT DEFAULT 'main',
+            repo_url TEXT,
             readme_url TEXT,
             enabled_claude BOOLEAN NOT NULL DEFAULT 0,
             enabled_codex BOOLEAN NOT NULL DEFAULT 0,
@@ -158,7 +159,8 @@ impl Database {
         conn.execute(
             "CREATE TABLE IF NOT EXISTS skill_repos (
             owner TEXT NOT NULL, name TEXT NOT NULL, branch TEXT NOT NULL DEFAULT 'main',
-            enabled BOOLEAN NOT NULL DEFAULT 1, PRIMARY KEY (owner, name)
+            enabled BOOLEAN NOT NULL DEFAULT 1, repo_url TEXT NOT NULL DEFAULT '',
+            PRIMARY KEY (repo_url, owner, name)
         )",
             [],
         )
@@ -878,6 +880,30 @@ impl Database {
                             }
                         }
                         Self::set_user_version(conn, 26)?;
+                    }
+                    26 => {
+                        if Self::table_exists(conn, "skills")? {
+                            Self::add_column_if_missing(conn, "skills", "repo_url", "TEXT")?;
+                        }
+                        if Self::table_exists(conn, "skill_repos")?
+                            && !Self::has_column(conn, "skill_repos", "repo_url")?
+                        {
+                            // The enclosing migration savepoint makes replacement atomic.
+                            conn.execute_batch(
+                                "ALTER TABLE skill_repos RENAME TO skill_repos_v26;
+                                 CREATE TABLE skill_repos (
+                                   owner TEXT NOT NULL, name TEXT NOT NULL,
+                                   branch TEXT NOT NULL DEFAULT 'main',
+                                   enabled BOOLEAN NOT NULL DEFAULT 1,
+                                   repo_url TEXT NOT NULL DEFAULT '',
+                                   PRIMARY KEY (repo_url, owner, name));
+                                 INSERT INTO skill_repos(owner,name,branch,enabled)
+                                   SELECT owner,name,branch,enabled FROM skill_repos_v26;
+                                 DROP TABLE skill_repos_v26;",
+                            )
+                            .map_err(|e| AppError::Database(e.to_string()))?;
+                        }
+                        Self::set_user_version(conn, 27)?;
                     }
                     _ => {
                         return Err(AppError::Database(format!(

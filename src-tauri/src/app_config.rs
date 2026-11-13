@@ -359,6 +359,9 @@ impl SkillApps {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct InstalledSkill {
+    /// 完整 Forgejo/Codeberg 仓库 URL；旧记录省略时仍按 GitHub 处理。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub repo_url: Option<String>,
     /// 唯一标识符（格式："owner/repo:directory" 或 "local:directory"）
     pub id: String,
     /// 显示名称

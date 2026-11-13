@@ -1,4 +1,5 @@
 import type { InstalledSkill, SkillDiscoveryResult } from "@/lib/api/skills";
+import { skillRepositoryKey, type SkillRepositoryRef } from "@/lib/skillRepository";
 
 /**
  * 合并本次导入结果到已安装缓存，按 id 去重。
@@ -29,16 +30,16 @@ export function mergeImportedSkills(
  */
 export function replaceRepoDiscovery(
   existing: SkillDiscoveryResult | undefined,
-  repo: { owner: string; name: string },
+  repo: SkillRepositoryRef,
   next?: SkillDiscoveryResult,
 ): SkillDiscoveryResult | undefined {
   if (!existing) return undefined;
 
-  const otherRepo = (owner?: string, name?: string) =>
-    owner !== repo.owner || name !== repo.name;
+  const otherRepo = (owner: string, name: string, repoUrl?: string) =>
+    skillRepositoryKey({ owner, name, repoUrl }) !== skillRepositoryKey(repo);
   const seen = new Set<string>();
   const skills = [
-    ...existing.skills.filter((s) => otherRepo(s.repoOwner, s.repoName)),
+    ...existing.skills.filter((s) => otherRepo(s.repoOwner, s.repoName, s.repoUrl)),
     ...(next?.skills ?? []),
   ]
     .filter((skill) => {
@@ -53,7 +54,7 @@ export function replaceRepoDiscovery(
       return x < y ? -1 : x > y ? 1 : 0;
     });
   const failures = [
-    ...existing.failures.filter((f) => otherRepo(f.owner, f.name)),
+    ...existing.failures.filter((f) => otherRepo(f.owner, f.name, f.repoUrl)),
     ...(next?.failures ?? []),
   ];
   return { skills, failures };

@@ -27,6 +27,15 @@ const repo = (branch: string): SkillRepo => ({
 
 // #9273：发现结果记的是实际下载成功的分支，配置的分支可能是 HEAD 或回落前的分支
 describe("countRepoSkills", () => {
+  it("distinguishes same-name repositories on different hosts and resolves Forgejo defaults", () => {
+    const repoUrl = "https://codeberg.org/o/r";
+    const skills = [skill("main"), { ...skill("trunk", "forgejo"), repoUrl }];
+    expect(countRepoSkills(skills, repo("main"))).toBe(1);
+    expect(countRepoSkills(skills, { ...repo("HEAD"), repoUrl })).toBe(1);
+    expect(countRepoSkills(skills, { ...repo("main"), repoUrl })).toBe(0);
+    expect(countRepoSkills(skills, { ...repo("HEAD"), repoUrl: "https://git.example/o/r" })).toBe(0);
+  });
+
   it("counts skills resolved from the default-branch sentinel", () => {
     const skills = [skill("main", "a"), skill("main", "b")];
     expect(countRepoSkills(skills, repo("HEAD"))).toBe(2);

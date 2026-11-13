@@ -3803,7 +3803,7 @@
       "title": "スキルリポジトリを管理",
       "description": "GitHub のスキルリポジトリソースを追加または削除します",
       "url": "リポジトリ URL",
-      "urlPlaceholder": "owner/name または https://github.com/owner/name",
+      "urlPlaceholder": "GitHub owner/name または Codeberg / Forgejo HTTPS URL",
       "branch": "ブランチ",
       "branchPlaceholder": "main",
       "path": "スキルパス",

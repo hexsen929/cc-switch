@@ -25,6 +25,7 @@ import {
   MONO_FIELD_CLASS,
 } from "@/components/mcp/formBits";
 import { repoFailureKey } from "./repoFailures";
+import { parseSkillRepositoryUrl, skillRepositoryKey, skillRepositoryLabel, skillRepositoryUrl, type SkillRepositoryRef } from "@/lib/skillRepository";
 
 interface RepoManagerPanelProps {
   repos: SkillRepo[];
@@ -32,7 +33,7 @@ interface RepoManagerPanelProps {
   /** 本次发现没读到的仓库：显示「读取失败」而不是「识别到 0 个」 */
   failures?: SkillRepoFailure[];
   onAdd: (repo: SkillRepo) => Promise<void>;
-  onRemove: (owner: string, name: string) => Promise<void>;
+  onRemove: (owner: string, name: string, repoUrl?: string) => Promise<void>;
   /** 勾掉 = 停用（不参与发现），不删除 */
   onToggle?: (repo: SkillRepo, enabled: boolean) => Promise<void>;
   onClose: () => void;
@@ -40,15 +41,8 @@ interface RepoManagerPanelProps {
 
 export function parseRepoUrl(
   url: string,
-): { owner: string; name: string } | null {
-  let cleaned = url.trim();
-  cleaned = cleaned.replace(/^https?:\/\/github\.com\//, "");
-  cleaned = cleaned.replace(/\.git$/, "").replace(/\/+$/, "");
-  const parts = cleaned.split("/");
-  if (parts.length === 2 && parts[0] && parts[1]) {
-    return { owner: parts[0], name: parts[1] };
-  }
-  return null;
+): SkillRepositoryRef | null {
+  return parseSkillRepositoryUrl(url);
 }
 
 /**
@@ -73,7 +67,9 @@ export function countRepoSkills(skills: DiscoverableSkill[], repo: SkillRepo) {
     (skill) =>
       skill.repoOwner === repo.owner &&
       skill.repoName === repo.name &&
-      branches.includes(skill.repoBranch || "main"),
+      (skill.repoUrl ?? "") === (repo.repoUrl ?? "") &&
+      (repo.repoUrl && (!repo.branch || repo.branch.toUpperCase() === "HEAD")
+        ? true : branches.includes(skill.repoBranch || "main")),
   ).length;
 }
 
@@ -106,9 +102,8 @@ export function RepoManagerPanel({
     setAdding(true);
     try {
       await onAdd({
-        owner: parsed.owner,
-        name: parsed.name,
-        branch: branch.trim() || "main",
+        ...parsed,
+        branch: branch.trim() || (parsed.repoUrl ? "HEAD" : "main"),
         enabled: true,
       });
       setRepoUrl("");
@@ -120,9 +115,9 @@ export function RepoManagerPanel({
     }
   };
 
-  const handleOpenRepo = async (owner: string, name: string) => {
+  const handleOpenRepo = async (repo: SkillRepo) => {
     try {
-      await settingsApi.openExternal(`https://github.com/${owner}/${name}`);
+      await settingsApi.openExternal(skillRepositoryUrl(repo));
     } catch (err) {
       console.error("Failed to open URL:", err);
     }
@@ -217,12 +212,12 @@ export function RepoManagerPanel({
             ) : (
               <ul className="m-0 list-none rounded-panel border border-border p-0">
                 {repos.map((repo, index) => {
-                  const id = `${repo.owner}/${repo.name}`;
+                  const id = skillRepositoryLabel(repo);
                   const checkboxId = `sk-repo-manage-${index}`;
                   const failure = failureByRepo.get(repoFailureKey(repo));
                   return (
                     <li
-                      key={id}
+                      key={skillRepositoryKey(repo)}
                       className={cn(
                         "flex min-h-12 items-center gap-2.5 py-1.5 pe-2 ps-3.5",
                         index > 0 && "border-t border-border",
@@ -274,7 +269,7 @@ export function RepoManagerPanel({
                             repo: id,
                           })}
                           onClick={() =>
-                            void handleOpenRepo(repo.owner, repo.name)
+                            void handleOpenRepo(repo)
                           }
                         >
                           <ExternalLink className="h-4 w-4" strokeWidth={1.5} />
@@ -289,7 +284,9 @@ export function RepoManagerPanel({
                             repo: id,
                           })}
                           className="hover:text-danger-text"
-                          onClick={() => void onRemove(repo.owner, repo.name)}
+                          onClick={() => void (repo.repoUrl
+                            ? onRemove(repo.owner, repo.name, repo.repoUrl)
+                            : onRemove(repo.owner, repo.name))}
                         >
                           <Trash2 className="h-4 w-4" strokeWidth={1.5} />
                         </Button>

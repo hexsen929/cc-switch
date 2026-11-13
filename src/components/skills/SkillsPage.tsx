@@ -1,4 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
+import { skillRepositoryLabel } from "@/lib/skillRepository";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { useTranslation } from "react-i18next";
 import {
@@ -82,9 +83,9 @@ export function useSkillRepoActions() {
     );
   };
 
-  const removeRepo = async (owner: string, name: string) => {
+  const removeRepo = async (owner: string, name: string, repoUrl?: string) => {
     try {
-      await removeRepoMutation.mutateAsync({ owner, name });
+      await removeRepoMutation.mutateAsync({ owner, name, ...(repoUrl ? { repoUrl } : {}) });
       toast.success(t("skills.repo.removeSuccess", { owner, name }), {
         closeButton: true,
       });
@@ -126,6 +127,7 @@ interface SkillsPageProps {
 }
 
 interface DiscoverRow {
+  repoUrl?: string;
   key: string;
   name: string;
   directory: string;
@@ -139,15 +141,17 @@ interface DiscoverRow {
 /** 发现行的文档地址：优先 SKILL.md 所在目录，缺省回落到仓库首页 */
 function discoverDocsUrl(row: DiscoverRow): string | undefined {
   if (row.skill.readmeUrl) return row.skill.readmeUrl;
+  if (row.skill.repoUrl) return row.skill.repoUrl;
   if (row.repoOwner && row.repoName) {
     return `https://github.com/${row.repoOwner}/${row.repoName}`;
   }
   return undefined;
 }
 
-function installedKey(directory: string, owner?: string, name?: string) {
+function installedKey(directory: string, owner?: string, name?: string, repoUrl?: string) {
   const dir = directory.split(/[/\\]/).pop()?.toLowerCase() ?? "";
-  return `${dir}:${(owner ?? "").toLowerCase()}:${(name ?? "").toLowerCase()}`;
+  const legacy = `${dir}:${(owner ?? "").toLowerCase()}:${(name ?? "").toLowerCase()}`;
+  return repoUrl ? `${legacy}:${repoUrl.toLowerCase()}` : legacy;
 }
 
 function formatInstalls(count: number, locale: string): string {
@@ -257,7 +261,7 @@ export function SkillsPage({
     const map = new Map<string, InstalledSkill>();
     for (const skill of installedSkills) {
       map.set(
-        installedKey(skill.directory, skill.repoOwner, skill.repoName),
+        installedKey(skill.directory, skill.repoOwner, skill.repoName, skill.repoUrl),
         skill,
       );
     }
@@ -277,13 +281,14 @@ export function SkillsPage({
 
   const sourceLabel = (skill: InstalledSkill) =>
     skill.repoOwner && skill.repoName
-      ? `${skill.repoOwner}/${skill.repoName}`
+      ? skillRepositoryLabel({ owner: skill.repoOwner, name: skill.repoName, repoUrl: skill.repoUrl })
       : t("skillsPage.source.local");
 
   // ─── 行数据 ─────────────────────────────────────────────────────────
   const repoRows: DiscoverRow[] = useMemo(
     () =>
       (discoverable ?? []).map((skill) => ({
+        repoUrl: skill.repoUrl,
         key: skill.key,
         name: skill.name,
         directory: skill.directory,
@@ -321,7 +326,7 @@ export function SkillsPage({
 
   const statusOf = (row: DiscoverRow) => {
     const installed = installedByKey.get(
-      installedKey(row.directory, row.repoOwner, row.repoName),
+      installedKey(row.directory, row.repoOwner, row.repoName, row.repoUrl),
     );
     if (installed) return { kind: "installed" as const, skill: installed };
     const dir = row.directory.split(/[/\\]/).pop()?.toLowerCase() ?? "";
@@ -1002,7 +1007,7 @@ function RepoPopover({
         >
           <div className="flex max-h-[280px] flex-col overflow-y-auto">
             {repos.map((repo) => {
-              const id = `${repo.owner}/${repo.name}`;
+              const id = skillRepositoryLabel(repo);
               const failure = repo.enabled
                 ? failureByRepo.get(repoFailureKey(repo))
                 : undefined;

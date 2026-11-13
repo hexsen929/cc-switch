@@ -3674,7 +3674,7 @@
       "title": "Управление репозиториями навыков",
       "description": "Добавляйте или удаляйте источники репозиториев навыков GitHub",
       "url": "URL репозитория",
-      "urlPlaceholder": "owner/name or https://github.com/owner/name",
+      "urlPlaceholder": "GitHub owner/name или HTTPS URL Codeberg / Forgejo",
       "branch": "Ветка",
       "branchPlaceholder": "main",
       "path": "Путь к навыкам",

@@ -49,6 +49,7 @@ pub fn import_skill_from_deeplink(
 
     // Create SkillRepo
     let repo = SkillRepo {
+        repo_url: None,
         owner: owner.clone(),
         name: name.clone(),
         branch,

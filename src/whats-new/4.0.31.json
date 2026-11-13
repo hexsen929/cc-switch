@@ -3,6 +3,20 @@
   "items": [
     {
       "type": "new",
+      "zh": "Skill 仓库支持 Codeberg 和自建 Forgejo：发现、安装及检查更新",
+      "zh-TW": "Skill 儲存庫支援 Codeberg 與自架 Forgejo：探索、安裝及檢查更新",
+      "en": "Discover, install and update Skills from Codeberg and self-hosted Forgejo repositories",
+      "ja": "Codeberg とセルフホスト Forgejo の Skill 検出・インストール・更新に対応"
+    },
+    {
+      "type": "new",
+      "zh": "MCP 支持全局关闭、仅为指定供应商启用，与 Skill 覆盖一致",
+      "zh-TW": "MCP 支援全域關閉、僅為指定供應商啟用，與 Skill 覆寫一致",
+      "en": "Enable globally disabled MCP servers only for selected providers, just like Skills",
+      "ja": "全体で無効の MCP を特定プロバイダーのみで有効化できるように対応"
+    },
+    {
+      "type": "new",
       "zh": "新增 WorkBuddy：自定义模型、多账号切换与积分查看",
       "zh-TW": "新增 WorkBuddy：自訂模型、多帳號切換與積分查看",
       "en": "WorkBuddy support: custom models, account switching and credits at a glance",
