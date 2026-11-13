@@ -25,7 +25,13 @@ import {
   MONO_FIELD_CLASS,
 } from "@/components/mcp/formBits";
 import { repoFailureKey } from "./repoFailures";
-import { parseSkillRepositoryUrl, skillRepositoryKey, skillRepositoryLabel, skillRepositoryUrl, type SkillRepositoryRef } from "@/lib/skillRepository";
+import {
+  parseSkillRepositoryUrl,
+  skillRepositoryKey,
+  skillRepositoryLabel,
+  skillRepositoryUrl,
+  type SkillRepositoryRef,
+} from "@/lib/skillRepository";
 
 interface RepoManagerPanelProps {
   repos: SkillRepo[];
@@ -39,9 +45,7 @@ interface RepoManagerPanelProps {
   onClose: () => void;
 }
 
-export function parseRepoUrl(
-  url: string,
-): SkillRepositoryRef | null {
+export function parseRepoUrl(url: string): SkillRepositoryRef | null {
   return parseSkillRepositoryUrl(url);
 }
 
@@ -69,7 +73,8 @@ export function countRepoSkills(skills: DiscoverableSkill[], repo: SkillRepo) {
       skill.repoName === repo.name &&
       (skill.repoUrl ?? "") === (repo.repoUrl ?? "") &&
       (repo.repoUrl && (!repo.branch || repo.branch.toUpperCase() === "HEAD")
-        ? true : branches.includes(skill.repoBranch || "main")),
+        ? true
+        : branches.includes(skill.repoBranch || "main")),
   ).length;
 }
 
@@ -268,9 +273,7 @@ export function RepoManagerPanel({
                           aria-label={t("skillsPage.repos.openAria", {
                             repo: id,
                           })}
-                          onClick={() =>
-                            void handleOpenRepo(repo)
-                          }
+                          onClick={() => void handleOpenRepo(repo)}
                         >
                           <ExternalLink className="h-4 w-4" strokeWidth={1.5} />
                         </Button>
@@ -284,9 +287,11 @@ export function RepoManagerPanel({
                             repo: id,
                           })}
                           className="hover:text-danger-text"
-                          onClick={() => void (repo.repoUrl
-                            ? onRemove(repo.owner, repo.name, repo.repoUrl)
-                            : onRemove(repo.owner, repo.name))}
+                          onClick={() =>
+                            void (repo.repoUrl
+                              ? onRemove(repo.owner, repo.name, repo.repoUrl)
+                              : onRemove(repo.owner, repo.name))
+                          }
                         >
                           <Trash2 className="h-4 w-4" strokeWidth={1.5} />
                         </Button>

@@ -15,6 +15,9 @@ impl SkillRepo {
     }
 
     pub(crate) fn validate(&self) -> Result<()> {
+        if self.repo_url.is_none() {
+            return SkillService::validate_repo_ref(&self.owner, &self.name, &self.branch);
+        }
         let source = RepoSource::new(&self.owner, &self.name, self.repo_url.as_deref())?;
         if source.github {
             return SkillService::validate_repo_ref(&self.owner, &self.name, &self.branch);
@@ -30,7 +33,12 @@ impl RepoSource {
     pub fn new(owner: &str, name: &str, repo_url: Option<&str>) -> Result<Self> {
         let fallback = format!("https://github.com/{owner}/{name}");
         let raw = repo_url.unwrap_or(&fallback).trim().trim_end_matches('/');
-        let raw = raw.strip_suffix(".git").unwrap_or(raw);
+        let expected_tail = format!("/{name}");
+        let raw = if repo_url.is_some() && !raw.ends_with(&expected_tail) {
+            raw.strip_suffix(".git").unwrap_or(raw)
+        } else {
+            raw
+        };
         // Check before URL normalization, which would otherwise erase dot segments.
         if raw.contains(['\\', '%'])
             || raw.chars().any(char::is_control)
@@ -227,10 +235,15 @@ mod tests {
             source.archive_url("main").unwrap(),
             "https://github.com/owner/repo/archive/refs/heads/main.zip"
         );
+        assert!(RepoSource::new("owner", "repo.git", None).is_ok());
     }
 
     #[test]
     fn repository_coordinates_and_url_boundaries_are_validated() {
+        let mut credentialed = Url::parse("https://codeberg.org/owner/repo").unwrap();
+        credentialed.set_username("user").unwrap();
+        credentialed.set_password(Some("example")).unwrap();
+        assert!(RepoSource::new("owner", "repo", Some(credentialed.as_str())).is_err());
         for url in [
             "http://codeberg.org/owner/repo",
             "https://user:pass@codeberg.org/owner/repo",

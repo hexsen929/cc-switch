@@ -277,7 +277,11 @@ export const skillsApi = {
     name: string,
     repoUrl?: string,
   ): Promise<SkillDiscoveryResult> {
-    return await invoke("discover_repo_skills", { owner, name, ...(repoUrl ? { repoUrl } : {}) });
+    return await invoke("discover_repo_skills", {
+      owner,
+      name,
+      ...(repoUrl ? { repoUrl } : {}),
+    });
   },
 
   /** 检查 Skills 更新，附带没读到的仓库 */
@@ -373,8 +377,16 @@ export const skillsApi = {
   },
 
   /** 删除仓库 */
-  async removeRepo(owner: string, name: string, repoUrl?: string): Promise<boolean> {
-    return await invoke("remove_skill_repo", { owner, name, ...(repoUrl ? { repoUrl } : {}) });
+  async removeRepo(
+    owner: string,
+    name: string,
+    repoUrl?: string,
+  ): Promise<boolean> {
+    return await invoke("remove_skill_repo", {
+      owner,
+      name,
+      ...(repoUrl ? { repoUrl } : {}),
+    });
   },
 
   // ========== ZIP 安装 ==========

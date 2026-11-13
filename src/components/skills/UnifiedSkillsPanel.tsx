@@ -878,7 +878,8 @@ const UnifiedSkillsPanel: React.FC<UnifiedSkillsPanelProps> = ({
 
   const openDocs = async (skill: InstalledSkill) => {
     const url =
-      skill.readmeUrl || skill.repoUrl ||
+      skill.readmeUrl ||
+      skill.repoUrl ||
       (skill.repoOwner && skill.repoName
         ? `https://github.com/${skill.repoOwner}/${skill.repoName}`
         : undefined);
@@ -1290,7 +1291,11 @@ const UnifiedSkillsPanel: React.FC<UnifiedSkillsPanelProps> = ({
                     disabled={controlsDisabled}
                     sourceText={
                       skill.repoOwner && skill.repoName
-                        ? skillRepositoryLabel({ owner: skill.repoOwner, name: skill.repoName, repoUrl: skill.repoUrl })
+                        ? skillRepositoryLabel({
+                            owner: skill.repoOwner,
+                            name: skill.repoName,
+                            repoUrl: skill.repoUrl,
+                          })
                         : t("skillsPage.source.local")
                     }
                     onPick={(checked) =>
@@ -1685,7 +1690,11 @@ const UnifiedSkillsPanel: React.FC<UnifiedSkillsPanelProps> = ({
               );
               const repo =
                 skill?.repoOwner && skill.repoName
-                  ? skillRepositoryLabel({ owner: skill.repoOwner, name: skill.repoName, repoUrl: skill.repoUrl })
+                  ? skillRepositoryLabel({
+                      owner: skill.repoOwner,
+                      name: skill.repoName,
+                      repoUrl: skill.repoUrl,
+                    })
                   : null;
               return (
                 <li

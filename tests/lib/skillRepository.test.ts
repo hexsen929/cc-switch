@@ -4,6 +4,12 @@ import { replaceRepoDiscovery } from "@/hooks/useSkills.helpers";
 import type { DiscoverableSkill } from "@/lib/api/skills";
 
 describe("Skill repository sources", () => {
+  it("rejects credentials in an otherwise valid repository root", () => {
+    const url = new URL("https://codeberg.org/owner/repo");
+    url.username = "user";
+    url.password = "example";
+    expect(parseSkillRepositoryUrl(url.toString())).toBeNull();
+  });
   it("preserves GitHub shorthand and optional-field compatibility", () => {
     expect(parseSkillRepositoryUrl("owner/repo")).toEqual({ owner: "owner", name: "repo" });
     expect(parseSkillRepositoryUrl("https://github.com/owner/repo.git/")).toEqual({ owner: "owner", name: "repo" });

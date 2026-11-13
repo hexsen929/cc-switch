@@ -1,7 +1,10 @@
 import type { TFunction } from "i18next";
 import type { SkillRepoFailure } from "@/lib/api/skills";
 import { skillErrorReason } from "@/lib/errors/skillErrorParser";
-import { skillRepositoryKey, skillRepositoryLabel } from "@/lib/skillRepository";
+import {
+  skillRepositoryKey,
+  skillRepositoryLabel,
+} from "@/lib/skillRepository";
 
 export const repoFailureKey = skillRepositoryKey;
 

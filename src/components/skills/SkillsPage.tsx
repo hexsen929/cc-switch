@@ -85,7 +85,11 @@ export function useSkillRepoActions() {
 
   const removeRepo = async (owner: string, name: string, repoUrl?: string) => {
     try {
-      await removeRepoMutation.mutateAsync({ owner, name, ...(repoUrl ? { repoUrl } : {}) });
+      await removeRepoMutation.mutateAsync({
+        owner,
+        name,
+        ...(repoUrl ? { repoUrl } : {}),
+      });
       toast.success(t("skills.repo.removeSuccess", { owner, name }), {
         closeButton: true,
       });
@@ -148,7 +152,12 @@ function discoverDocsUrl(row: DiscoverRow): string | undefined {
   return undefined;
 }
 
-function installedKey(directory: string, owner?: string, name?: string, repoUrl?: string) {
+function installedKey(
+  directory: string,
+  owner?: string,
+  name?: string,
+  repoUrl?: string,
+) {
   const dir = directory.split(/[/\\]/).pop()?.toLowerCase() ?? "";
   const legacy = `${dir}:${(owner ?? "").toLowerCase()}:${(name ?? "").toLowerCase()}`;
   return repoUrl ? `${legacy}:${repoUrl.toLowerCase()}` : legacy;
@@ -261,7 +270,12 @@ export function SkillsPage({
     const map = new Map<string, InstalledSkill>();
     for (const skill of installedSkills) {
       map.set(
-        installedKey(skill.directory, skill.repoOwner, skill.repoName, skill.repoUrl),
+        installedKey(
+          skill.directory,
+          skill.repoOwner,
+          skill.repoName,
+          skill.repoUrl,
+        ),
         skill,
       );
     }
@@ -281,7 +295,11 @@ export function SkillsPage({
 
   const sourceLabel = (skill: InstalledSkill) =>
     skill.repoOwner && skill.repoName
-      ? skillRepositoryLabel({ owner: skill.repoOwner, name: skill.repoName, repoUrl: skill.repoUrl })
+      ? skillRepositoryLabel({
+          owner: skill.repoOwner,
+          name: skill.repoName,
+          repoUrl: skill.repoUrl,
+        })
       : t("skillsPage.source.local");
 
   // ─── 行数据 ─────────────────────────────────────────────────────────

@@ -26,7 +26,10 @@ import {
 } from "@/hooks/useSkills.helpers";
 import { readLocalCache, writeLocalCache } from "@/lib/localCache";
 import { runSequentialBulkAction } from "@/lib/utils/sequentialBulkAction";
-import { skillRepositoryKey, type SkillRepositoryRef } from "@/lib/skillRepository";
+import {
+  skillRepositoryKey,
+  type SkillRepositoryRef,
+} from "@/lib/skillRepository";
 
 /**
  * 查询所有已安装的 Skills
@@ -474,7 +477,9 @@ export function useRemoveSkillRepo() {
   const queryClient = useQueryClient();
   return useMutation({
     mutationFn: ({ owner, name, repoUrl }: SkillRepositoryRef) =>
-      repoUrl ? skillsApi.removeRepo(owner, name, repoUrl) : skillsApi.removeRepo(owner, name),
+      repoUrl
+        ? skillsApi.removeRepo(owner, name, repoUrl)
+        : skillsApi.removeRepo(owner, name),
     onMutate: nextRepoMutation,
     onSuccess: async (_result, repo, ctx) => {
       void queryClient.invalidateQueries({ queryKey: ["skills", "repos"] });

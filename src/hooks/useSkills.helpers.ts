@@ -1,5 +1,8 @@
 import type { InstalledSkill, SkillDiscoveryResult } from "@/lib/api/skills";
-import { skillRepositoryKey, type SkillRepositoryRef } from "@/lib/skillRepository";
+import {
+  skillRepositoryKey,
+  type SkillRepositoryRef,
+} from "@/lib/skillRepository";
 
 /**
  * 合并本次导入结果到已安装缓存，按 id 去重。
@@ -39,7 +42,9 @@ export function replaceRepoDiscovery(
     skillRepositoryKey({ owner, name, repoUrl }) !== skillRepositoryKey(repo);
   const seen = new Set<string>();
   const skills = [
-    ...existing.skills.filter((s) => otherRepo(s.repoOwner, s.repoName, s.repoUrl)),
+    ...existing.skills.filter((s) =>
+      otherRepo(s.repoOwner, s.repoName, s.repoUrl),
+    ),
     ...(next?.skills ?? []),
   ]
     .filter((skill) => {
