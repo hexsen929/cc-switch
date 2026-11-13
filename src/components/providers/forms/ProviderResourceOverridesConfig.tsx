@@ -33,6 +33,7 @@ const DEFAULT_OVERRIDES: Required<ProviderResourceOverrides> = {
   mcp: {
     enabled: false,
     disabledServerIds: [],
+    enabledServerIds: [],
   },
   skills: {
     enabled: false,
@@ -190,6 +191,25 @@ export function ProviderResourceOverridesConfig({
       .sort((a, b) => a.name.localeCompare(b.name));
   }, [appId, mcpData]);
 
+  // 与后端 AppType::supports_local_proxy 对齐：只有这四个应用按当前供应商投影 MCP。
+  // 累加式客户端和 AGY 的原生 MCP 开关不接受供应商级额外启用。
+  const supportsProviderScopedMcps = [
+    "claude",
+    "codex",
+    "gemini",
+    "grokbuild",
+  ].includes(appId);
+
+  const globallyDisabledMcps = useMemo<McpServer[]>(
+    () =>
+      supportsProviderScopedMcps
+        ? Object.values(mcpData ?? {})
+            .filter((server) => server.apps?.[appId] !== true)
+            .sort((a, b) => a.name.localeCompare(b.name))
+        : [],
+    [appId, mcpData, supportsProviderScopedMcps],
+  );
+
   const availableSkills = useMemo<InstalledSkill[]>(
     () =>
       (skillsData ?? [])
@@ -242,6 +262,30 @@ export function ProviderResourceOverridesConfig({
       mcp: {
         ...resolvedValue.mcp,
         disabledServerIds: nextIds,
+        enabledServerIds: disabled
+          ? (resolvedValue.mcp.enabledServerIds ?? []).filter(
+              (item) => item !== id,
+            )
+          : (resolvedValue.mcp.enabledServerIds ?? []),
+      },
+    });
+  };
+
+  const updateMcpEnabledIds = (id: string, enabled: boolean) => {
+    const currentIds = resolvedValue.mcp.enabledServerIds ?? [];
+    const nextIds = enabled
+      ? Array.from(new Set([...currentIds, id]))
+      : currentIds.filter((item) => item !== id);
+    updateValue({
+      ...resolvedValue,
+      mcp: {
+        ...resolvedValue.mcp,
+        enabledServerIds: nextIds,
+        disabledServerIds: enabled
+          ? (resolvedValue.mcp.disabledServerIds ?? []).filter(
+              (item) => item !== id,
+            )
+          : (resolvedValue.mcp.disabledServerIds ?? []),
       },
     });
   };
@@ -309,9 +353,17 @@ export function ProviderResourceOverridesConfig({
         title={t("providerOverrides.mcpTitle", {
           defaultValue: "MCP 覆盖",
         })}
-        description={t("providerOverrides.mcpDescription", {
-          defaultValue: "基于全局启用列表，额外禁用这个供应商不应加载的 MCP。",
-        })}
+        description={
+          supportsProviderScopedMcps
+            ? t("providerOverrides.mcpDescriptionWithEnableList", {
+                defaultValue:
+                  "基于全局启用列表，额外禁用这个供应商不应加载的 MCP；也可以单独打开 MCP 管理里已关闭的 MCP。",
+              })
+            : t("providerOverrides.mcpDescription", {
+                defaultValue:
+                  "基于全局启用列表，额外禁用这个供应商不应加载的 MCP。",
+              })
+        }
         enabled={resolvedValue.mcp.enabled}
         onEnabledChange={(enabled) =>
           updateValue({
@@ -339,14 +391,41 @@ export function ProviderResourceOverridesConfig({
         {isLoadingMcp ? (
           <div className="text-xs text-muted-foreground">{loadingLabel}</div>
         ) : (
-          <ResourceChecklist
-            items={availableMcps}
-            selectedIds={resolvedValue.mcp.disabledServerIds ?? []}
-            emptyLabel={t("providerOverrides.noMcp", {
-              defaultValue: "当前应用还没有启用任何全局 MCP。",
-            })}
-            onToggle={updateMcpDisabledIds}
-          />
+          <div className="space-y-4">
+            <ResourceChecklist
+              items={availableMcps}
+              selectedIds={resolvedValue.mcp.disabledServerIds ?? []}
+              emptyLabel={t("providerOverrides.noMcp", {
+                defaultValue: "当前应用还没有启用任何全局 MCP。",
+              })}
+              onToggle={updateMcpDisabledIds}
+            />
+            {supportsProviderScopedMcps ? (
+              <div className="border-t border-border/50 pt-4">
+                <div className="mb-3 flex items-center gap-2">
+                  <Badge variant="outline">
+                    {t("providerOverrides.globalDisabledCount", {
+                      defaultValue: "全局已关闭 {{count}} 项",
+                      count: globallyDisabledMcps.length,
+                    })}
+                  </Badge>
+                  <span className="text-xs text-muted-foreground">
+                    {t("providerOverrides.checkedMeansEnabled", {
+                      defaultValue: "勾选表示只为此供应商启用",
+                    })}
+                  </span>
+                </div>
+                <ResourceChecklist
+                  items={globallyDisabledMcps}
+                  selectedIds={resolvedValue.mcp.enabledServerIds ?? []}
+                  emptyLabel={t("providerOverrides.noDisabledMcp", {
+                    defaultValue: "MCP 管理里没有对当前应用关闭的 MCP。",
+                  })}
+                  onToggle={updateMcpEnabledIds}
+                />
+              </div>
+            ) : null}
+          </div>
         )}
       </OverrideCard>
 

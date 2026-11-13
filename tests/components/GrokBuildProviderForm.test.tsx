@@ -32,6 +32,7 @@ vi.mock("@/components/providers/forms/ProviderResourceOverridesConfig", () => ({
             mcp: {
               enabled: true,
               disabledServerIds: ["grok-disabled-mcp"],
+              enabledServerIds: ["grok-enabled-mcp"],
             },
           })
         }
@@ -141,6 +142,7 @@ describe("GrokBuildProviderForm", () => {
       mcp: {
         enabled: true,
         disabledServerIds: ["grok-disabled-mcp"],
+        enabledServerIds: ["grok-enabled-mcp"],
       },
     });
   });

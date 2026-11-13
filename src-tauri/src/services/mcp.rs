@@ -1,11 +1,11 @@
 use indexmap::IndexMap;
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 
-use crate::app_config::{AppType, McpServer};
+use crate::app_config::{AppType, McpApps, McpServer};
 use crate::database::Database;
 use crate::error::AppError;
 use crate::mcp;
-use crate::provider::Provider;
+use crate::provider::{Provider, ProviderMcpOverrides};
 use crate::store::AppState;
 
 /// MCP 相关业务逻辑（v3.7.0 统一结构）
@@ -136,28 +136,9 @@ impl McpService {
             save_with_pi()?;
         }
 
-        // 处理禁用：若旧版本启用但新版本取消，则需要从该应用的 live 配置移除
-        if prev_apps.claude && !server.apps.claude {
-            Self::remove_server_from_app(state, &server.id, &AppType::Claude)?;
-        }
-        if prev_apps.codex && !server.apps.codex {
-            Self::remove_server_from_app(state, &server.id, &AppType::Codex)?;
-        }
-        if prev_apps.gemini && !server.apps.gemini {
-            Self::remove_server_from_app(state, &server.id, &AppType::Gemini)?;
-        }
-        if prev_apps.grokbuild && !server.apps.grokbuild {
-            Self::remove_server_from_app(state, &server.id, &AppType::GrokBuild)?;
-        }
-        if prev_apps.opencode && !server.apps.opencode {
-            Self::remove_server_from_app(state, &server.id, &AppType::OpenCode)?;
-        }
-        if prev_apps.hermes && !server.apps.hermes {
-            Self::remove_server_from_app(state, &server.id, &AppType::Hermes)?;
-        }
-
-        // 同步到各个启用的应用
-        Self::sync_server_to_apps(state, &server)?;
+        // 全局开关只改基线：当前供应商的额外启用/禁用仍然生效。
+        // 全局关闭但由供应商单独启用的条目，编辑连接配置时也必须更新 live。
+        Self::sync_server_to_apps(state, &server, &prev_apps)?;
 
         Ok(())
     }
@@ -326,34 +307,37 @@ impl McpService {
             .db
             .update_mcp_server_app_enabled(server_id, &app, enabled)?
         {
-            // 同步到对应应用
-            if enabled {
-                Self::sync_server_to_app(state, &server, &app)?;
-            } else {
-                Self::remove_server_from_app(state, server_id, &app)?;
-            }
+            Self::sync_server_to_app(state, &server, &app)?;
         }
 
         Ok(())
     }
 
-    /// 将 MCP 服务器同步到所有启用的应用
-    fn sync_server_to_apps(state: &AppState, server: &McpServer) -> Result<(), AppError> {
-        for app in server.apps.enabled_apps() {
-            if matches!(
-                app,
-                AppType::Mcode
-                    | AppType::Kimi
-                    | AppType::Pi
-                    | AppType::Agy
-                    | AppType::Dsh
-                    | AppType::Omp
-                    | AppType::Copilot
-                    | AppType::WorkBuddy
-            ) {
-                continue; // Already written before saving the managed state.
+    /// 原生事务应用已在保存前同步；其余应用合并全局基线和当前供应商覆盖。
+    fn sync_server_to_apps(
+        state: &AppState,
+        server: &McpServer,
+        previous: &McpApps,
+    ) -> Result<(), AppError> {
+        for app in [
+            AppType::Claude,
+            AppType::Codex,
+            AppType::Gemini,
+            AppType::GrokBuild,
+            AppType::OpenCode,
+            AppType::Hermes,
+        ] {
+            let overrides = Self::overrides_for_db(state.db.as_ref(), &app);
+            if server.apps.is_enabled_for(&app)
+                || previous.is_enabled_for(&app)
+                || (overrides.enabled && overrides.enabled_server_ids.contains(&server.id))
+            {
+                if Self::is_effectively_enabled(server, &app, &overrides) {
+                    Self::sync_server_to_app_no_config(server, &app)?;
+                } else {
+                    Self::remove_server_from_app(state, &server.id, &app)?;
+                }
             }
-            Self::sync_server_to_app(state, server, &app)?;
         }
 
         Ok(())
@@ -361,32 +345,18 @@ impl McpService {
 
     /// 将 MCP 服务器同步到指定应用。
     ///
-    /// 写入前会咨询当前 provider 的 MCP 覆盖：若该 server 在覆盖列表中被禁用，
-    /// 则改为从 live 配置中移除（避免遗留旧条目）。
-    /// 这是 v3.14.6 的修复：在此之前 provider 级 MCP 覆盖完全不生效，
-    /// `services/mcp.rs` 从未读取 `resource_overrides.mcp.disabled_server_ids`，
-    /// 导致只有全局开关起作用。
+    /// 有效启用 =（全局启用或供应商额外启用）且未被供应商禁用。
+    /// 关闭覆盖时只沿用全局状态，不修改数据库里的全局开关。
     fn sync_server_to_app(
         state: &AppState,
         server: &McpServer,
         app: &AppType,
     ) -> Result<(), AppError> {
-        if Self::disabled_server_ids_for_app(state, app).contains(&server.id) {
+        let overrides = Self::overrides_for_db(state.db.as_ref(), app);
+        if !Self::is_effectively_enabled(server, app, &overrides) {
             return Self::remove_server_from_app(state, &server.id, app);
         }
         Self::sync_server_to_app_no_config(server, app)
-    }
-
-    /// 读取当前 provider 在该 app 下额外禁用的 MCP 服务器 ID 集合。
-    ///
-    /// 返回空集合的情形：
-    /// - app 处于累加模式（无单一“当前 provider”概念）
-    /// - AGY 按原生独立启用标记管理，不接入供应商级 MCP 覆盖
-    /// - 没有当前 provider
-    /// - 当前 provider 没有 meta / resource_overrides / mcp 覆盖
-    /// - mcp 覆盖未启用（`enabled = false`）
-    fn disabled_server_ids_for_app(state: &AppState, app: &AppType) -> HashSet<String> {
-        Self::disabled_server_ids_for_db(state.db.as_ref(), app)
     }
 
     fn sync_server_to_app_no_config(server: &McpServer, app: &AppType) -> Result<(), AppError> {
@@ -442,14 +412,13 @@ impl McpService {
         Ok(())
     }
 
-    /// 从所有曾启用过该服务器的应用中移除
+    /// 删除也清理全局关闭、仅由供应商额外启用的条目。
     fn remove_server_from_all_apps(
         state: &AppState,
         id: &str,
         server: &McpServer,
     ) -> Result<(), AppError> {
-        // 从所有曾启用的应用中移除
-        for app in server.apps.enabled_apps() {
+        for app in Self::live_sync_apps() {
             if matches!(
                 app,
                 AppType::Mcode
@@ -463,7 +432,12 @@ impl McpService {
             ) {
                 continue; // Already removed before deleting the managed record.
             }
-            Self::remove_server_from_app(state, id, &app)?;
+            let overrides = Self::overrides_for_db(state.db.as_ref(), &app);
+            if server.apps.is_enabled_for(&app)
+                || (overrides.enabled && overrides.enabled_server_ids.iter().any(|item| item == id))
+            {
+                Self::remove_server_from_app(state, id, &app)?;
+            }
         }
         Ok(())
     }
@@ -508,7 +482,7 @@ impl McpService {
     ///
     /// Best-effort：单个应用投影失败（如 ~/.claude.json 坏 JSON）不阻断
     /// 其余应用。同步时会按 app 维度读取当前 provider 的 MCP 覆盖列表，
-    /// 全局启用但被该 provider 覆盖禁用的 server 会从 live 配置中移除。
+    /// 合并供应商的额外启用/禁用名单，不改变全局 app 开关。
     /// 全部跑完后若有失败，聚合成一个错误上报，保留调用方的可见性。
     pub fn sync_all_enabled(state: &AppState) -> Result<(), AppError> {
         let servers = Self::get_all_servers(state)?;
@@ -607,9 +581,10 @@ impl McpService {
         // 它后面的服务器全都停在旧状态。全部跑完后聚合上报，调用方照旧能看到
         // 失败。错误相同的条目归并成一项：live 文件本身损坏时每一条都报同一句。
         let mut failures: IndexMap<String, Vec<&str>> = IndexMap::new();
+        let overrides = Self::overrides_for_db(state.db.as_ref(), app);
         for server in servers.values() {
-            let result = if server.apps.is_enabled_for(app) {
-                Self::sync_server_to_app(state, server, app)
+            let result = if Self::is_effectively_enabled(server, app, &overrides) {
+                Self::sync_server_to_app_no_config(server, app)
             } else if !matches!(
                 app,
                 AppType::Mcode
@@ -650,12 +625,12 @@ impl McpService {
         )))
     }
 
-    fn disabled_server_ids_for_db(db: &Database, app: &AppType) -> HashSet<String> {
+    fn overrides_for_db(db: &Database, app: &AppType) -> ProviderMcpOverrides {
         // AGY upsert/toggle commits native flags directly and preserves unmanaged
         // entries. Applying a provider override only during resync would undo an
         // explicit native enable, so keep the same flag semantics on every path.
-        if app.is_additive_mode() || *app == AppType::Agy {
-            return HashSet::new();
+        if !app.supports_local_proxy() {
+            return ProviderMcpOverrides::default();
         }
 
         let provider_id = match crate::mode::current::provider_for(
@@ -664,31 +639,38 @@ impl McpService {
             crate::mode::current::Purpose::Live,
         ) {
             Ok(Some(id)) => id,
-            _ => return HashSet::new(),
+            _ => return ProviderMcpOverrides::default(),
         };
 
         let provider = match db.get_provider_by_id(&provider_id, app.as_str()) {
             Ok(Some(p)) => p,
-            _ => return HashSet::new(),
+            _ => return ProviderMcpOverrides::default(),
         };
 
-        Self::disabled_server_ids_for_provider(Some(&provider))
+        Self::overrides_for_provider(Some(&provider))
     }
 
-    fn disabled_server_ids_for_provider(provider: Option<&Provider>) -> HashSet<String> {
+    fn overrides_for_provider(provider: Option<&Provider>) -> ProviderMcpOverrides {
         provider
             .and_then(|provider| provider.meta.as_ref())
             .and_then(|meta| meta.resource_overrides.as_ref())
             .and_then(|overrides| overrides.mcp.as_ref())
             .filter(|override_config| override_config.enabled)
-            .map(|override_config| {
-                override_config
-                    .disabled_server_ids
-                    .iter()
-                    .cloned()
-                    .collect()
-            })
+            .cloned()
             .unwrap_or_default()
+    }
+
+    fn is_effectively_enabled(
+        server: &McpServer,
+        app: &AppType,
+        overrides: &ProviderMcpOverrides,
+    ) -> bool {
+        let globally_enabled = server.apps.is_enabled_for(app);
+        if !overrides.enabled {
+            return globally_enabled;
+        }
+        (globally_enabled || overrides.enabled_server_ids.contains(&server.id))
+            && !overrides.disabled_server_ids.contains(&server.id)
     }
 
     // ========================================================================
@@ -727,24 +709,10 @@ impl McpService {
 
     /// [已废弃] 同步启用的 MCP 到指定应用（兼容旧 API）。
     ///
-    /// v3.14.6 起会读取当前 provider 的 MCP 覆盖：全局启用但被 provider 覆盖禁用的
-    /// server 会从 live 配置中显式移除，与 `sync_all_enabled` 保持一致。
+    /// 与所有其他投影入口使用同一份供应商额外启用/禁用规则。
     #[deprecated(since = "3.7.0", note = "Use sync_all_enabled instead")]
     pub fn sync_enabled(state: &AppState, app: AppType) -> Result<(), AppError> {
-        let servers = Self::get_all_servers(state)?;
-        let disabled = Self::disabled_server_ids_for_app(state, &app);
-
-        for server in servers.values() {
-            if server.apps.is_enabled_for(&app) {
-                if disabled.contains(&server.id) {
-                    Self::remove_server_from_app(state, &server.id, &app)?;
-                } else {
-                    Self::sync_server_to_app_no_config(server, &app)?;
-                }
-            }
-        }
-
-        Ok(())
+        Self::sync_enabled_for_app(state, &app)
     }
 
     /// 从 Claude 导入 MCP（v3.7.0 已更新为统一结构）
@@ -1051,6 +1019,247 @@ mod tests {
         }
     }
 
+    fn select_provider(state: &AppState, app: &AppType, id: &str, overrides: Value) {
+        let provider: Provider = serde_json::from_value(json!({
+            "id": id, "name": id, "settingsConfig": {},
+            "meta": {"resourceOverrides": {"mcp": overrides}}
+        }))
+        .unwrap();
+        state.db.save_provider(app.as_str(), &provider).unwrap();
+        state.db.set_current_provider(app.as_str(), id).unwrap();
+        crate::settings::set_current_provider(app, Some(id)).unwrap();
+    }
+
+    fn fixture_server(id: &str, command: &str) -> McpServer {
+        serde_json::from_value(json!({
+            "id": id, "name": id, "server": {"command": command}, "apps": {}
+        }))
+        .unwrap()
+    }
+
+    fn live_mcp_path(app: &AppType) -> std::path::PathBuf {
+        match app {
+            AppType::Claude => crate::config::get_claude_mcp_path(),
+            AppType::Codex => crate::codex_config::get_codex_config_path(),
+            AppType::Gemini => crate::gemini_config::get_gemini_settings_path(),
+            AppType::GrokBuild => crate::grok_config::get_grok_config_path(),
+            _ => panic!("unexpected test app"),
+        }
+    }
+
+    fn live_mcps(app: &AppType) -> Value {
+        let path = live_mcp_path(app);
+        if !path.exists() {
+            return json!({});
+        }
+        let text = std::fs::read_to_string(path).unwrap();
+        let (root, key): (Value, &str) = match app {
+            AppType::Codex | AppType::GrokBuild => (
+                serde_json::to_value(toml::from_str::<toml::Value>(&text).unwrap()).unwrap(),
+                "mcp_servers",
+            ),
+            _ => (serde_json::from_str(&text).unwrap(), "mcpServers"),
+        };
+        root.get(key).cloned().unwrap_or_else(|| json!({}))
+    }
+
+    fn prepare_live_mcps(app: &AppType) {
+        let path = live_mcp_path(app);
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        if !path.exists() {
+            std::fs::write(
+                path,
+                if matches!(app, AppType::Codex | AppType::GrokBuild) {
+                    ""
+                } else {
+                    "{}"
+                },
+            )
+            .unwrap();
+        }
+    }
+
+    #[test]
+    fn effective_mcp_enablement_uses_global_or_provider_enable_with_disable_priority() {
+        for global in [false, true] {
+            for enabled in [false, true] {
+                for extra in [false, true] {
+                    for blocked in [false, true] {
+                        let mut server = fixture_server("server", "fixture-command");
+                        server.apps.claude = global;
+                        let overrides: ProviderMcpOverrides = serde_json::from_value(json!({
+                            "enabled": enabled,
+                            "enabledServerIds": if extra { vec!["server"] } else { vec![] },
+                            "disabledServerIds": if blocked { vec!["server"] } else { vec![] }
+                        }))
+                        .unwrap();
+                        assert_eq!(
+                            McpService::is_effectively_enabled(
+                                &server,
+                                &AppType::Claude,
+                                &overrides
+                            ),
+                            if enabled {
+                                (global || extra) && !blocked
+                            } else {
+                                global
+                            }
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn provider_only_mcp_upsert_toggle_resync_and_delete_preserve_global_flags() {
+        let _home = TestHome::new();
+        let state = AppState::new(Arc::new(Database::memory().unwrap()));
+        for app in [
+            AppType::Claude,
+            AppType::Codex,
+            AppType::Gemini,
+            AppType::GrokBuild,
+        ] {
+            prepare_live_mcps(&app);
+            select_provider(
+                &state,
+                &app,
+                "selected",
+                json!({
+                    "enabled": true, "enabledServerIds": ["provider-only", "missing-id"]
+                }),
+            );
+            McpService::sync_server_to_app_no_config(
+                &fixture_server("unmanaged", "user-command"),
+                &app,
+            )
+            .unwrap();
+        }
+
+        // All global app flags are false, but each active provider explicitly opts in.
+        let mut server = fixture_server("provider-only", "fixture-command");
+        McpService::upsert_server(&state, server.clone()).unwrap();
+        for app in [
+            AppType::Claude,
+            AppType::Codex,
+            AppType::Gemini,
+            AppType::GrokBuild,
+        ] {
+            assert_eq!(
+                live_mcps(&app)["provider-only"]["command"],
+                "fixture-command"
+            );
+            assert!(!state.db.get_all_mcp_servers().unwrap()["provider-only"]
+                .apps
+                .is_enabled_for(&app));
+        }
+
+        server.server = json!({"command": "edited-command"});
+        McpService::upsert_server(&state, server).unwrap();
+        for app in [
+            AppType::Claude,
+            AppType::Codex,
+            AppType::Gemini,
+            AppType::GrokBuild,
+        ] {
+            assert_eq!(
+                live_mcps(&app)["provider-only"]["command"],
+                "edited-command"
+            );
+            McpService::toggle_app(&state, "provider-only", app.clone(), true).unwrap();
+            McpService::toggle_app(&state, "provider-only", app.clone(), false).unwrap();
+            assert_eq!(
+                live_mcps(&app)["provider-only"]["command"],
+                "edited-command"
+            );
+            assert!(!state.db.get_all_mcp_servers().unwrap()["provider-only"]
+                .apps
+                .is_enabled_for(&app));
+
+            let outcome = McpService::resync_app(&state, &app);
+            assert!(outcome.ok, "{:?}", outcome.error);
+            let servers = live_mcps(&app);
+            assert_eq!(servers["provider-only"]["command"], "edited-command");
+            assert!(servers.get("missing-id").is_none());
+        }
+
+        assert!(McpService::delete_server(&state, "provider-only").unwrap());
+        for app in [
+            AppType::Claude,
+            AppType::Codex,
+            AppType::Gemini,
+            AppType::GrokBuild,
+        ] {
+            let servers = live_mcps(&app);
+            assert!(servers.get("provider-only").is_none());
+            assert_eq!(servers["unmanaged"]["command"], "user-command");
+        }
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn provider_only_mcp_is_removed_when_override_is_disabled_or_provider_changes() {
+        let _home = TestHome::new();
+        let state = AppState::new(Arc::new(Database::memory().unwrap()));
+        let app = AppType::Claude;
+        prepare_live_mcps(&app);
+        state
+            .db
+            .save_mcp_server(&fixture_server("provider-only", "fixture-command"))
+            .unwrap();
+        for overrides in [
+            json!({"enabled": true, "enabledServerIds": ["provider-only"]}),
+            json!({"enabled": false, "enabledServerIds": ["provider-only"]}),
+            json!({"enabled": true, "enabledServerIds": ["provider-only"], "disabledServerIds": ["provider-only"]}),
+            json!({"enabled": true, "enabledServerIds": ["provider-only"]}),
+            json!({"enabled": true}),
+        ] {
+            let expected = overrides["enabled"] == true
+                && overrides.get("enabledServerIds").is_some()
+                && overrides.get("disabledServerIds").is_none();
+            select_provider(
+                &state,
+                &app,
+                if expected { "wanted" } else { "other" },
+                overrides,
+            );
+            McpService::sync_enabled_for_app(&state, &app).unwrap();
+            assert_eq!(live_mcps(&app).get("provider-only").is_some(), expected);
+        }
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn additive_and_native_mcp_apps_ignore_provider_enable_lists() {
+        let _home = TestHome::new();
+        let state = AppState::new(Arc::new(Database::memory().unwrap()));
+        for app in AppType::all().filter(|app| !app.supports_local_proxy()) {
+            select_provider(
+                &state,
+                &app,
+                "ignored",
+                json!({
+                    "enabled": true,
+                    "enabledServerIds": ["off"],
+                    "disabledServerIds": ["on"]
+                }),
+            );
+            let overrides = McpService::overrides_for_db(state.db.as_ref(), &app);
+            assert!(!overrides.enabled, "{}", app.as_str());
+            let mut server = fixture_server("off", "fixture-command");
+            assert!(!McpService::is_effectively_enabled(
+                &server, &app, &overrides
+            ));
+            server.apps.set_enabled_for(&app, true);
+            assert_eq!(
+                McpService::is_effectively_enabled(&server, &app, &overrides),
+                server.apps.is_enabled_for(&app)
+            );
+        }
+    }
+
     #[test]
     #[serial_test::serial]
     fn agy_explicit_native_enable_survives_resync_with_provider_overrides() {
@@ -1059,7 +1268,8 @@ mod tests {
         let provider: Provider = serde_json::from_value(json!({
             "id": "agy-provider", "name": "AGY", "settingsConfig": {},
             "meta": {"resourceOverrides": {"mcp": {
-                "enabled": true, "disabledServerIds": ["native-managed"]
+                "enabled": true, "disabledServerIds": ["native-managed"],
+                "enabledServerIds": ["native-managed"]
             }}}
         }))
         .unwrap();

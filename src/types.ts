@@ -114,7 +114,10 @@ export interface UsageResult {
 
 export interface ProviderMcpOverrides {
   enabled: boolean;
+  /** 全局启用、但对这个供应商禁用的 MCP ID */
   disabledServerIds?: string[];
+  /** MCP 管理里已关闭、但对这个供应商单独启用的 MCP ID */
+  enabledServerIds?: string[];
 }
 
 export interface ProviderSkillOverrides {

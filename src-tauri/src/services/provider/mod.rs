@@ -2795,6 +2795,16 @@ enabled = true
         with_test_home(|state, _| {
             state
                 .db
+                .save_mcp_server(
+                    &serde_json::from_value(json!({
+                        "id": "provider-only", "name": "Provider Only",
+                        "server": {"command": "provider-command"}, "apps": {}
+                    }))
+                    .expect("provider-only MCP"),
+                )
+                .expect("save globally off mcp");
+            state
+                .db
                 .save_mcp_server(&McpServer {
                     id: "global-keep".to_string(),
                     name: "Global Keep".to_string(),
@@ -2873,6 +2883,7 @@ wire_api = "responses"
                     mcp: Some(ProviderMcpOverrides {
                         enabled: true,
                         disabled_server_ids: vec!["global-disabled".to_string()],
+                        enabled_server_ids: vec!["provider-only".to_string()],
                     }),
                     skills: None,
                     prompt: None,
@@ -2940,6 +2951,60 @@ command = "stale-command"
             assert!(
                 mcp_servers.get("unmanaged_cli_server").is_some(),
                 "MCP not managed by CC Switch must be preserved"
+            );
+            assert_eq!(
+                mcp_servers["provider-only"]["command"].as_str(),
+                Some("provider-command"),
+                "globally off MCP should be enabled only for the selected provider"
+            );
+            assert!(
+                !state.db.get_all_mcp_servers().unwrap()["provider-only"]
+                    .apps
+                    .codex
+            );
+
+            // Saving the current provider must refresh the effective selection immediately.
+            provider_b
+                .meta
+                .as_mut()
+                .unwrap()
+                .resource_overrides
+                .as_mut()
+                .unwrap()
+                .mcp
+                .as_mut()
+                .unwrap()
+                .enabled = false;
+            ProviderService::update(state, AppType::Codex, None, provider_b.clone())
+                .expect("disable provider overrides");
+            let parsed: toml::Value =
+                toml::from_str(&crate::codex_config::read_codex_config_text().unwrap()).unwrap();
+            assert!(parsed["mcp_servers"].get("provider-only").is_none());
+            assert!(parsed["mcp_servers"].get("global-disabled").is_some());
+
+            provider_b
+                .meta
+                .as_mut()
+                .unwrap()
+                .resource_overrides
+                .as_mut()
+                .unwrap()
+                .mcp
+                .as_mut()
+                .unwrap()
+                .enabled = true;
+            ProviderService::update(state, AppType::Codex, None, provider_b)
+                .expect("restore provider overrides");
+            ProviderService::switch(state, AppType::Codex, "a").expect("switch away");
+            let parsed: toml::Value =
+                toml::from_str(&crate::codex_config::read_codex_config_text().unwrap()).unwrap();
+            assert!(parsed["mcp_servers"].get("provider-only").is_none());
+            assert!(parsed["mcp_servers"].get("global-disabled").is_some());
+            assert!(parsed["mcp_servers"].get("unmanaged_cli_server").is_some());
+            assert!(
+                !state.db.get_all_mcp_servers().unwrap()["provider-only"]
+                    .apps
+                    .codex
             );
         });
     }

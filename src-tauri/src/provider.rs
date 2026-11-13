@@ -415,6 +415,13 @@ pub struct ProviderMcpOverrides {
         skip_serializing_if = "Vec::is_empty"
     )]
     pub disabled_server_ids: Vec<String>,
+    /// 全局关闭、但只为当前供应商启用的 MCP ID；与禁用名单冲突时禁用优先。
+    #[serde(
+        rename = "enabledServerIds",
+        default,
+        skip_serializing_if = "Vec::is_empty"
+    )]
+    pub enabled_server_ids: Vec<String>,
 }
 
 /// Provider 级 Skill 覆盖配置
@@ -1271,10 +1278,29 @@ mod tests {
     use super::{
         ClaudeAppendInstructionsConfig, ClaudeModelConfig, ClaudeSystemInstructionsConfig,
         CodexCopilotApiFormat, CodexModelConfig, GeminiModelConfig, LocalProxyRequestOverrides,
-        OpenCodeProviderConfig, Provider, ProviderManager, ProviderMeta, UniversalProvider,
+        OpenCodeProviderConfig, Provider, ProviderManager, ProviderMcpOverrides, ProviderMeta,
+        UniversalProvider,
     };
     use serde_json::json;
     use std::collections::HashMap;
+
+    #[test]
+    fn provider_mcp_overrides_preserve_legacy_shape_and_roundtrip_enable_list() {
+        let legacy = json!({"enabled": true, "disabledServerIds": ["blocked"]});
+        let parsed: ProviderMcpOverrides = serde_json::from_value(legacy.clone()).unwrap();
+        assert!(parsed.enabled_server_ids.is_empty());
+        assert_eq!(serde_json::to_value(parsed).unwrap(), legacy);
+
+        let value = json!({
+            "resourceOverrides": {"mcp": {
+                "enabled": true,
+                "disabledServerIds": ["blocked"],
+                "enabledServerIds": ["provider-only"]
+            }}
+        });
+        let meta: ProviderMeta = serde_json::from_value(value.clone()).unwrap();
+        assert_eq!(serde_json::to_value(meta).unwrap(), value);
+    }
 
     #[test]
     fn proxy_injected_oauth_excludes_codex_oauth() {

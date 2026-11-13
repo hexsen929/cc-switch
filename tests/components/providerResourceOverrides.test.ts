@@ -3,6 +3,42 @@ import { describe, expect, it } from "vitest";
 import { normalizeProviderResourceOverrides } from "@/components/providers/forms/providerResourceOverrides";
 
 describe("normalizeProviderResourceOverrides", () => {
+  it("保留供应商单独启用的 MCP 名单，并过滤空 ID 和冲突项", () => {
+    const result = normalizeProviderResourceOverrides({
+      mcp: {
+        enabled: true,
+        disabledServerIds: ["", "conflict", "blocked"],
+        enabledServerIds: ["", "conflict", "provider-only"],
+      },
+    });
+
+    expect(result?.mcp).toEqual({
+      enabled: true,
+      disabledServerIds: ["conflict", "blocked"],
+      enabledServerIds: ["provider-only"],
+    });
+  });
+
+  it("MCP 覆盖关闭时不保存额外启用名单", () => {
+    expect(
+      normalizeProviderResourceOverrides({
+        mcp: { enabled: false, enabledServerIds: ["provider-only"] },
+      }),
+    ).toBeUndefined();
+  });
+
+  it("兼容没有启用名单的旧 MCP 覆盖", () => {
+    expect(
+      normalizeProviderResourceOverrides({
+        mcp: { enabled: true, disabledServerIds: ["blocked"] },
+      })?.mcp,
+    ).toEqual({
+      enabled: true,
+      disabledServerIds: ["blocked"],
+      enabledServerIds: [],
+    });
+  });
+
   it("保留供应商单独启用的 Skill 名单", () => {
     const result = normalizeProviderResourceOverrides({
       skills: {

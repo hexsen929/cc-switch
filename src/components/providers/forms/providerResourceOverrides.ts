@@ -6,9 +6,13 @@ export function normalizeProviderResourceOverrides(
   const next: ProviderResourceOverrides = {};
 
   if (value.mcp?.enabled) {
+    const disabledServerIds = (value.mcp.disabledServerIds ?? []).filter(Boolean);
     next.mcp = {
       enabled: true,
-      disabledServerIds: (value.mcp.disabledServerIds ?? []).filter(Boolean),
+      disabledServerIds,
+      enabledServerIds: (value.mcp.enabledServerIds ?? []).filter(
+        (id) => Boolean(id) && !disabledServerIds.includes(id),
+      ),
     };
   }
 
