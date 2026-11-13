@@ -62,7 +62,10 @@ export const canResumeSession = (session: SessionMeta) =>
   (Boolean(session.sourcePath) || session.providerId === "agy");
 
 /** 这些应用的会话只能在原软件里删（后端也会拒绝）：只删文件会让它们自己的索引失效。 */
-const NATIVE_DELETE_HINTS: Record<string, { key: string; defaultValue: string }> = {
+const NATIVE_DELETE_HINTS: Record<
+  string,
+  { key: string; defaultValue: string }
+> = {
   mcode: {
     key: "sessionManager.mcodeDeleteHint",
     defaultValue: "请在 MiniMax Code 中删除",
