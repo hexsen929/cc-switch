@@ -4,6 +4,11 @@ import { replaceRepoDiscovery } from "@/hooks/useSkills.helpers";
 import type { DiscoverableSkill } from "@/lib/api/skills";
 
 describe("Skill repository sources", () => {
+  it("keeps case-sensitive self-hosted deployment prefixes distinct", () => {
+    const a = parseSkillRepositoryUrl("https://git.example/Forge/owner/repo")!;
+    const b = parseSkillRepositoryUrl("https://git.example/forge/owner/repo")!;
+    expect(skillRepositoryKey(a)).not.toBe(skillRepositoryKey(b));
+  });
   it("rejects credentials in an otherwise valid repository root", () => {
     const url = new URL("https://codeberg.org/owner/repo");
     url.username = "user";

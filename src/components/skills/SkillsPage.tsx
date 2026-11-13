@@ -160,7 +160,7 @@ function installedKey(
 ) {
   const dir = directory.split(/[/\\]/).pop()?.toLowerCase() ?? "";
   const legacy = `${dir}:${(owner ?? "").toLowerCase()}:${(name ?? "").toLowerCase()}`;
-  return repoUrl ? `${legacy}:${repoUrl.toLowerCase()}` : legacy;
+  return repoUrl ? `${legacy}:${repoUrl}` : legacy;
 }
 
 function formatInstalls(count: number, locale: string): string {

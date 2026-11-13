@@ -9,7 +9,7 @@ export const skillRepositoryUrl = (repo: SkillRepositoryRef) =>
 
 /** Missing source means GitHub, preserving existing keys and persisted caches. */
 export const skillRepositoryKey = (repo: SkillRepositoryRef) =>
-  (repo.repoUrl ?? `${repo.owner}/${repo.name}`).toLowerCase();
+  repo.repoUrl ?? `${repo.owner}/${repo.name}`.toLowerCase();
 
 export const skillRepositoryLabel = (repo: SkillRepositoryRef) =>
   repo.repoUrl?.replace(/^https:\/\//, "") ?? `${repo.owner}/${repo.name}`;

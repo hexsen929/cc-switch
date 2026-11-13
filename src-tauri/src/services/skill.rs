@@ -4298,7 +4298,11 @@ impl SkillService {
         skills.retain(|skill| {
             // 使用完整 key（owner/repo:directory）作为唯一标识
             // 这样不同仓库的同名 skill 会分开显示
-            let unique_key = skill.key.to_lowercase();
+            let unique_key = if skill.repo_url.is_some() {
+                skill.key.clone()
+            } else {
+                skill.key.to_lowercase()
+            };
             if let std::collections::hash_map::Entry::Vacant(e) = seen.entry(unique_key) {
                 e.insert(true);
                 true
