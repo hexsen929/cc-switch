@@ -5444,6 +5444,7 @@ fn save_repos_from_lock(
         .get_skill_repos()
         .unwrap_or_default()
         .into_iter()
+        .filter(|repo| repo.repo_url.is_none())
         .map(|r| (r.owner, r.name))
         .collect();
     let mut added = HashSet::new();
@@ -9310,6 +9311,22 @@ mod tests {
         .unwrap();
         let discovered = service.fetch_repo_skills(&repo).await.unwrap();
         assert_eq!(discovered.len(), 1);
+        db.save_skill_repo(&repo).unwrap();
+        let lock = HashMap::from([(
+            "js-reverse".to_string(),
+            LockRepoInfo {
+                owner: "owner".into(),
+                repo: "repo".into(),
+                skill_path: Some("skills/js-reverse/SKILL.md".into()),
+                branch: Some("main".into()),
+            },
+        )]);
+        save_repos_from_lock(&db, &lock, std::iter::once("js-reverse"));
+        assert_eq!(
+            db.get_skill_repos().unwrap().len(),
+            2,
+            "Forgejo must not shadow a GitHub lock source"
+        );
         let skill = &discovered[0];
         assert_eq!(skill.repo_url, repo.repo_url);
         assert!(skill.key.starts_with("forgejo:https://codeberg.org/"));

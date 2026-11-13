@@ -66,7 +66,7 @@ function resolvableBranches(branch: string | undefined): string[] {
 }
 
 export function countRepoSkills(skills: DiscoverableSkill[], repo: SkillRepo) {
-  const branches = resolvableBranches(repo.branch);
+  const branches = repo.repoUrl ? [repo.branch] : resolvableBranches(repo.branch);
   return skills.filter(
     (skill) =>
       skill.repoOwner === repo.owner &&
