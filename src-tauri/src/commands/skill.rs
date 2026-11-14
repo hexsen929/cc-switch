@@ -108,7 +108,6 @@ pub async fn restore_skill_backup(
     .await
 }
 
-/// 切换 Skill 的应用启用状态
 #[tauri::command]
 pub async fn toggle_skill_app(
     id: String,
@@ -124,7 +123,6 @@ pub async fn toggle_skill_app(
     .await
 }
 
-/// 扫描未管理的 Skills
 #[tauri::command]
 pub async fn scan_unmanaged_skills(
     app_state: State<'_, AppState>,
@@ -211,7 +209,6 @@ pub async fn resync_skills_to_apps(
         .map_err(|e| format!("重新同步 Skill 失败: {e}"))
 }
 
-/// 更新单个 Skill
 #[tauri::command]
 pub async fn update_skill(
     id: String,

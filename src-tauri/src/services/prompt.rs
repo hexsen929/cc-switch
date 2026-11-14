@@ -198,11 +198,7 @@ impl PromptService {
         }
 
         let _native_guard = if app == AppType::Mcode {
-            Some(
-                MCODE_PROMPT_LOCK
-                    .lock()
-                    .map_err(|error| AppError::Message(error.to_string()))?,
-            )
+            Some(crate::sync_utils::lock_file_operation(&MCODE_PROMPT_LOCK))
         } else {
             None
         };
@@ -390,11 +386,7 @@ impl PromptService {
             return delete_pi_prompt(state, id);
         }
         let _guard = if app == AppType::Mcode {
-            Some(
-                MCODE_PROMPT_LOCK
-                    .lock()
-                    .map_err(|error| AppError::Message(error.to_string()))?,
-            )
+            Some(crate::sync_utils::lock_file_operation(&MCODE_PROMPT_LOCK))
         } else {
             None
         };
@@ -715,9 +707,7 @@ fn upsert_mcode_prompt(
     prompt: Prompt,
     target_path: &Path,
 ) -> Result<(), AppError> {
-    let _guard = MCODE_PROMPT_LOCK
-        .lock()
-        .map_err(|error| AppError::Message(error.to_string()))?;
+    let _guard = crate::sync_utils::lock_file_operation(&MCODE_PROMPT_LOCK);
     let _projection_guard = lock_projection()?;
     validate_prompt_content(&AppType::Mcode, &prompt.content)?;
     let prompts = saved_prompts(state, &AppType::Mcode)?;
@@ -745,9 +735,7 @@ fn upsert_mcode_prompt(
 }
 
 fn enable_mcode_prompt(state: &AppState, id: &str, target_path: &Path) -> Result<(), AppError> {
-    let _guard = MCODE_PROMPT_LOCK
-        .lock()
-        .map_err(|error| AppError::Message(error.to_string()))?;
+    let _guard = crate::sync_utils::lock_file_operation(&MCODE_PROMPT_LOCK);
     let _projection_guard = lock_projection()?;
     let mut prompts = saved_prompts(state, &AppType::Mcode)?;
     let target = prompts
@@ -905,12 +893,13 @@ fn persist_pi_prompt_with_native_update(
     update_native: impl FnOnce() -> Result<(), AppError>,
 ) -> Result<(), AppError> {
     state.db.save_prompt(AppType::Pi.as_str(), stored)?;
-    if let Err(native_error) = update_native() {
-        let rollback = match previous {
-            Some(previous) => state.db.save_prompt(AppType::Pi.as_str(), previous),
-            None => state.db.delete_prompt(AppType::Pi.as_str(), id),
-        };
-        if let Err(rollback_error) = rollback {
+    let rollback = || match previous {
+        Some(previous) => state.db.save_prompt(AppType::Pi.as_str(), previous),
+        None => state.db.delete_prompt(AppType::Pi.as_str(), id),
+    };
+    let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(update_native));
+    if let Err(native_error) = crate::sync_utils::resume_after_rollback(outcome, rollback) {
+        if let Err(rollback_error) = rollback() {
             return Err(AppError::Message(format!(
                 "Pi prompt update failed ({native_error}); database rollback also failed: {rollback_error}"
             )));
@@ -1494,6 +1483,34 @@ mod pi_prompt_tests {
             .get_prompts(AppType::Pi.as_str())
             .expect("reload prompts");
         assert_eq!(saved["test-prompt"].content, "managed content");
+    }
+
+    #[test]
+    #[serial]
+    fn panicking_pi_native_update_restores_the_database_prompt() {
+        let _agent = TestAgentDir::new();
+        let state = AppState::new(Arc::new(Database::memory().unwrap()));
+        let previous = prompt(false);
+        state
+            .db
+            .save_prompt(AppType::Pi.as_str(), &previous)
+            .unwrap();
+        let mut edited = previous.clone();
+        edited.content = "interrupted edit".to_string();
+        assert!(std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _ = persist_pi_prompt_with_native_update(
+                &state,
+                &edited.id,
+                &edited,
+                Some(&previous),
+                || panic!("native write interrupted"),
+            );
+        }))
+        .is_err());
+        assert_eq!(
+            state.db.get_prompts(AppType::Pi.as_str()).unwrap()[&previous.id].content,
+            previous.content
+        );
     }
 
     #[test]

@@ -56,6 +56,7 @@ mod session_manager;
 mod settings;
 mod shared_instructions;
 mod store;
+mod sync_utils;
 
 mod tray;
 #[cfg(target_os = "windows")]

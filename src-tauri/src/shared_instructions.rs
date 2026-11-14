@@ -20,9 +20,7 @@ const PI_MAX_BYTES: usize = 1024 * 1024;
 static PROJECTION_LOCK: Mutex<()> = Mutex::new(());
 
 pub(crate) fn lock_projection() -> Result<MutexGuard<'static, ()>, AppError> {
-    PROJECTION_LOCK
-        .lock()
-        .map_err(|error| AppError::Message(format!("共享指令投影锁不可用: {error}")))
+    Ok(crate::sync_utils::lock_file_operation(&PROJECTION_LOCK))
 }
 
 fn expand_path(raw: &str) -> PathBuf {
@@ -420,6 +418,29 @@ pub(crate) fn sync_from_settings() -> Result<(), AppError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn shared_projection_lock_recovers_after_a_panicking_writer() {
+        if !crate::sync_utils::in_isolated_process(
+            "shared_instructions::tests::shared_projection_lock_recovers_after_a_panicking_writer",
+        ) {
+            return;
+        }
+        assert!(std::panic::catch_unwind(|| {
+            let _guard = lock_projection().unwrap();
+            panic!("shared projection interrupted");
+        })
+        .is_err());
+        assert!(PROJECTION_LOCK.is_poisoned());
+        let guard = lock_projection().unwrap();
+        assert!(!PROJECTION_LOCK.is_poisoned());
+        assert!(matches!(
+            PROJECTION_LOCK.try_lock(),
+            Err(std::sync::TryLockError::WouldBlock)
+        ));
+        drop(guard);
+        assert!(lock_projection().is_ok());
+    }
 
     #[test]
     fn new_overlay_round_trips_every_byte_of_plain_content() {

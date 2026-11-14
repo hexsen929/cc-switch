@@ -467,7 +467,7 @@ fn edit_files_and_commit<T>(
         check_revision(path, bytes.as_deref())?;
     }
     let mut written = Vec::new();
-    let result = (|| {
+    let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         for (index, ((path, current), next)) in paths.iter().zip(&current).zip(&next).enumerate() {
             if current == next {
                 continue;
@@ -482,33 +482,39 @@ fn edit_files_and_commit<T>(
             check_revision(path, bytes.as_deref())?;
         }
         commit()
-    })();
+    }));
+    let mut rollback = || {
+        // Compare *all* revisions before restoring any file, including after a
+        // panic. Do not overwrite an external edit or partially restore peers.
+        for (path, bytes) in paths.iter().zip(&expected) {
+            check_revision(path, bytes.as_deref())?;
+        }
+        let failures: Vec<_> = written
+            .iter()
+            .rev()
+            .filter_map(|&index| {
+                restore(&paths[index], previous[index].take())
+                    .err()
+                    .map(|rollback| rollback.to_string())
+            })
+            .collect();
+        if failures.is_empty() {
+            Ok(())
+        } else {
+            Err(AppError::Message(format!(
+                "restoring DeepSeek Harness configuration failed: {}",
+                failures.join("; ")
+            )))
+        }
+    };
+    let result = crate::sync_utils::resume_after_rollback(outcome, &mut rollback);
     match result {
         Ok(result) => Ok(result),
-        Err(error) => {
-            // Compare *all* revisions before restoring any file. On a conflict
-            // preserve the complete current state for a deliberate refresh/retry.
-            for (path, bytes) in paths.iter().zip(&expected) {
-                check_revision(path, bytes.as_deref())?;
-            }
-            let failures: Vec<_> = written
-                .into_iter()
-                .rev()
-                .filter_map(|index| {
-                    restore(&paths[index], previous[index].take())
-                        .err()
-                        .map(|rollback| rollback.to_string())
-                })
-                .collect();
-            if failures.is_empty() {
-                Err(error)
-            } else {
-                Err(AppError::Message(format!(
-                    "{error}; restoring DeepSeek Harness configuration failed: {}",
-                    failures.join("; ")
-                )))
-            }
-        }
+        Err(error) => match rollback() {
+            Ok(()) => Err(error),
+            Err(conflict @ AppError::Conflict(_)) => Err(conflict),
+            Err(rollback_error) => Err(AppError::Message(format!("{error}; {rollback_error}"))),
+        },
     }
 }
 
@@ -2298,6 +2304,72 @@ mod tests {
         assert!(edit_path_and_commit(&path, |_| Ok(String::new()), || Ok(())).is_err());
         drop(guard);
         assert!(!path.with_extension("yml.lock").exists());
+    }
+
+    #[test]
+    fn panicking_commit_restores_all_profiles_before_releasing_native_locks() {
+        let temp = tempfile::tempdir().unwrap();
+        let existing = temp.path().join("existing.yml");
+        let fresh = temp.path().join("new.yml");
+        fs::write(&existing, "# original\n[]\n").unwrap();
+        assert!(std::panic::catch_unwind(|| {
+            let _: Result<(), AppError> = edit_files_and_commit(
+                &[existing.clone(), fresh.clone()],
+                |_| Ok(vec!["- id: changed\n".into(), "- id: new\n".into()]),
+                || {
+                    assert!(existing.with_extension("yml.lock").exists());
+                    assert!(fresh.with_extension("yml.lock").exists());
+                    panic!("commit interrupted");
+                },
+            );
+        })
+        .is_err());
+        assert_eq!(fs::read_to_string(&existing).unwrap(), "# original\n[]\n");
+        assert!(!fresh.exists());
+        assert!(!existing.with_extension("yml.lock").exists());
+        assert!(!fresh.with_extension("yml.lock").exists());
+        edit_path_and_commit(&existing, |_| Ok("[]\n".into()), || Ok(())).unwrap();
+    }
+
+    #[test]
+    fn panicking_multi_file_commit_keeps_external_edits_and_every_published_peer() {
+        for changed in 0..3 {
+            let temp = tempfile::tempdir().unwrap();
+            let paths: Vec<_> = ["credentials", "web", "desktop"]
+                .into_iter()
+                .map(|name| temp.path().join(name))
+                .collect();
+            for path in &paths {
+                fs::write(path, "before").unwrap();
+            }
+            let caught = std::panic::catch_unwind(|| {
+                let _: Result<(), AppError> = edit_files_and_commit(
+                    &paths,
+                    |_| Ok(vec!["after".into(), "after".into(), "before".into()]),
+                    || {
+                        fs::write(&paths[changed], "external").unwrap();
+                        panic!("commit interrupted after an external edit");
+                    },
+                );
+            });
+            assert_eq!(
+                caught.unwrap_err().downcast_ref::<&str>(),
+                Some(&"commit interrupted after an external edit")
+            );
+            for (index, path) in paths.iter().enumerate() {
+                assert_eq!(
+                    fs::read_to_string(path).unwrap(),
+                    if index == changed {
+                        "external"
+                    } else if index < 2 {
+                        "after"
+                    } else {
+                        "before"
+                    }
+                );
+                assert!(!path.with_extension("lock").exists());
+            }
+        }
     }
 
     /// Points `DSH_HOME` at a temporary directory for one test and restores it afterwards.

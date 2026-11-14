@@ -39,9 +39,7 @@ pub fn remove_server_from_omp(id: &str) -> Result<(), AppError> {
 }
 
 fn sync(id: &str, change: OmpChange<'_>) -> Result<(), AppError> {
-    let _guard = WRITE_LOCK
-        .lock()
-        .map_err(|e| AppError::Message(e.to_string()))?;
+    let _guard = crate::sync_utils::lock_file_operation(&WRITE_LOCK);
     sync_locked(id, change)
 }
 
@@ -50,9 +48,7 @@ pub(crate) fn sync_and_commit<T>(
     change: OmpChange<'_>,
     commit: impl FnOnce() -> Result<T, AppError>,
 ) -> Result<T, AppError> {
-    let _guard = WRITE_LOCK
-        .lock()
-        .map_err(|e| AppError::Message(e.to_string()))?;
+    let _guard = crate::sync_utils::lock_file_operation(&WRITE_LOCK);
     sync_locked_and_commit(id, change, commit)
 }
 
@@ -237,6 +233,37 @@ mod tests {
     use super::*;
     use crate::omp_config::test_support::TestAgentDir;
     use std::fs;
+
+    #[test]
+    #[serial_test::serial]
+    fn panicking_database_commit_restores_native_revision_and_allows_next_write() {
+        if !crate::sync_utils::in_isolated_process(
+            "mcp::omp::tests::panicking_database_commit_restores_native_revision_and_allows_next_write",
+        ) {
+            return;
+        }
+        let _agent = TestAgentDir::new();
+        let path = crate::omp_config::get_omp_mcp_path().unwrap();
+        let spec = json!({"command": "node"});
+        let original = b"{\"nativeOption\":true,\"mcpServers\":{}}\n";
+        fs::write(&path, original).unwrap();
+        assert!(std::panic::catch_unwind(|| {
+            let _: Result<(), AppError> =
+                sync_and_commit("demo", OmpChange::Enable(&spec, &spec), || {
+                    assert_ne!(fs::read(&path).unwrap(), original);
+                    panic!("database commit interrupted");
+                });
+        })
+        .is_err());
+        assert_eq!(fs::read(&path).unwrap(), original);
+        assert!(WRITE_LOCK.is_poisoned());
+
+        sync_and_commit("demo", OmpChange::Enable(&spec, &spec), || Ok(())).unwrap();
+        let saved: Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+        assert_eq!(saved["nativeOption"], true);
+        assert_eq!(saved["mcpServers"]["demo"]["command"], "node");
+        assert!(!WRITE_LOCK.is_poisoned());
+    }
 
     #[test]
     #[serial_test::serial]
