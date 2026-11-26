@@ -37,7 +37,11 @@ export interface AttemptDiagnostics {
   error: string | null;
   canceled: boolean;
   responseOutcome?:
-    "completed" | "failed" | "incomplete" | "disconnected" | null;
+    | "completed"
+    | "failed"
+    | "incomplete"
+    | "disconnected"
+    | null;
   requestFull?: FullBodyMetadata;
   responseFull?: FullBodyMetadata;
   context?: {

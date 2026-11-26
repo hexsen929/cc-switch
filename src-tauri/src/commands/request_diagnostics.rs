@@ -29,9 +29,19 @@ pub async fn export_request_diagnostics_body(
         diagnostics::BodySide::Request => "request",
         diagnostics::BodySide::Response => "response",
     };
+    let complete = diagnostics::get(&request_id).and_then(|record| {
+        record
+            .attempts
+            .get(attempt_index)
+            .map(|attempt| match side {
+                diagnostics::BodySide::Request => attempt.request_full.state,
+                diagnostics::BodySide::Response => attempt.response_full.state,
+            })
+    }) == Some(diagnostics::BodyState::Ready);
     let name = format!(
-        "upstream-{side_name}-attempt-{}.txt",
-        attempt_index.saturating_add(1)
+        "upstream-{side_name}-attempt-{}{}.txt",
+        attempt_index.saturating_add(1),
+        if complete { "" } else { "-partial" }
     );
     let selected = tauri::async_runtime::spawn_blocking(move || {
         app.dialog()
