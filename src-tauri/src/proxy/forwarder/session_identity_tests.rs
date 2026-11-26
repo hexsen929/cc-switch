@@ -282,6 +282,35 @@ async fn session_identity_diagnostics_keep_both_limit_and_archived_retry_bodies(
 }
 
 #[tokio::test]
+async fn session_identity_diagnostics_preserve_real_2xx_sse_error_before_rotation() {
+    use crate::proxy::diagnostics::{BodySide, DiagnosticHandle};
+    let first = Step {
+        status: StatusCode::OK,
+        content_type: "text/event-stream",
+        body: "event: response.failed\ndata: {\"type\":\"response.failed\",\"response\":{\"id\":\"original-failed-response\",\"status\":\"failed\",\"error\":{\"code\":\"session_turn_limit_exceeded\",\"message\":\"limit\"}}}\n\n".into(),
+        turn_state: None,
+    };
+    let upstream = upstream(vec![first, ok()]).await;
+    let provider = provider(&upstream, Some(true));
+    let session = uuid::Uuid::new_v4().to_string();
+    let diagnostics = DiagnosticHandle::isolated(true);
+    diagnostics.bind("original-sse-failure");
+    let fwd = forwarder(&provider, &session).diagnostics(Some(diagnostics.clone()));
+    let mut request = body(&session);
+    request["stream"] = json!(true);
+    consume(send(&fwd, &provider, headers(&session, "turn-current"), request).await).await;
+    let snapshot = diagnostics.snapshot("original-sse-failure").unwrap();
+    assert_eq!(snapshot.attempts[0].status_code, Some(200));
+    assert_eq!(snapshot.attempts[0].response_outcome, Some("failed"));
+    let response = diagnostics
+        .body_snapshot("original-sse-failure", BodySide::Response, 0)
+        .body
+        .unwrap();
+    assert!(response.contains("event: response.failed"));
+    assert!(response.contains("original-failed-response"));
+}
+
+#[tokio::test]
 async fn session_identity_first_limit_retries_once_preserves_history_and_reuses_mapping() {
     let upstream = upstream(vec![turn_limit(), ok(), ok()]).await;
     let mut provider = provider(&upstream, Some(true));

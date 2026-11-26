@@ -345,7 +345,7 @@ impl AttemptGuard {
 
     pub fn headers(&self, status: u16) {
         self.update(|attempt| {
-            attempt.status_code = Some(status);
+            attempt.status_code.get_or_insert(status);
             attempt
                 .headers_ms
                 .get_or_insert_with(|| self.started.elapsed().as_millis() as u64);
@@ -370,15 +370,26 @@ impl AttemptGuard {
         if !self.handle.capture {
             return;
         }
-        self.handle.full_body(
-            self.index,
-            BodySide::Response,
-            FullBody::from_result(if body.len() > body::MAX_BODY_BYTES {
-                Err(BodyState::TooLarge)
-            } else {
-                body::text(body.as_bytes(), false, &self.secrets, &self.handle.pii)
-            }),
-        );
+        // Errors can be normalized from an HTTP 200 SSE failure. Keep the
+        // actual captured body/status instead of replacing it with that envelope.
+        let mut uncaptured = false;
+        self.update(|attempt| {
+            uncaptured = matches!(
+                attempt.response_full.state,
+                BodyState::Pending | BodyState::NotCaptured
+            );
+        });
+        if uncaptured {
+            self.handle.full_body(
+                self.index,
+                BodySide::Response,
+                FullBody::from_result(if body.len() > body::MAX_BODY_BYTES {
+                    Err(BodyState::TooLarge)
+                } else {
+                    body::text(body.as_bytes(), false, &self.secrets, &self.handle.pii)
+                }),
+            );
+        }
         let bounded = short(body, PREVIEW_BYTES);
         let (body, cut) = match serde_json::from_str::<Value>(&bounded) {
             Ok(value) => masked_json_preview(&value, &self.secrets, &self.handle.pii),
@@ -766,10 +777,7 @@ fn masked_json_preview(
                     budget.text -= key.len();
                     let value = if SECRET_FIELDS.is_match(key) {
                         Value::String("[REDACTED]".into())
-                    } else if matches!(
-                        key.as_str(),
-                        "encrypted_content" | "encrypted_function_args" | "signature"
-                    ) {
+                    } else if body::is_opaque_field(key) {
                         let bytes = value.as_str().map(str::len);
                         Value::String(match bytes {
                             Some(bytes) => format!("[Opaque content omitted: {bytes} bytes]"),

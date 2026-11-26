@@ -8,6 +8,13 @@ use std::{io::Write, sync::Arc};
 pub(super) const MAX_BODY_BYTES: usize = 32 * 1024 * 1024;
 pub(super) const MAX_CACHE_BYTES: usize = 128 * 1024 * 1024;
 
+pub(super) fn is_opaque_field(key: &str) -> bool {
+    matches!(
+        key,
+        "encrypted_content" | "encrypted_function_args" | "signature"
+    )
+}
+
 #[derive(Clone, Copy, Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub enum BodySide {
@@ -87,6 +94,19 @@ impl Serialize for Redacted<'_> {
                 for (key, value) in object {
                     if SECRET_FIELDS.is_match(key) {
                         map.serialize_entry(key, "[REDACTED]")?;
+                    } else if let Some(text) = value.as_str().filter(|_| is_opaque_field(key)) {
+                        if text.len() > MAX_BODY_BYTES {
+                            return Err(serde::ser::Error::custom(
+                                "complete body capacity exceeded",
+                            ));
+                        }
+                        // Random ciphertext can resemble sk-/JWT/PII patterns.
+                        // Preserve it, masking only actual known credentials.
+                        let mut masked = text.to_owned();
+                        for secret in self.secrets.iter().filter(|secret| !secret.is_empty()) {
+                            masked = masked.replace(secret, "[REDACTED]");
+                        }
+                        map.serialize_entry(key, &masked)?;
                     } else {
                         map.serialize_entry(key, &child(value))?;
                     }
@@ -221,7 +241,7 @@ mod tests {
     #[test]
     fn full_json_is_not_a_prefix_and_keeps_opaque_protocol_fields() {
         let original = json!({
-            "encrypted_content":"opaque-state",
+            "encrypted_content":"opaque-state-sk-abcdefghijk",
             "input":[{"role":"user","content":"x".repeat(150000)}],
             "api_key":"credential"
         });
