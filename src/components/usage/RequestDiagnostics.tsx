@@ -4,6 +4,8 @@ import { Button } from "@/components/ui/button";
 import {
   requestDiagnosticsApi,
   type AttemptDiagnostics,
+  type FullBodyMetadata,
+  type FullBodyResult,
   type RequestDiagnostics as Diagnostics,
 } from "@/lib/api/requestDiagnostics";
 
@@ -22,6 +24,112 @@ export function attemptPhases(attempt: AttemptDiagnostics) {
     cursor = end;
   }
   return phases;
+}
+
+function FullBody({
+  requestId,
+  attemptIndex,
+  side,
+  metadata,
+}: {
+  requestId: string;
+  attemptIndex: number;
+  side: "request" | "response";
+  metadata?: FullBodyMetadata;
+}) {
+  const { t } = useTranslation();
+  const [result, setResult] = useState<FullBodyResult | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [failed, setFailed] = useState(false);
+  const revision = useRef(0);
+  useEffect(() => {
+    revision.current += 1;
+    setResult(null);
+    setFailed(false);
+    setBusy(false);
+    return () => {
+      revision.current += 1;
+    };
+  }, [requestId, attemptIndex, side]);
+  const read = async () => {
+    const epoch = revision.current;
+    setBusy(true);
+    setFailed(false);
+    try {
+      const body = await requestDiagnosticsApi.getBody(
+        requestId,
+        side,
+        attemptIndex,
+      );
+      if (revision.current === epoch) setResult(body);
+    } catch {
+      if (revision.current === epoch) setFailed(true);
+    } finally {
+      if (revision.current === epoch) setBusy(false);
+    }
+  };
+  const download = async () => {
+    const epoch = revision.current;
+    setBusy(true);
+    setFailed(false);
+    try {
+      await requestDiagnosticsApi.exportBody(requestId, side, attemptIndex);
+    } catch {
+      if (revision.current === epoch) setFailed(true);
+    } finally {
+      if (revision.current === epoch) setBusy(false);
+    }
+  };
+  const state = result?.state ?? metadata?.state ?? "notCaptured";
+  return (
+    <details className="mt-2 min-w-0 rounded-panel border border-border px-3 py-2">
+      <summary className="cursor-pointer text-caption font-medium text-fg-1">
+        {t(
+          `requestDiagnostics.full${side === "request" ? "Request" : "Response"}`,
+        )}
+        {metadata?.bytes ? ` · ${metadata.bytes.toLocaleString()} B` : ""}
+      </summary>
+      <p className="my-2 text-caption text-fg-3">
+        {t(`requestDiagnostics.bodyStates.${state}`)}
+      </p>
+      <div className="flex gap-2">
+        <Button
+          size="compact"
+          variant="neutral"
+          disabled={busy}
+          onClick={() => void read()}
+        >
+          {t("requestDiagnostics.loadFull")}
+        </Button>
+        {result?.body != null && (
+          <Button
+            size="compact"
+            variant="neutral"
+            disabled={busy}
+            onClick={() => void download()}
+          >
+            {t("requestDiagnostics.exportFull")}
+          </Button>
+        )}
+      </div>
+      {failed && (
+        <p role="alert" className="text-caption text-danger">
+          {t("requestDiagnostics.loadFailed")}
+        </p>
+      )}
+      {result?.body != null && (
+        <textarea
+          readOnly
+          aria-label={t(
+            `requestDiagnostics.full${side === "request" ? "Request" : "Response"}`,
+          )}
+          value={result.body}
+          rows={12}
+          className="mt-2 w-full resize-y overflow-auto rounded-md border border-border bg-transparent p-2 font-mono text-caption text-fg-2"
+        />
+      )}
+    </details>
+  );
 }
 
 function Preview({
@@ -246,6 +354,29 @@ export function RequestDiagnostics({ requestId }: { requestId: string }) {
                       {attempt.error}
                     </p>
                   )}
+                  {attempt.responseOutcome && (
+                    <p className="m-0 mt-2 text-caption text-fg-2">
+                      {t(
+                        `requestDiagnostics.outcomes.${attempt.responseOutcome}`,
+                      )}
+                    </p>
+                  )}
+                  {record.captureBodies && (
+                    <>
+                      <FullBody
+                        requestId={requestId}
+                        attemptIndex={index}
+                        side="request"
+                        metadata={attempt.requestFull}
+                      />
+                      <FullBody
+                        requestId={requestId}
+                        attemptIndex={index}
+                        side="response"
+                        metadata={attempt.responseFull}
+                      />
+                    </>
+                  )}
                 </li>
               );
             })}
@@ -259,6 +390,9 @@ export function RequestDiagnostics({ requestId }: { requestId: string }) {
             <>
               <p className="m-0 text-caption text-fg-3">
                 {t("requestDiagnostics.upstream")}
+              </p>
+              <p className="m-0 text-caption text-fg-3">
+                {t("requestDiagnostics.fullScope")}
               </p>
               <Preview
                 title={t("requestDiagnostics.request")}

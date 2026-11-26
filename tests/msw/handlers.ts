@@ -53,6 +53,12 @@ export const handlers = [
   ),
   http.post(`${TAURI_ENDPOINT}/list_profiles`, () => success([])),
   http.post(`${TAURI_ENDPOINT}/get_request_diagnostics`, () => success(null)),
+  http.post(`${TAURI_ENDPOINT}/export_request_diagnostics_body`, () =>
+    success(false),
+  ),
+  http.post(`${TAURI_ENDPOINT}/get_request_diagnostics_body`, () =>
+    success({ state: "notCaptured", body: null }),
+  ),
   http.post(`${TAURI_ENDPOINT}/get_request_diagnostics_config`, () =>
     success({ captureBodies: false }),
   ),

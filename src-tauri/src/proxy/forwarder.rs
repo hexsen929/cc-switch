@@ -3543,6 +3543,7 @@ impl RequestForwarder {
                 &provider.id,
                 session_identity_diagnostics,
                 session_history_archive,
+                diagnostic_attempt.as_deref_mut(),
             )
             .await?;
 

@@ -157,6 +157,7 @@ impl RequestForwarder {
         provider_id: &str,
         diagnostics: bool,
         archive_on_limit: bool,
+        mut diagnostic_attempt: Option<&mut super::super::diagnostics::AttemptGuard>,
     ) -> Result<ProxyResponse, ProxyError> {
         // 关闭和不适用的路径直接走原发送函数，不增加读流、复制或重试。
         let (Some(lease), Some(mut current), Some(baseline)) = (lease, snapshot.take(), baseline)
@@ -192,6 +193,12 @@ impl RequestForwarder {
                 .await
             {
                 Ok(response) => {
+                    let response = if let Some(attempt) = diagnostic_attempt.as_deref_mut() {
+                        attempt.headers(response.status().as_u16());
+                        attempt.observe(response)
+                    } else {
+                        response
+                    };
                     self.inspect_session_identity_response(response, streaming)
                         .await
                 }
@@ -221,6 +228,17 @@ impl RequestForwarder {
                     };
                 }
                 Err(error) => {
+                    if let Some(attempt) = diagnostic_attempt.as_deref_mut() {
+                        if let ProxyError::UpstreamError {
+                            status,
+                            body: Some(body),
+                        } = &error
+                        {
+                            attempt.headers(*status);
+                            attempt.error_body(body);
+                        }
+                        attempt.fail(&super::diagnostics::summarize_proxy_error(&error));
+                    }
                     let status = match &error {
                         ProxyError::UpstreamError { status, .. } => Some(*status),
                         _ => None,
@@ -261,6 +279,9 @@ impl RequestForwarder {
                         retry_body = archive_history(&retry_body, diagnostics)?;
                     }
                     let report = lease.apply(&current, &mut headers, &mut retry_body);
+                    if let Some(attempt) = diagnostic_attempt.as_deref_mut() {
+                        attempt.retry_prepared(&retry_body);
+                    }
                     body_bytes = serde_json::to_vec(&retry_body).map_err(|e| {
                         ProxyError::Internal(format!(
                             "Failed to serialize identity retry body: {e}"

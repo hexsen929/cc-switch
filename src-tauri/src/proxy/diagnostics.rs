@@ -1,13 +1,18 @@
 //! Bounded, process-local request diagnostics. Never writes bodies or credentials to disk.
 
 use super::{hyper_client::ProxyResponse, pii_redaction::PiiRedactionConfig};
+mod body;
+pub use body::{BodyResult, BodySide, BodyState, FullBody};
 use bytes::Bytes;
 use futures::{Stream, StreamExt};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::{
     collections::VecDeque,
-    sync::{Arc, LazyLock, Mutex},
+    sync::{
+        atomic::{AtomicUsize, Ordering},
+        Arc, LazyLock, Mutex,
+    },
     time::Instant,
 };
 
@@ -19,6 +24,8 @@ const PREVIEW_BYTES: usize = 128 * 1024;
 const FIELD_BYTES: usize = 1024;
 type RecentStore = Arc<Mutex<VecDeque<RequestDiagnostics>>>;
 static RECENT: LazyLock<RecentStore> = LazyLock::new(|| Arc::new(Mutex::default()));
+static INFLIGHT_BYTES: AtomicUsize = AtomicUsize::new(0);
+const MAX_INFLIGHT_BYTES: usize = 64 * 1024 * 1024;
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -41,6 +48,9 @@ pub struct AttemptDiagnostics {
     pub error: Option<String>,
     pub canceled: bool,
     pub context: Option<super::context_usage::Footprint>,
+    pub response_outcome: Option<&'static str>,
+    pub request_full: FullBody,
+    pub response_full: FullBody,
 }
 
 #[derive(Clone, Debug, Default, Serialize)]
@@ -71,6 +81,28 @@ pub struct DiagnosticHandle {
 
 pub fn get(request_id: &str) -> Option<RequestDiagnostics> {
     find(&RECENT, request_id)
+}
+
+pub fn get_body(request_id: &str, side: BodySide, attempt_index: usize) -> BodyResult {
+    let record = find(&RECENT, request_id);
+    body_result(record.as_ref(), side, attempt_index)
+}
+
+fn body_result(
+    record: Option<&RequestDiagnostics>,
+    side: BodySide,
+    attempt_index: usize,
+) -> BodyResult {
+    let full = record
+        .and_then(|record| record.attempts.get(attempt_index))
+        .map(|attempt| match side {
+            BodySide::Request => &attempt.request_full,
+            BodySide::Response => &attempt.response_full,
+        });
+    BodyResult {
+        state: full.map_or(BodyState::Evicted, |full| full.state),
+        body: full.and_then(|full| full.data.as_deref().map(str::to_owned)),
+    }
 }
 
 fn find(store: &RecentStore, request_id: &str) -> Option<RequestDiagnostics> {
@@ -140,6 +172,38 @@ impl DiagnosticHandle {
             .is_some_and(|recent| recent.iter().any(|entry| entry.trace_id == self.id))
     }
 
+    fn full_body(&self, index: Option<usize>, side: BodySide, value: FullBody) {
+        if let Ok(mut recent) = self.store.lock() {
+            let Some(entry) = recent.iter_mut().find(|entry| entry.trace_id == self.id) else {
+                return;
+            };
+            let Some(attempt) = index.and_then(|index| entry.attempts.get_mut(index)) else {
+                return;
+            };
+            let full = match side {
+                BodySide::Request => &mut attempt.request_full,
+                BodySide::Response => &mut attempt.response_full,
+            };
+            *full = value;
+            let mut total: usize = recent
+                .iter()
+                .flat_map(|entry| &entry.attempts)
+                .map(|attempt| attempt.request_full.bytes + attempt.response_full.bytes)
+                .sum();
+            for entry in recent.iter_mut() {
+                for attempt in &mut entry.attempts {
+                    if total <= body::MAX_CACHE_BYTES {
+                        break;
+                    }
+                    total = total
+                        .saturating_sub(attempt.request_full.bytes + attempt.response_full.bytes);
+                    attempt.request_full.evict();
+                    attempt.response_full.evict();
+                }
+            }
+        }
+    }
+
     pub fn route(&self, provider: &str, reason: &'static str) {
         self.update(|entry| {
             if entry.route.len() < 48 {
@@ -165,6 +229,16 @@ impl DiagnosticHandle {
     #[cfg(test)]
     pub(crate) fn snapshot(&self, request_id: &str) -> Option<RequestDiagnostics> {
         find(&self.store, request_id)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn body_snapshot(
+        &self,
+        request_id: &str,
+        side: BodySide,
+        attempt_index: usize,
+    ) -> BodyResult {
+        body_result(find(&self.store, request_id).as_ref(), side, attempt_index)
     }
 
     pub fn attempt(&self, provider_id: &str, provider_name: &str, model: &str) -> AttemptGuard {
@@ -212,6 +286,23 @@ impl AttemptGuard {
         }
     }
 
+    pub(super) fn retry_prepared(&mut self, body: &Value) {
+        let mut identity = None;
+        self.update(|attempt| {
+            identity = Some((
+                attempt.provider_id.clone(),
+                attempt.provider_name.clone(),
+                attempt.model.clone(),
+            ))
+        });
+        if let Some((id, name, model)) = identity {
+            let secrets = self.secrets.clone();
+            self.done = true;
+            *self = self.handle.attempt(&id, &name, &model);
+            self.prepared(body, &secrets);
+        }
+    }
+
     pub fn prepared(&mut self, body: &Value, secrets: &[String]) {
         // Known auth values supplement the mandatory secret-field and token masking.
         self.secrets = secrets
@@ -232,6 +323,11 @@ impl AttemptGuard {
             );
         });
         if self.handle.capture {
+            self.handle.full_body(
+                self.index,
+                BodySide::Request,
+                FullBody::from_result(body::json(body, &self.secrets, &self.handle.pii)),
+            );
             let (body, truncated) = masked_json_preview(body, &self.secrets, &self.handle.pii);
             self.handle.update(|entry| {
                 entry.request_body = body;
@@ -239,13 +335,20 @@ impl AttemptGuard {
                 entry.response_body.clear();
                 entry.response_truncated = false;
             });
+            self.handle.full_body(
+                self.index,
+                BodySide::Response,
+                FullBody::from_result(Err(BodyState::Pending)),
+            );
         }
     }
 
     pub fn headers(&self, status: u16) {
         self.update(|attempt| {
             attempt.status_code = Some(status);
-            attempt.headers_ms = Some(self.started.elapsed().as_millis() as u64);
+            attempt
+                .headers_ms
+                .get_or_insert_with(|| self.started.elapsed().as_millis() as u64);
         });
     }
 
@@ -257,6 +360,7 @@ impl AttemptGuard {
         };
         self.update(|attempt| {
             attempt.error = Some(short(&error, FIELD_BYTES));
+            attempt.response_outcome.get_or_insert("failed");
             attempt.duration_ms = Some(self.started.elapsed().as_millis() as u64);
         });
         self.done = true;
@@ -266,6 +370,15 @@ impl AttemptGuard {
         if !self.handle.capture {
             return;
         }
+        self.handle.full_body(
+            self.index,
+            BodySide::Response,
+            FullBody::from_result(if body.len() > body::MAX_BODY_BYTES {
+                Err(BodyState::TooLarge)
+            } else {
+                body::text(body.as_bytes(), false, &self.secrets, &self.handle.pii)
+            }),
+        );
         let bounded = short(body, PREVIEW_BYTES);
         let (body, cut) = match serde_json::from_str::<Value>(&bounded) {
             Ok(value) => masked_json_preview(&value, &self.secrets, &self.handle.pii),
@@ -292,6 +405,17 @@ impl AttemptGuard {
         });
     }
 
+    fn outcome(&self, outcome: &'static str) {
+        self.update(|attempt| {
+            if !matches!(
+                attempt.response_outcome,
+                Some("failed" | "incomplete" | "disconnected")
+            ) {
+                attempt.response_outcome = Some(outcome);
+            }
+        });
+    }
+
     fn complete(&mut self) {
         self.update(|attempt| {
             attempt.duration_ms = Some(self.started.elapsed().as_millis() as u64);
@@ -300,6 +424,9 @@ impl AttemptGuard {
     }
 
     pub fn observe(&mut self, response: ProxyResponse) -> ProxyResponse {
+        if self.done {
+            return response;
+        }
         let status = response.status();
         let headers = response.headers().clone();
         let sse = response.is_sse();
@@ -312,6 +439,13 @@ impl AttemptGuard {
         });
         let capture =
             self.handle.capture && textual && !headers.contains_key(http::header::CONTENT_ENCODING);
+        if self.handle.capture && !capture {
+            self.handle.full_body(
+                self.index,
+                BodySide::Response,
+                FullBody::from_result(Err(BodyState::Unreadable)),
+            );
+        }
         let observer = Self {
             handle: self.handle.clone(),
             index: self.index,
@@ -327,11 +461,105 @@ impl AttemptGuard {
     }
 }
 
+/// Save bytes received before EOF/error/drop as an explicitly complete or
+/// interrupted snapshot. Dropping a stream must not erase the only error evidence.
+struct CaptureGuard {
+    handle: DiagnosticHandle,
+    index: Option<usize>,
+    secrets: Vec<String>,
+    sse: bool,
+    raw: Vec<u8>,
+    state: BodyState,
+    done: bool,
+    reserved: usize,
+}
+
+impl CaptureGuard {
+    fn new(attempt: &AttemptGuard, sse: bool) -> Self {
+        Self {
+            handle: attempt.handle.clone(),
+            index: attempt.index,
+            secrets: attempt.secrets.clone(),
+            sse,
+            raw: Vec::new(),
+            state: BodyState::Ready,
+            done: false,
+            reserved: 0,
+        }
+    }
+
+    fn push(&mut self, bytes: &[u8]) {
+        if self.done {
+            return;
+        }
+        if !self.handle.present() {
+            self.done = true;
+            self.release();
+        } else if self.raw.len().saturating_add(bytes.len()) > body::MAX_BODY_BYTES {
+            self.done = true;
+            self.release();
+            self.handle.full_body(
+                self.index,
+                BodySide::Response,
+                FullBody::from_result(Err(BodyState::TooLarge)),
+            );
+        } else if INFLIGHT_BYTES
+            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |current| {
+                current
+                    .checked_add(bytes.len())
+                    .filter(|next| *next <= MAX_INFLIGHT_BYTES)
+            })
+            .is_err()
+        {
+            self.done = true;
+            self.release();
+            self.handle.full_body(
+                self.index,
+                BodySide::Response,
+                FullBody::from_result(Err(BodyState::MemoryLimit)),
+            );
+        } else {
+            self.reserved += bytes.len();
+            self.raw.extend_from_slice(bytes);
+        }
+    }
+
+    fn finish(&mut self, interrupted: bool) {
+        if self.done {
+            return;
+        }
+        self.done = true;
+        let result = body::text(&self.raw, self.sse, &self.secrets, &self.handle.pii);
+        let mut full = FullBody::from_result(result);
+        if full.state == BodyState::Ready && (interrupted || self.state == BodyState::Interrupted) {
+            full.state = BodyState::Interrupted;
+        }
+        self.handle.full_body(self.index, BodySide::Response, full);
+        self.release();
+    }
+
+    fn release(&mut self) {
+        INFLIGHT_BYTES.fetch_sub(self.reserved, Ordering::Relaxed);
+        self.reserved = 0;
+        self.raw = Vec::new();
+    }
+}
+
+impl Drop for CaptureGuard {
+    fn drop(&mut self) {
+        self.finish(true);
+        self.release();
+    }
+}
+
 impl Drop for AttemptGuard {
     fn drop(&mut self) {
         if !self.done {
             self.update(|attempt| {
                 attempt.canceled = true;
+                if attempt.response_full.state == BodyState::Pending {
+                    attempt.response_full.state = BodyState::Interrupted;
+                }
                 attempt.duration_ms = Some(self.started.elapsed().as_millis() as u64);
             });
         }
@@ -349,12 +577,12 @@ fn observed_stream(
         let mut pending = Vec::new();
         let mut seen = 0usize;
         let mut preview = String::new();
-        let mut event_name = String::new();
         let mut truncated = false;
         let mut need_content = true;
+        let mut full = capture.then(|| CaptureGuard::new(&attempt, sse));
+        let mut events = super::sse::SseBuffer::with_max_pending_bytes(2 * 1024 * 1024);
         while let Some(chunk) = stream.next().await {
-            let collecting = capture && !truncated && (if sse { preview.len() } else { pending.len() }) < PREVIEW_BYTES;
-            if (collecting || need_content) && !attempt.handle.present() {
+            if (capture || need_content) && !attempt.handle.present() {
                 capture = false;
                 need_content = false;
                 pending = Vec::new();
@@ -362,39 +590,19 @@ fn observed_stream(
             }
             match &chunk {
                 Ok(bytes) => {
-                    if sse && (collecting || need_content) {
-                        // The line buffer is bounded even when an upstream never terminates a line.
-                        for byte in bytes.iter().copied() {
-                            if pending.len() < PREVIEW_BYTES { pending.push(byte); } else { truncated = true; need_content = false; }
-                            if byte == b'\n' {
-                                if !truncated {
-                                    let line = String::from_utf8_lossy(&pending);
-                                    if let Some(event) = line.strip_prefix("event:") { event_name = event.trim().to_string(); }
-                                    if let Some(data) = line.strip_prefix("data:") {
-                                        if need_content && super::response_processor::sse_data_starts_output(Some(&event_name), data) { attempt.first_content(); need_content = false; }
-                                    }
-                                    if capture && preview.len() < PREVIEW_BYTES {
-                                        let masked = if let Some(data) = line.strip_prefix("data:") {
-                                            match serde_json::from_str::<Value>(data.trim()) {
-                                                Ok(value) => format!("data: {}\n", masked_json_preview(&value, &attempt.secrets, &attempt.handle.pii).0),
-                                                Err(_) if data.trim() == "[DONE]" => "data: [DONE]\n".into(),
-                                                Err(_) => "data: [Unreadable event preview]\n".into(),
-                                            }
-                                        } else { String::new() };
-                                        let remaining = PREVIEW_BYTES - preview.len();
-                                        preview.push_str(&short(&masked, remaining));
-                                        if masked.len() > remaining { truncated = true; }
-                                    }
-                                    if line.trim().is_empty() { event_name.clear(); }
-                                }
-                                pending.clear();
-                                if !capture && !need_content { break; }
+                    if let Some(full) = full.as_mut() { full.push(bytes); }
+                    if sse && (capture || need_content) {
+                        for part in bytes.chunks(64 * 1024) {
+                            if events.push_bytes(part).is_err() { truncated = true; break; }
+                            while let Some(block) = events.next_block() {
+                                observe_event(block, &attempt, &mut need_content, capture.then_some((&mut preview, &mut truncated)));
                             }
                         }
+                        if events.dropped_oversized_events() > 0 { truncated = true; }
                     } else if !sse {
                         // Non-streaming replies have no semantic TTFT measurement.
                         need_content = false;
-                        if capture {
+                        if capture && pending.len() < PREVIEW_BYTES {
                             let take = (PREVIEW_BYTES - pending.len()).min(bytes.len());
                             pending.extend_from_slice(&bytes[..take]);
                             if take < bytes.len() { truncated = true; }
@@ -402,25 +610,96 @@ fn observed_stream(
                     }
                     seen = seen.saturating_add(bytes.len());
                 }
-                Err(_) => { attempt.fail("Upstream response read failed"); }
+                Err(_) => {
+                    attempt.outcome("disconnected");
+                    if let Some(full) = full.as_mut() { full.state = BodyState::Interrupted; full.finish(true); }
+                    attempt.fail("Upstream response read failed");
+                }
             }
             // Yield the exact upstream chunk immediately; previews never gate or replace output.
             yield chunk;
         }
         if capture {
             if !sse {
-                let raw = String::from_utf8_lossy(&pending);
+                let raw = String::from_utf8_lossy(full.as_ref().filter(|full| !full.done).map_or(&pending, |full| &full.raw));
                 preview = if let Ok(value) = serde_json::from_str::<Value>(&raw) {
-                    masked_json_preview(&value, &attempt.secrets, &attempt.handle.pii).0
+                    observe_value(&value, &attempt);
+                    let (text, cut) = masked_json_preview(&value, &attempt.secrets, &attempt.handle.pii);
+                    truncated |= cut;
+                    text
                 } else if truncated || raw.chars().any(|c| c.is_control() && !matches!(c, '\n' | '\r' | '\t')) || matches!(raw.trim_start().chars().next(), Some('{' | '[')) {
                     "[Unreadable or oversized JSON preview]".into()
                 } else { mask_text(&raw, &attempt.secrets, &attempt.handle.pii) };
-            } else if !pending.is_empty() { truncated = true; }
+            } else if !events.pending().is_empty() {
+                observe_event(events.pending(), &attempt, &mut need_content, Some((&mut preview, &mut truncated)));
+            }
             let body = short(&preview, PREVIEW_BYTES);
             let truncated = truncated || preview.len() > PREVIEW_BYTES || (!sse && seen > PREVIEW_BYTES);
             attempt.handle.update(|entry| { entry.response_body = body; entry.response_truncated = truncated; });
         }
+        if let Some(full) = full.as_mut() { full.finish(false); }
         if !attempt.done { attempt.complete(); }
+    }
+}
+
+fn observe_value(value: &Value, attempt: &AttemptGuard) {
+    let response = value.get("response").unwrap_or(value);
+    match (
+        value.get("type").and_then(Value::as_str),
+        response.get("status").and_then(Value::as_str),
+    ) {
+        (Some("error" | "response.failed"), _) | (_, Some("failed")) => attempt.outcome("failed"),
+        (Some("response.incomplete"), _) | (_, Some("incomplete")) => attempt.outcome("incomplete"),
+        (Some("response.completed"), _) | (_, Some("completed")) => attempt.outcome("completed"),
+        _ => {}
+    }
+    if let Some(error) = response.get("error").filter(|error| !error.is_null()) {
+        attempt.outcome("failed");
+        let (masked, _) = masked_json_preview(error, &attempt.secrets, &attempt.handle.pii);
+        attempt.update(|entry| entry.error = Some(short(&masked, FIELD_BYTES)));
+    }
+}
+
+fn observe_event(
+    block: &str,
+    attempt: &AttemptGuard,
+    need_content: &mut bool,
+    preview: Option<(&mut String, &mut bool)>,
+) {
+    use super::sse::strip_sse_field;
+    let event = block
+        .lines()
+        .find_map(|line| strip_sse_field(line, "event"));
+    let data = block
+        .lines()
+        .filter_map(|line| strip_sse_field(line, "data"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    if data.is_empty() {
+        return;
+    }
+    if *need_content && super::response_processor::sse_data_starts_output(event, &data) {
+        attempt.first_content();
+        *need_content = false;
+    }
+    let parsed = serde_json::from_str::<Value>(&data).ok();
+    if let Some(value) = &parsed {
+        observe_value(value, attempt);
+    }
+    if let Some((output, truncated)) = preview {
+        if output.len() >= PREVIEW_BYTES {
+            *truncated = true;
+            return;
+        }
+        let (text, cut) = match parsed {
+            Some(value) => masked_json_preview(&value, &attempt.secrets, &attempt.handle.pii),
+            None if data.trim() == "[DONE]" => ("[DONE]".into(), false),
+            None => ("[Unreadable event preview]".into(), true),
+        };
+        let text = format!("data: {text}\n\n");
+        let available = PREVIEW_BYTES - output.len();
+        output.push_str(&short(&text, available));
+        *truncated |= cut || text.len() > available;
     }
 }
 
@@ -455,61 +734,102 @@ fn masked_json_preview(
     secrets: &[String],
     pii: &PiiRedactionConfig,
 ) -> (String, bool) {
-    fn walk(value: &mut Value, secrets: &[String], pii: &PiiRedactionConfig) {
-        match value {
-            Value::Object(map) => {
-                for (key, value) in map {
-                    if SECRET_FIELDS.is_match(key) {
-                        *value = Value::String("[REDACTED]".into());
-                    } else {
-                        walk(value, secrets, pii);
-                    }
-                }
-            }
-            Value::Array(array) => {
-                for value in array {
-                    walk(value, secrets, pii);
-                }
-            }
-            Value::String(text) => *text = mask_text(text, secrets, pii),
-            _ => {}
-        }
-    }
-    // A bounded serializer prevents constructing another copy of a multi-MiB request.
-    struct Limited {
-        bytes: Vec<u8>,
+    // Build a small, valid JSON sample before serialization. Serializing a raw
+    // prefix first made every large request unreadable and let opaque reasoning
+    // consume the entire response preview. Never truncate an unmasked credential.
+    struct Budget {
+        text: usize,
+        nodes: usize,
         cut: bool,
     }
-    impl std::io::Write for Limited {
-        fn write(&mut self, input: &[u8]) -> std::io::Result<usize> {
-            let take = (PREVIEW_BYTES - self.bytes.len()).min(input.len());
-            self.bytes.extend_from_slice(&input[..take]);
-            if take < input.len() {
-                self.cut = true;
-                return Err(std::io::Error::other("preview limit"));
-            }
-            Ok(input.len())
+    fn sample(
+        value: &Value,
+        budget: &mut Budget,
+        depth: usize,
+        secrets: &[String],
+        pii: &PiiRedactionConfig,
+    ) -> Value {
+        if budget.nodes == 0 || depth > 24 {
+            budget.cut = true;
+            return Value::String("[Preview omitted]".into());
         }
-        fn flush(&mut self) -> std::io::Result<()> {
-            Ok(())
+        budget.nodes -= 1;
+        match value {
+            Value::Object(map) => {
+                let mut output = serde_json::Map::new();
+                for (key, value) in map {
+                    if key.len() > budget.text || budget.nodes == 0 {
+                        budget.cut = true;
+                        output.insert("...".into(), Value::String("[More fields omitted]".into()));
+                        break;
+                    }
+                    budget.text -= key.len();
+                    let value = if SECRET_FIELDS.is_match(key) {
+                        Value::String("[REDACTED]".into())
+                    } else if matches!(
+                        key.as_str(),
+                        "encrypted_content" | "encrypted_function_args" | "signature"
+                    ) {
+                        let bytes = value.as_str().map(str::len);
+                        Value::String(match bytes {
+                            Some(bytes) => format!("[Opaque content omitted: {bytes} bytes]"),
+                            None => "[Opaque content omitted]".into(),
+                        })
+                    } else {
+                        sample(value, budget, depth + 1, secrets, pii)
+                    };
+                    output.insert(key.clone(), value);
+                }
+                Value::Object(output)
+            }
+            Value::Array(array) => {
+                let mut output = Vec::new();
+                for (index, value) in array.iter().enumerate() {
+                    if budget.nodes == 0 || budget.text == 0 {
+                        budget.cut = true;
+                        output.push(Value::String(format!(
+                            "[{} more items omitted]",
+                            array.len() - index
+                        )));
+                        break;
+                    }
+                    output.push(sample(value, budget, depth + 1, secrets, pii));
+                }
+                Value::Array(output)
+            }
+            Value::String(text) => {
+                // Arbitrarily large strings cannot be safely masked from a raw
+                // prefix: a secret/custom PII match may cross its boundary.
+                if text.len() > PREVIEW_BYTES {
+                    budget.cut = true;
+                    return Value::String(format!("[Long text omitted: {} bytes]", text.len()));
+                }
+                let masked = mask_text(text, secrets, pii);
+                let limit = budget.text.min(4096);
+                let mut sampled = short(&masked, limit);
+                budget.text -= sampled.len();
+                if sampled.len() < masked.len() {
+                    budget.cut = true;
+                    sampled.push_str(" [Text truncated]");
+                }
+                Value::String(sampled)
+            }
+            value => value.clone(),
         }
     }
-    let mut writer = Limited {
-        bytes: Vec::new(),
+    // Leave room for JSON escaping, indentation and omission markers.
+    let mut budget = Budget {
+        text: PREVIEW_BYTES / 8,
+        nodes: 1024,
         cut: false,
     };
-    let _ = serde_json::to_writer(&mut writer, value);
-    let raw = String::from_utf8_lossy(&writer.bytes);
-    if let Ok(mut bounded) = serde_json::from_str::<Value>(&raw) {
-        walk(&mut bounded, secrets, pii);
-        let text = serde_json::to_string_pretty(&bounded).unwrap_or_default();
-        (
-            short(&text, PREVIEW_BYTES),
-            writer.cut || text.len() > PREVIEW_BYTES,
-        )
+    let sampled = sample(value, &mut budget, 0, secrets, pii);
+    let pretty = serde_json::to_string_pretty(&sampled).unwrap_or_default();
+    if pretty.len() <= PREVIEW_BYTES {
+        (pretty, budget.cut)
     } else {
-        // Never expose a partial JSON credential field or a token cut at the budget boundary.
-        ("[Preview exceeds the capture limit]".into(), true)
+        let compact = serde_json::to_string(&sampled).unwrap_or_default();
+        (short(&compact, PREVIEW_BYTES), true)
     }
 }
 
@@ -684,5 +1004,105 @@ mod tests {
             got.attempts[0].error.as_deref(),
             Some("request refused: [REDACTED]")
         );
+    }
+
+    #[test]
+    fn large_request_has_a_useful_sample_and_a_complete_redacted_body() {
+        let handle = DiagnosticHandle::isolated(true);
+        handle.bind("complete-request");
+        let original = json!({
+            "model":"fixture",
+            "input":[
+                {"type":"reasoning","encrypted_content":"cipher".repeat(50000)},
+                {"role":"user","content":"readable final user message"}
+            ],
+            "password":"opaque-credential"
+        });
+        let mut attempt = handle.attempt("p", "Provider", "fixture");
+        attempt.prepared(&original, &[]);
+        let got = handle.snapshot("complete-request").unwrap();
+        assert!(got.request_body.contains("readable final user message"));
+        assert!(got.request_body.contains("Opaque content omitted"));
+        assert!(!got.request_body.contains("ciphercipher"));
+        let full = handle.body_snapshot("complete-request", BodySide::Request, 0);
+        assert_eq!(full.state, BodyState::Ready);
+        let text = full.body.unwrap();
+        assert!(!text.contains("opaque-credential"));
+        let full: Value = serde_json::from_str(&text).unwrap();
+        assert_eq!(full["input"], original["input"]);
+        assert_eq!(original["password"], "opaque-credential");
+    }
+
+    #[tokio::test]
+    async fn complete_sse_preserves_large_opaque_data_and_reports_final_failure() {
+        let handle = DiagnosticHandle::isolated(true);
+        handle.bind("complete-stream");
+        let opaque = "cipher".repeat(50000);
+        let event = json!({"type":"response.output_item.done","item":{"type":"reasoning","encrypted_content":opaque}});
+        let failed = json!({"type":"response.failed","response":{"status":"failed","error":{"code":"session_turn_limit_exceeded","message":"limit","api_key":"opaque-credential"}}});
+        let raw = format!("data: {event}\n\ndata: {failed}\n\n");
+        let headers = http::HeaderMap::from_iter([(
+            http::header::CONTENT_TYPE,
+            http::HeaderValue::from_static("text/event-stream"),
+        )]);
+        let parts = raw
+            .as_bytes()
+            .chunks(23)
+            .map(Bytes::copy_from_slice)
+            .collect::<Vec<_>>();
+        let response = ProxyResponse::streamed(
+            http::StatusCode::OK,
+            headers,
+            futures::stream::iter(parts.into_iter().map(Ok)),
+        );
+        let observed = handle.attempt("p", "Provider", "m").observe(response);
+        assert_eq!(
+            observed
+                .bytes_with_limit(1024 * 1024)
+                .await
+                .unwrap()
+                .as_ref(),
+            raw.as_bytes()
+        );
+        let got = handle.snapshot("complete-stream").unwrap();
+        assert!(got.response_body.contains("session_turn_limit_exceeded"));
+        assert!(!got.response_body.contains("ciphercipher"));
+        assert_eq!(got.attempts[0].response_outcome, Some("failed"));
+        let full = handle.body_snapshot("complete-stream", BodySide::Response, 0);
+        assert_eq!(full.state, BodyState::Ready);
+        let text = full.body.unwrap();
+        assert!(text.contains(&opaque));
+        assert!(text.contains("session_turn_limit_exceeded"));
+        assert!(!text.contains("opaque-credential"));
+    }
+
+    #[tokio::test]
+    async fn interrupted_and_revoked_complete_captures_are_not_reported_as_ready() {
+        let handle = DiagnosticHandle::isolated(true);
+        handle.bind("interrupted-body");
+        let headers = http::HeaderMap::from_iter([(
+            http::header::CONTENT_TYPE,
+            http::HeaderValue::from_static("text/event-stream"),
+        )]);
+        let source = futures::stream::iter(vec![
+            Ok(Bytes::from_static(
+                b"data: {\"type\":\"response.created\"}\n\n",
+            )),
+            Err(std::io::Error::other("disconnected")),
+        ]);
+        let response = ProxyResponse::streamed(http::StatusCode::OK, headers, source);
+        assert!(handle
+            .attempt("p", "Provider", "m")
+            .observe(response)
+            .bytes_with_limit(1024)
+            .await
+            .is_err());
+        let full = handle.body_snapshot("interrupted-body", BodySide::Response, 0);
+        assert_eq!(full.state, BodyState::Interrupted);
+        assert!(full.body.unwrap().contains("response.created"));
+        handle.store.lock().unwrap().clear();
+        let missing = handle.body_snapshot("interrupted-body", BodySide::Response, 0);
+        assert_eq!(missing.state, BodyState::Evicted);
+        assert!(missing.body.is_none());
     }
 }

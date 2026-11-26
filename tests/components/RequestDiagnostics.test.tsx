@@ -10,6 +10,8 @@ const api = vi.hoisted(() => ({
   get: vi.fn(),
   getConfig: vi.fn(),
   setConfig: vi.fn(),
+  getBody: vi.fn(),
+  exportBody: vi.fn(),
 }));
 vi.mock("@/lib/api/requestDiagnostics", () => ({ requestDiagnosticsApi: api }));
 vi.mock("react-i18next", () => ({
@@ -35,6 +37,11 @@ describe("RequestDiagnostics", () => {
     api.get.mockResolvedValue(null);
     api.getConfig.mockResolvedValue({ captureBodies: false });
     api.setConfig.mockResolvedValue(undefined);
+    api.exportBody.mockResolvedValue(true);
+    api.getBody.mockResolvedValue({
+      state: "ready",
+      body: '{"input":"full data"}',
+    });
   });
 
   it("shows measured phases and leaves missing timings unavailable", () => {
@@ -149,5 +156,75 @@ describe("RequestDiagnostics", () => {
     await waitFor(() =>
       expect(screen.queryByText("revoked preview")).toBeNull(),
     );
+  });
+
+  it("loads the complete body for the selected upstream attempt on demand", async () => {
+    api.get.mockResolvedValue({
+      captureBodies: true,
+      requestBody: "compact preview",
+      responseBody: "compact response",
+      attempts: [
+        {
+          ...attempt,
+          statusCode: 400,
+          requestFull: { state: "ready", bytes: 200000 },
+        },
+        { ...attempt, requestFull: { state: "ready", bytes: 300000 } },
+      ],
+      requestTruncated: true,
+      responseTruncated: false,
+      attemptsTruncated: false,
+    });
+    render(<RequestDiagnostics requestId="full-request" />);
+    await screen.findByText("2. Provider");
+    expect(api.getBody).not.toHaveBeenCalled();
+    const buttons = screen.getAllByRole("button", {
+      name: "requestDiagnostics.loadFull",
+      hidden: true,
+    });
+    fireEvent.click(buttons[2]);
+    await waitFor(() =>
+      expect(api.getBody).toHaveBeenCalledWith("full-request", "request", 1),
+    );
+    expect(
+      await screen.findByDisplayValue('{"input":"full data"}'),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole("button", {
+        name: "requestDiagnostics.exportFull",
+        hidden: true,
+      }),
+    ).toBeInTheDocument();
+  });
+
+  it("shows an unavailable full body explicitly without replacing the preview", async () => {
+    api.getBody.mockResolvedValue({ state: "evicted", body: null });
+    api.get.mockResolvedValue({
+      captureBodies: true,
+      requestBody: "preserved preview",
+      responseBody: "",
+      attempts: [attempt],
+      requestTruncated: true,
+      responseTruncated: false,
+      attemptsTruncated: false,
+    });
+    render(<RequestDiagnostics requestId="evicted-full" />);
+    await screen.findByText("1. Provider");
+    fireEvent.click(
+      screen.getAllByRole("button", {
+        name: "requestDiagnostics.loadFull",
+        hidden: true,
+      })[0],
+    );
+    expect(
+      await screen.findByText("requestDiagnostics.bodyStates.evicted"),
+    ).toBeInTheDocument();
+    expect(screen.getByText("preserved preview")).toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", {
+        name: "requestDiagnostics.exportFull",
+        hidden: true,
+      }),
+    ).toBeNull();
   });
 });

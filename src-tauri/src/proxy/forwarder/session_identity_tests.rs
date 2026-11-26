@@ -240,6 +240,48 @@ async fn session_identity_disabled_and_legacy_absence_do_not_retry() {
 }
 
 #[tokio::test]
+async fn session_identity_diagnostics_keep_both_limit_and_archived_retry_bodies() {
+    use crate::proxy::diagnostics::{BodySide, BodyState, DiagnosticHandle};
+    let upstream = upstream(vec![turn_limit(), ok()]).await;
+    let mut provider = provider(&upstream, Some(true));
+    provider
+        .meta
+        .as_mut()
+        .unwrap()
+        .codex_session_history_archive = Some(true);
+    let session = uuid::Uuid::new_v4().to_string();
+    let diagnostics = DiagnosticHandle::isolated(true);
+    diagnostics.bind("full-continuation-attempts");
+    let fwd = forwarder(&provider, &session).diagnostics(Some(diagnostics.clone()));
+    consume(
+        send(
+            &fwd,
+            &provider,
+            headers(&session, "turn-current"),
+            body(&session),
+        )
+        .await,
+    )
+    .await;
+    let snapshot = diagnostics.snapshot("full-continuation-attempts").unwrap();
+    assert_eq!(snapshot.attempts.len(), 2);
+    assert_eq!(snapshot.attempts[0].status_code, Some(400));
+    assert_eq!(snapshot.attempts[1].status_code, Some(200));
+    let first = diagnostics.body_snapshot("full-continuation-attempts", BodySide::Response, 0);
+    assert_eq!(first.state, BodyState::Ready);
+    assert!(first.body.unwrap().contains("session_turn_limit_exceeded"));
+    let request = diagnostics.body_snapshot("full-continuation-attempts", BodySide::Request, 1);
+    assert_eq!(request.state, BodyState::Ready);
+    assert!(request
+        .body
+        .unwrap()
+        .contains("CC_SWITCH_HISTORY_ARCHIVE_V1"));
+    let response = diagnostics.body_snapshot("full-continuation-attempts", BodySide::Response, 1);
+    assert_eq!(response.state, BodyState::Ready);
+    assert!(response.body.unwrap().contains("completed"));
+}
+
+#[tokio::test]
 async fn session_identity_first_limit_retries_once_preserves_history_and_reuses_mapping() {
     let upstream = upstream(vec![turn_limit(), ok(), ok()]).await;
     let mut provider = provider(&upstream, Some(true));

@@ -6073,6 +6073,27 @@
     "stateInvalid": "檔案內容無效"
   },
   "requestDiagnostics": {
+    "fullRequest": "完整上游請求（去識別）",
+    "fullResponse": "完整上游回應（去識別）",
+    "loadFull": "檢視完整資料",
+    "exportFull": "匯出已擷取資料",
+    "fullScope": "完整資料依上游嘗試保留，僅存於記憶體，憑證值會遮蔽；每份上限 32 MiB，快取總計 128 MiB，讀取中共用 64 MiB 緩衝。關閉擷取、重新啟動或淘汰後無法恢復。僅精簡預覽會折疊密文。",
+    "bodyStates": {
+      "notCaptured": "Complete data was not captured for this attempt.",
+      "pending": "The response is still being read.",
+      "ready": "Complete redacted body is available to view or export.",
+      "evicted": "The record was evicted or cleared; complete data is unavailable.",
+      "tooLarge": "Body exceeded 32 MiB; a complete body was not retained.",
+      "unreadable": "Body is encoded or cannot be safely redacted.",
+      "interrupted": "Reading stopped; any available data contains only bytes received before interruption.",
+      "memoryLimit": "Concurrent capture exceeded the memory budget; a complete body was not retained."
+    },
+    "outcomes": {
+      "completed": "Received the response completion event.",
+      "failed": "Upstream reported a failure.",
+      "incomplete": "Upstream reported an incomplete response.",
+      "disconnected": "Upstream transport disconnected."
+    },
     "title": "請求診斷",
     "scope": "僅保留最近 40 次代理請求。本文預覽預設關閉，遮蔽敏感資料後僅存於記憶體，請求與回應各限 128 KiB。啟用後記錄新請求，關閉會清除預覽。",
     "capture": "請求與回應本文預覽",

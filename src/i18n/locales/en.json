@@ -6073,6 +6073,27 @@
     "stateInvalid": "File content is invalid"
   },
   "requestDiagnostics": {
+    "fullRequest": "Complete upstream request (redacted)",
+    "fullResponse": "Complete upstream response (redacted)",
+    "loadFull": "View complete data",
+    "exportFull": "Export captured data",
+    "fullScope": "Complete bodies are retained per upstream attempt, in memory only, with credentials redacted. Limits: 32 MiB per body, 128 MiB cached and 64 MiB shared in-flight buffering. Turning capture off, restarting or eviction removes them. Only the compact preview folds opaque content.",
+    "bodyStates": {
+      "notCaptured": "Complete data was not captured for this attempt.",
+      "pending": "The response is still being read.",
+      "ready": "Complete redacted body is available to view or export.",
+      "evicted": "The record was evicted or cleared; complete data is unavailable.",
+      "tooLarge": "Body exceeded 32 MiB; a complete body was not retained.",
+      "unreadable": "Body is encoded or cannot be safely redacted.",
+      "interrupted": "Reading stopped; any available data contains only bytes received before interruption.",
+      "memoryLimit": "Concurrent capture exceeded the memory budget; a complete body was not retained."
+    },
+    "outcomes": {
+      "completed": "Received the response completion event.",
+      "failed": "Upstream reported a failure.",
+      "incomplete": "Upstream reported an incomplete response.",
+      "disconnected": "Upstream transport disconnected."
+    },
     "title": "Request diagnostics",
     "scope": "Recent 40 proxy requests only. Bodies are off by default, masked in memory, and capped at 128 KiB each. Enabling capture affects future requests; turning it off clears previews.",
     "capture": "Request and response previews",
