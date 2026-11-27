@@ -256,6 +256,8 @@ async fn real_forwarder_uses_only_judge_card_then_selected_model() {
     use axum::{extract::Json, routing::post, Router};
     use serde_json::Value;
     use std::sync::{Arc, Mutex};
+    // A nextest process does not run the desktop app's TLS initialization.
+    let _ = rustls::crypto::ring::default_provider().install_default();
     let seen = Arc::new(Mutex::new(Vec::new()));
     let calls = seen.clone();
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -302,6 +304,34 @@ async fn real_forwarder_uses_only_judge_card_then_selected_model() {
         "claude",
         None,
         Some(&authed),
+    )
+    .await
+    .unwrap();
+    assert!(seen.lock().unwrap().is_empty());
+    RequestContext::new_for_operation(
+        &state,
+        &body,
+        &headers,
+        AppType::Claude,
+        "Claude",
+        "claude",
+        None,
+        None,
+        false,
+    )
+    .await
+    .unwrap();
+    let mut review = body.clone();
+    review["safeguards"] = json!({});
+    RequestContext::new(
+        &state,
+        &review,
+        &headers,
+        AppType::Claude,
+        "Claude",
+        "claude",
+        None,
+        None,
     )
     .await
     .unwrap();

@@ -296,7 +296,7 @@ fn is_warmup(body: &Value, has_anthropic_beta: bool) -> bool {
 }
 
 /// Claude Code 上下文压缩（compact）：机器特征，用户无法手动设置。对齐 copilot_optimizer。
-fn is_compact(body: &Value) -> bool {
+pub(super) fn is_compact(body: &Value) -> bool {
     let system_text = extract_system_text(body);
     if system_text
         .starts_with("You are a helpful AI assistant tasked with summarizing conversations")

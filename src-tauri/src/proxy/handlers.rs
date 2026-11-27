@@ -462,7 +462,7 @@ async fn handle_messages_for_app(
         Err(rejected) => return Ok(*rejected),
     };
 
-    let mut ctx = RequestContext::new(
+    let mut ctx = RequestContext::new_for_operation(
         &state,
         &body,
         &headers,
@@ -471,6 +471,7 @@ async fn handle_messages_for_app(
         app_type_str,
         stack,
         extensions.get::<crate::proxy::gateway_auth::AuthedKey>(),
+        uri.path().ends_with("/messages"),
     )
     .await?;
 
@@ -1615,7 +1616,10 @@ async fn handle_responses_for_app(
         Err(rejected) => return Ok(*rejected),
     };
 
-    let mut ctx = RequestContext::new(
+    let codex_tool_context = transform_codex_chat::build_codex_tool_context_from_request(&body);
+    let compaction_request = responses_endpoint == ResponsesEndpoint::Responses
+        && codex_tool_context.is_compaction_request();
+    let mut ctx = RequestContext::new_for_operation(
         &state,
         &body,
         &headers,
@@ -1624,6 +1628,7 @@ async fn handle_responses_for_app(
         app_type_str,
         stack,
         extensions.get::<crate::proxy::gateway_auth::AuthedKey>(),
+        responses_endpoint == ResponsesEndpoint::Responses && !compaction_request,
     )
     .await?;
     ctx.track_route(&extensions, &headers, &body);
@@ -1633,10 +1638,6 @@ async fn handle_responses_for_app(
         .get("stream")
         .and_then(|v| v.as_bool())
         .unwrap_or(false);
-    let codex_tool_context = transform_codex_chat::build_codex_tool_context_from_request(&body);
-    // V2 压缩回合走的是普通 `/responses`；`/responses/compact` 原样透传。
-    let compaction_request = responses_endpoint == ResponsesEndpoint::Responses
-        && codex_tool_context.is_compaction_request();
     // Captured before forwarding: the flat-name →
     // {namespace, name} map used to restore the native Responses upstream's
     // function-call names (see the namespace-restore dispatch below).
@@ -1886,7 +1887,7 @@ async fn handle_codex_standalone_passthrough(
     let body: Value = serde_json::from_slice(&body_bytes)
         .map_err(|e| ProxyError::InvalidRequest(format!("Failed to parse request body: {e}")))?;
 
-    let mut ctx = RequestContext::new(
+    let mut ctx = RequestContext::new_for_operation(
         &state,
         &body,
         &headers,
@@ -1895,6 +1896,7 @@ async fn handle_codex_standalone_passthrough(
         "codex",
         None,
         extensions.get::<crate::proxy::gateway_auth::AuthedKey>(),
+        false,
     )
     .await?;
     ctx.track_route(&extensions, &headers, &body);

@@ -141,6 +141,36 @@ impl RequestContext {
             stack,
             authed,
             None,
+            true,
+        )
+        .await
+    }
+
+    /// Auxiliary API operations (images, compaction and counting) must not
+    /// disclose their input or pay for an independent intent classification.
+    #[allow(clippy::too_many_arguments)]
+    pub(super) async fn new_for_operation(
+        state: &ProxyState,
+        body: &serde_json::Value,
+        headers: &HeaderMap,
+        app_type: AppType,
+        tag: &'static str,
+        app_type_str: &'static str,
+        stack: Option<StackTarget>,
+        authed: Option<&super::gateway_auth::AuthedKey>,
+        user_chat: bool,
+    ) -> Result<Self, ProxyError> {
+        Self::new_with_model_override(
+            state,
+            body,
+            headers,
+            app_type,
+            tag,
+            app_type_str,
+            stack,
+            authed,
+            None,
+            user_chat,
         )
         .await
     }
@@ -165,6 +195,8 @@ impl RequestContext {
             None,
             authed,
             Some(model.as_deref().unwrap_or("unknown")),
+            uri.path().ends_with(":generateContent")
+                || uri.path().ends_with(":streamGenerateContent"),
         )
         .await
     }
@@ -180,6 +212,7 @@ impl RequestContext {
         stack: Option<StackTarget>,
         authed: Option<&crate::proxy::gateway_auth::AuthedKey>,
         model_override: Option<&str>,
+        user_chat: bool,
     ) -> Result<Self, ProxyError> {
         let start_time = Instant::now();
         let route_revision = state.db.route_revision(&app_type);
@@ -371,14 +404,25 @@ impl RequestContext {
                     None
                 };
 
-                if intent_target.is_none()
+                if user_chat
+                    && intent_target.is_none()
                     && intent_cfg.enabled
                     && authed.is_none()
                     && !stack_mode
                     && !headers.contains_key(super::smart_intent::MARKER)
+                    && body.get("safeguards").is_none()
+                    && !headers
+                        .get("anthropic-beta")
+                        .and_then(|v| v.to_str().ok())
+                        .is_some_and(|v| v.contains("dangerous-tool-use"))
                     && matches!(app_type, AppType::Codex | AppType::Claude | AppType::Gemini)
                 {
-                    smart = intent_cfg.smart.filter(|cfg| cfg.enabled && cfg.valid());
+                    smart = intent_cfg.smart.filter(|cfg| {
+                        cfg.enabled
+                            && cfg.valid()
+                            && !(matches!(app_type, AppType::Claude)
+                                && super::intent_routing::is_compact(body))
+                    });
                 }
 
                 // 意图命中时，把「当前供应商」与其 id 都对齐到目标：既作为链头候选，又避免
