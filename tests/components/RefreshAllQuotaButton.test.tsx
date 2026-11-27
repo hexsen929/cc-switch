@@ -38,7 +38,7 @@ function client() {
 }
 
 describe("RefreshAllQuotaButton", () => {
-  it("refreshes active account quotas and DSH balance without querying unrelated or disabled sources", async () => {
+  it("refreshes shown quotas including manual-only rows without querying unrelated or unobserved sources", async () => {
     const queryClient = client();
     const quotas = [
       ["claude_official", "quota", "claude-a"],
@@ -62,7 +62,7 @@ describe("RefreshAllQuotaButton", () => {
       queryKey,
       queryFn: vi.fn().mockResolvedValue({}),
     }));
-    const disabled = vi.fn().mockResolvedValue({});
+    const manualRow = vi.fn().mockResolvedValue({});
     const inactive = vi.fn().mockResolvedValue({});
     await queryClient.fetchQuery({
       queryKey: ["codex_oauth", "quota", "inactive-account"],
@@ -76,8 +76,8 @@ describe("RefreshAllQuotaButton", () => {
           <Probe key={JSON.stringify(probe.queryKey)} {...probe} />
         ))}
         <Probe
-          queryKey={["claude_official", "quota", "disabled-account"]}
-          queryFn={disabled}
+          queryKey={["claude_official", "quota", "manual-account"]}
+          queryFn={manualRow}
           enabled={false}
         />
         <RefreshAllQuotaButton />
@@ -96,17 +96,18 @@ describe("RefreshAllQuotaButton", () => {
     for (const probe of [...quotas, ...unrelated]) {
       probe.queryFn.mockClear();
     }
+    expect(manualRow).not.toHaveBeenCalled();
 
     fireEvent.click(button);
     await waitFor(() => {
       for (const probe of quotas) {
         expect(probe.queryFn).toHaveBeenCalledTimes(1);
       }
+      expect(manualRow).toHaveBeenCalledTimes(1);
     });
     for (const probe of unrelated) {
       expect(probe.queryFn).not.toHaveBeenCalled();
     }
-    expect(disabled).not.toHaveBeenCalled();
     expect(inactive).not.toHaveBeenCalled();
   });
 
