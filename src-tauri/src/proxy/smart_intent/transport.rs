@@ -29,6 +29,9 @@ pub(crate) async fn classify(
         .get_provider_by_id(&classifier.provider_id, &ctx.app_type)
         .map_err(|_| ())?
         .ok_or(())?;
+    if classifier.protocol != super::Protocol::Chat {
+        return super::native::ask(ctx, state, cfg, classifier, &provider, turn, previous).await;
+    }
     let categories: Vec<_> = cfg
         .categories
         .iter()

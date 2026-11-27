@@ -206,6 +206,7 @@ async fn gateway_official_codex_is_rejected_before_native_session_access() {
     let result = forwarder
         .forward(
             &Attempt {
+                smart: None,
                 app_type: &AppType::Codex,
                 method: &http::Method::POST,
                 provider: &provider,
@@ -2500,6 +2501,7 @@ async fn codex_copilot_validates_client_model_before_runtime_lookup() {
         let error = match forwarder
             .forward(
                 &Attempt {
+                    smart: None,
                     app_type: &AppType::Codex,
                     method: &http::Method::POST,
                     provider: &copilot,

@@ -202,7 +202,7 @@ async fn unavailable_classifier_tries_backup_within_one_budget() {
     cfg.classifiers.push(Target {
         provider_id: "backup".into(),
         model: "judge".into(),
-        effort: None,
+        ..Default::default()
     });
     let engine = Engine::default();
     let t = Turn::read(&json!({"input":"hi"})).unwrap();

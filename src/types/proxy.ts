@@ -331,6 +331,8 @@ export interface IntentTarget {
   providerId: string;
   model: string;
   effort?: string | null;
+  groupId?: string | null;
+  protocol?: "chat" | "openaiDecisions" | "systemOne" | "googleDecisions";
 }
 export interface SmartIntentConfig {
   enabled: boolean;
@@ -343,6 +345,10 @@ export interface SmartIntentConfig {
   prompt: string;
   timeoutMs: number;
   keepWarm?: boolean;
+  groups?: Record<string, SmartIntentConfig>;
+  members?: IntentTarget[];
+  orderedOnly?: boolean;
+  minConfidence?: number;
 }
 
 // ==================== 局域网网关（Fork 扩展，默认关闭） ====================

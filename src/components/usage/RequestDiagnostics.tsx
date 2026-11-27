@@ -162,6 +162,21 @@ export function RequestDiagnostics({ requestId }: { requestId: string }) {
               {record.smartIntent.classifier != null &&
                 ` · ${t("smartIntent.classifier")} #${record.smartIntent.classifier}`}
               {` · ${record.smartIntent.elapsedMs} ms`}
+              {!!record.smartIntent.groups?.length && (
+                <ol className="mt-1 space-y-1">
+                  {record.smartIntent.groups.map((step) => (
+                    <li key={step.group} className="break-words">
+                      {step.group} ·{" "}
+                      {t(`smartIntent.status.${step.status}`, step.status)}
+                      {step.category != null &&
+                        ` · ${t("smartIntent.category")} #${step.category}`}
+                      {step.classifier != null &&
+                        ` · ${t("smartIntent.classifier")} #${step.classifier}`}
+                      {` · ${step.elapsedMs} ms`}
+                    </li>
+                  ))}
+                </ol>
+              )}
             </div>
           )}
           {!!record.route?.length && (

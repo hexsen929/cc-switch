@@ -33,6 +33,13 @@ export interface RequestDiagnostics {
     category: number | null;
     classifier: number | null;
     elapsedMs: number;
+    groups?: {
+      group: string;
+      status: string;
+      category: number | null;
+      classifier: number | null;
+      elapsedMs: number;
+    }[];
   };
   route?: [string, string][];
   captureBodies: boolean;

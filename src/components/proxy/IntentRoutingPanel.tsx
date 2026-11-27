@@ -17,6 +17,7 @@ import type { AppId } from "@/lib/api";
 import type { Provider } from "@/types";
 import { useProvidersQuery } from "@/lib/query/queries";
 import { SmartIntentEditor } from "./SmartIntentEditor";
+import { validateSmartGraph } from "./smartIntentGraph";
 import {
   type IntentKind,
   type IntentMatcher,
@@ -118,28 +119,12 @@ export function IntentRoutingPanel({ appType }: IntentRoutingPanelProps) {
   const handleSave = async () => {
     if (saving) return;
     if (enabled && smart?.enabled) {
-      const usable = (target: { providerId: string; model: string }) =>
-        providers.some((p) => p.id === target.providerId) &&
-        !!target.model.trim();
-      if (
-        !smart.classifiers.every(usable) ||
-        smart.categories.some(
-          (c) =>
-            !c.description.trim() ||
-            !c.targets.every(usable) ||
-            new Set(c.targets.map((t) => t.providerId)).size !==
-              c.targets.length,
-        )
-      ) {
-        toast.error(t("smartIntent.invalidTargets"));
-        return;
-      }
-      if (
-        !Number.isInteger(smart.timeoutMs) ||
-        smart.timeoutMs < 200 ||
-        smart.timeoutMs > 8000
-      ) {
-        toast.error(t("smartIntent.invalidTimeout"));
+      const error = validateSmartGraph(
+        smart,
+        providers.map((p) => p.id),
+      );
+      if (error) {
+        toast.error(t(`smartIntent.${error}`));
         return;
       }
     }

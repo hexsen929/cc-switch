@@ -3,17 +3,23 @@
 #[cfg(test)]
 mod codex_tests;
 mod engine;
+mod graph;
+#[cfg(test)]
+mod graph_tests;
+mod native;
 #[cfg(test)]
 mod tests;
 mod transport;
 mod turn;
 
 pub(crate) use engine::{Engine, Receipt, Trace};
+pub(crate) use graph::resolve;
 pub(crate) use transport::classify;
 pub(crate) use transport::MARKER;
 pub(crate) use turn::Turn;
 
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
 
 #[derive(Clone, Debug, Default, PartialEq, Eq, Hash, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", default)]
@@ -21,6 +27,19 @@ pub struct Target {
     pub provider_id: String,
     pub model: String,
     pub effort: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub group_id: Option<String>,
+    pub protocol: Protocol,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum Protocol {
+    #[default]
+    Chat,
+    OpenaiDecisions,
+    SystemOne,
+    GoogleDecisions,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq, Hash, Deserialize, Serialize)]
@@ -47,6 +66,14 @@ pub struct SmartConfig {
     pub prompt: String,
     pub timeout_ms: u64,
     pub keep_warm: bool,
+    /// The root owns the registry. Children refer to siblings by stable id,
+    /// never by serializing the referenced group inside another group.
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    pub groups: BTreeMap<String, SmartConfig>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub members: Vec<Target>,
+    pub min_confidence: u8,
+    pub ordered_only: bool,
 }
 
 impl Default for SmartConfig {
@@ -58,41 +85,25 @@ impl Default for SmartConfig {
             prompt: String::new(),
             timeout_ms: 1800,
             keep_warm: false,
+            groups: BTreeMap::new(),
+            members: Vec::new(),
+            min_confidence: 40,
+            ordered_only: false,
         }
     }
 }
 
 impl Target {
-    fn valid(&self) -> bool {
+    fn valid_leaf(&self) -> bool {
         let valid_id =
             |s: &str| !s.trim().is_empty() && s.len() <= 256 && !s.contains(char::is_control);
-        valid_id(&self.provider_id)
+        self.group_id.is_none()
+            && valid_id(&self.provider_id)
             && valid_id(&self.model)
             && self
                 .effort
                 .as_deref()
                 .is_none_or(|s| matches!(s, "" | "low" | "medium" | "high" | "xhigh"))
-    }
-}
-
-impl SmartConfig {
-    pub fn valid(&self) -> bool {
-        (200..=8000).contains(&self.timeout_ms)
-            && self.prompt.len() <= 2048
-            && (1..=3).contains(&self.classifiers.len())
-            && self.classifiers.iter().all(Target::valid)
-            && (2..=16).contains(&self.categories.len())
-            && self.categories.iter().all(|c| {
-                !c.description.trim().is_empty()
-                    && c.description.len() <= 512
-                    && (1..=8).contains(&c.targets.len())
-                    && c.targets.iter().all(Target::valid)
-                    && c.targets.iter().enumerate().all(|(i, t)| {
-                        !c.targets[..i]
-                            .iter()
-                            .any(|prev| prev.provider_id == t.provider_id)
-                    })
-            })
     }
 }
 

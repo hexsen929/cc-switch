@@ -24,6 +24,20 @@ pub(crate) struct Trace {
     pub elapsed_ms: u64,
     #[serde(skip)]
     pub(crate) receipt: Option<Receipt>,
+    #[serde(skip)]
+    pub(crate) more_receipts: Vec<Receipt>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub(crate) groups: Vec<GroupStep>,
+}
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct GroupStep {
+    pub group: String,
+    pub status: &'static str,
+    pub category: Option<usize>,
+    pub classifier: Option<usize>,
+    pub elapsed_ms: u64,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -54,6 +68,8 @@ impl Decision {
                 classifier: classifier.map(|i| i + 1),
                 elapsed_ms: 0,
                 receipt: None,
+                more_receipts: vec![],
+                groups: vec![],
             },
         }
     }

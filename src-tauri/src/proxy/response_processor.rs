@@ -938,7 +938,7 @@ async fn log_usage_internal(
     let dedup_scope = super::usage::parser::dedup_scope_for_app(app_type, provider_id);
     let request_id = usage.dedup_request_id(dedup_scope);
     if let Some(diagnostics) = diagnostics {
-        if let Some(receipt) = diagnostics.intent_receipt {
+        for &receipt in &diagnostics.intent_receipts {
             let cached = if (200..300).contains(&status_code) {
                 usage
                     .cache_read_tokens

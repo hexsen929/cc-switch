@@ -192,6 +192,7 @@ impl Drop for ActiveConnectionGuard {
 /// and its rectifier retries differ only in the body.
 #[derive(Clone, Copy)]
 struct Attempt<'a> {
+    smart: Option<&'a super::smart_intent::Target>,
     app_type: &'a AppType,
     method: &'a http::Method,
     provider: &'a Provider,
@@ -1262,7 +1263,7 @@ impl RequestForwarder {
                 d.route(&provider.name, reason);
             }
         };
-        for provider in providers.iter() {
+        for (slot, provider) in providers.iter().enumerate() {
             // 整流器重试标记：每个 provider 独立持有，避免标记跨 provider 短路故障转移
             // —— 首家 provider 整流后被 5xx/timeout 击落时，下家仍能用整流后的请求体走整流流程
             let mut rectifier_retried = false;
@@ -1353,6 +1354,10 @@ impl RequestForwarder {
             // 新「正在尝试哪个 provider」的展示字段。
             self.note_attempt(provider).await;
             let attempt = Attempt {
+                smart: self
+                    .smart_targets
+                    .get(slot)
+                    .filter(|t| t.provider_id == provider.id),
                 app_type,
                 method: &method,
                 provider,
@@ -2078,6 +2083,7 @@ impl RequestForwarder {
         mut diagnostic_attempt: Option<&mut super::diagnostics::AttemptGuard>,
     ) -> Result<(ProxyResponse, Option<String>, Option<String>), ProxyError> {
         let Attempt {
+            smart,
             app_type,
             method,
             provider,
@@ -2282,10 +2288,6 @@ impl RequestForwarder {
                     .map(str::to_owned);
             }
         }
-        let smart = self
-            .smart_targets
-            .iter()
-            .find(|t| t.provider_id == provider.id);
         if let Some(effort) = smart
             .and_then(|t| t.effort.as_deref())
             .filter(|s| !s.is_empty())

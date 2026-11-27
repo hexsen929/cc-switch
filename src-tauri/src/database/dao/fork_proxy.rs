@@ -238,15 +238,14 @@ impl Database {
         app_type: &str,
         config: &crate::proxy::intent_routing::IntentRoutingConfig,
     ) -> Result<(), AppError> {
-        if config.enabled
-            && config
-                .smart
-                .as_ref()
-                .is_some_and(|cfg| cfg.enabled && !cfg.valid())
+        if let Some(smart) = config
+            .smart
+            .as_ref()
+            .filter(|s| config.enabled && s.enabled)
         {
-            return Err(AppError::InvalidInput(
-                "Invalid smart intent classifiers, categories, or timeout".into(),
-            ));
+            smart
+                .validate_graph()
+                .map_err(|reason| AppError::InvalidInput(reason.into()))?;
         }
         let key = format!("fork_intent_routing_{app_type}");
         let json = serde_json::to_string(config)

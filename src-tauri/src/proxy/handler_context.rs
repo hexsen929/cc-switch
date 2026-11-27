@@ -654,7 +654,7 @@ impl RequestContext {
         headers: &HeaderMap,
         cfg: &super::smart_intent::SmartConfig,
     ) -> bool {
-        use super::smart_intent::{classify, Turn};
+        use super::smart_intent::{resolve, Turn};
         let Some(mut turn) = Turn::read(body) else {
             return false;
         };
@@ -665,43 +665,15 @@ impl RequestContext {
             actor.as_deref(),
             child,
         );
-        let decision = state
-            .provider_router
-            .smart_intent
-            .decide(cfg, self.app_type_str, scope, &turn, |index, previous| {
-                classify(self, state, cfg, index, &turn, previous)
-            })
-            .await;
-        let mut trace = decision.trace;
-        let Some(category) = decision.category.and_then(|i| cfg.categories.get(i)) else {
-            if let Some(d) = &mut self.diagnostics {
-                d.smart_intent(trace);
-            }
-            return false;
-        };
-        let mut selected = Vec::new();
-        for target in &category.targets {
-            if let Ok(Some(p)) = state
-                .db
-                .get_provider_by_id(&target.provider_id, &self.app_type)
-            {
-                self.smart_targets.push(target.clone());
-                selected.push(p);
-                if !self.app_config.auto_failover_enabled {
-                    break;
-                }
-            }
-        }
-        let Some(first) = selected.first() else {
-            trace.status = "missingTarget";
-            if let Some(d) = &mut self.diagnostics {
-                d.smart_intent(trace);
-            }
-            return false;
-        };
+        let plan = resolve(self, state, cfg, scope, &turn).await;
         if let Some(d) = &mut self.diagnostics {
-            d.smart_intent(trace);
+            d.smart_intent(plan.trace);
         }
+        let (targets, mut selected): (Vec<_>, Vec<_>) = plan.leaves.into_iter().unzip();
+        let Some(first) = selected.first() else {
+            return false;
+        };
+        self.smart_targets = targets;
         self.provider = first.clone();
         self.current_provider_id.clone_from(&first.id);
         if self.app_config.auto_failover_enabled {
