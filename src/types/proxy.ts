@@ -199,7 +199,11 @@ export interface ClaudeModelRoutePolicy {
 // order=队列顺序；rotate=轮询均摊；usage=最少使用优先；
 // smart=额度感知·优先最快重置；pace=额度感知·按每小时剩余额度配速
 export type ProviderRoutingStrategy =
-  "order" | "rotate" | "usage" | "smart" | "pace";
+  | "order"
+  | "rotate"
+  | "usage"
+  | "smart"
+  | "pace";
 
 export const PROVIDER_ROUTING_STRATEGIES: ProviderRoutingStrategy[] = [
   "order",
@@ -268,7 +272,11 @@ export const EMPTY_RESPONSE_MIDDLEWARE: ResponseMiddlewareConfig = {
 
 /** 意图路由（Fork 扩展）——与后端 intent_routing.rs 对齐（camelCase + tagged matcher）。 */
 export type IntentKind =
-  "background" | "thinking" | "long-context" | "web-search" | "subagent";
+  | "background"
+  | "thinking"
+  | "long-context"
+  | "web-search"
+  | "subagent";
 
 /** 按点号路径取 body 字段后做 equals / contains（两者都给时同时满足）。 */
 export interface IntentBodyFieldMatch {

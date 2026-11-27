@@ -131,6 +131,62 @@ async fn identical_concurrent_requests_share_one_classifier_call() {
 }
 
 #[tokio::test]
+async fn child_and_anonymous_tools_cannot_inherit_another_threads_last_route() {
+    let engine = Engine::default();
+    let cfg = config();
+    let judge = |_, _| ready(Ok(Some(1)));
+    let mut t = Turn::read(&json!({"input":"debug"})).unwrap();
+    let child = t.bind(Some("shared-parent"), Some("child-a"), true);
+    assert_eq!(
+        engine
+            .decide(&cfg, "codex", child, &t, judge)
+            .await
+            .category,
+        Some(1)
+    );
+    let mut tool =
+        Turn::read(&json!({"input":[{"type":"function_call_output","output":"secret"}]})).unwrap();
+    for id in [None, Some("child-b")] {
+        let other = tool.bind(Some("shared-parent"), id, id.is_some());
+        assert_eq!(
+            engine
+                .decide(&cfg, "codex", other, &tool, judge)
+                .await
+                .category,
+            None
+        );
+    }
+    let same = tool.bind(Some("shared-parent"), Some("child-a"), true);
+    assert_eq!(
+        engine
+            .decide(&cfg, "codex", same, &tool, judge)
+            .await
+            .category,
+        Some(1)
+    );
+    let anonymous = t.bind(None, None, false);
+    engine.decide(&cfg, "codex", anonymous, &t, judge).await;
+    let unknown = tool.bind(None, None, false);
+    assert!(engine
+        .decide(&cfg, "codex", unknown, &tool, judge)
+        .await
+        .category
+        .is_none());
+    let mut full = Turn::read(
+        &json!({"messages":[{"role":"user","content":"debug"},{"role":"tool","content":"text"}]}),
+    )
+    .unwrap();
+    let full_scope = full.bind(None, None, false);
+    assert_eq!(
+        engine
+            .decide(&cfg, "codex", full_scope, &full, judge)
+            .await
+            .category,
+        Some(1)
+    );
+}
+
+#[tokio::test]
 async fn unavailable_classifier_tries_backup_within_one_budget() {
     let mut cfg = config();
     cfg.timeout_ms = 200;

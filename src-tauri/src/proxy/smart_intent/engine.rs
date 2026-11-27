@@ -76,7 +76,7 @@ impl Engine {
         &self,
         cfg: &SmartConfig,
         app: &str,
-        session: &str,
+        session: impl AsRef<[u8]>,
         turn: &Turn,
         ask: F,
     ) -> Decision
@@ -87,14 +87,18 @@ impl Engine {
         let now = Instant::now();
         let revision = serde_json::to_vec(cfg).unwrap_or_default();
         let domain = fingerprint(&[app.as_bytes(), &revision]);
-        let thread = fingerprint(&[&domain, session.as_bytes()]);
+        let thread = fingerprint(&[&domain, session.as_ref()]);
         let key = fingerprint(&[&thread, &turn.fingerprint]);
         let (cell, previous) = {
             let mut st = self.state.lock_recover();
             st.turns.retain(|_, v| v.0.elapsed() < KEEP);
             st.previous.retain(|_, v| v.0.elapsed() < KEEP);
             st.failed.retain(|_, at| at.elapsed() < REST);
-            let previous = st.previous.get(&thread).and_then(|v| v.1);
+            let previous = if turn.exact_only {
+                None
+            } else {
+                st.previous.get(&thread).and_then(|v| v.1)
+            };
             if turn.within {
                 let held = st
                     .turns
@@ -125,7 +129,7 @@ impl Engine {
                 if let Some(old) = st
                     .turns
                     .iter()
-                    .filter(|(_, v)| v.1.initialized())
+                    .filter(|(_, v)| v.1.initialized() || Arc::strong_count(&v.1) == 1)
                     .min_by_key(|(_, v)| v.0)
                     .map(|(k, _)| *k)
                 {

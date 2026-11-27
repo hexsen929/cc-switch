@@ -395,6 +395,7 @@ fn test_forwarder(
         request_middleware: crate::proxy::request_middleware::RequestMiddlewareConfig::default(),
         request_rewrite: crate::proxy::request_rewrite::RequestRewriteConfig::default(),
         intent_model: None,
+        smart_targets: Vec::new(),
         response_middleware: crate::proxy::response_middleware::ResponseMiddlewareConfig::default(),
         pii_redaction: crate::proxy::pii_redaction::PiiRedactionConfig::default(),
         reliability: crate::proxy::reliability::ReliabilityConfig::default(),

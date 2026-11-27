@@ -593,7 +593,7 @@ impl RequestContext {
             gateway_key_id: authed.map(|ak| ak.id.clone()),
         };
         if let Some(cfg) = smart {
-            if ctx.apply_smart(state, body, &cfg).await {
+            if ctx.apply_smart(state, body, headers, &cfg).await {
                 selection_reason = "smartIntent";
             }
         }
@@ -607,22 +607,26 @@ impl RequestContext {
         &mut self,
         state: &ProxyState,
         body: &serde_json::Value,
+        headers: &HeaderMap,
         cfg: &super::smart_intent::SmartConfig,
     ) -> bool {
         use super::smart_intent::{classify, Turn};
-        let Some(turn) = Turn::read(body) else {
+        let Some(mut turn) = Turn::read(body) else {
             return false;
         };
+        let (actor, child) = super::route_activity::intent_actor(self.app_type_str, headers, body);
+        let scope = turn.bind(
+            self.session_client_provided
+                .then_some(self.session_id.as_str()),
+            actor.as_deref(),
+            child,
+        );
         let decision = state
             .provider_router
             .smart_intent
-            .decide(
-                cfg,
-                self.app_type_str,
-                &self.session_id,
-                &turn,
-                |index, previous| classify(self, state, cfg, index, &turn, previous),
-            )
+            .decide(cfg, self.app_type_str, scope, &turn, |index, previous| {
+                classify(self, state, cfg, index, &turn, previous)
+            })
             .await;
         if let Some(d) = &self.diagnostics {
             d.smart_intent(decision.trace);

@@ -11,6 +11,8 @@ pub(crate) struct Turn {
     pub reply: String,
     pub fingerprint: [u8; 32],
     pub within: bool,
+    root: [u8; 32],
+    pub(super) exact_only: bool,
 }
 
 fn clip(s: &str, head: usize, tail: usize) -> String {
@@ -100,6 +102,25 @@ fn visible(content: &Value, user: bool) -> String {
 }
 
 impl Turn {
+    pub(crate) fn bind(
+        &mut self,
+        session: Option<&str>,
+        actor: Option<&str>,
+        child: bool,
+    ) -> [u8; 32] {
+        self.exact_only = actor.is_none() && (session.is_none() || child);
+        if self.exact_only {
+            // Matching complete histories can reuse their decision. Never use a
+            // "last turn" guess for two unidentified sessions or sibling agents.
+            fingerprint(&[b"history", session.unwrap_or("").as_bytes(), &self.root])
+        } else {
+            fingerprint(&[
+                b"session",
+                session.unwrap_or("").as_bytes(),
+                actor.unwrap_or("").as_bytes(),
+            ])
+        }
+    }
     pub(crate) fn read(body: &Value) -> Option<Self> {
         if let Some(s) = body.get("input").and_then(Value::as_str) {
             let text = clip(own_words(s), 3000, 1000);
@@ -109,6 +130,7 @@ impl Turn {
                     .and_then(Value::as_str)
                     .unwrap_or("");
                 Self {
+                    root: fingerprint(&[text.as_bytes()]),
                     fingerprint: fingerprint(&[
                         parent.as_bytes(),
                         &1u64.to_le_bytes(),
@@ -126,11 +148,18 @@ impl Turn {
             .find_map(|k| body.get(*k)?.as_array())?;
         let mut turns = VecDeque::with_capacity(2);
         let mut count = 0u64;
+        let mut root = [0; 32];
         let mut reply = String::new();
         let mut within = false;
         for item in items {
             let kind = item.get("type").and_then(Value::as_str).unwrap_or("");
-            let role = item.get("role").and_then(Value::as_str).unwrap_or("");
+            let role = item.get("role").and_then(Value::as_str).unwrap_or_else(|| {
+                if item.get("parts").is_some() {
+                    "user"
+                } else {
+                    ""
+                }
+            });
             if role == "tool"
                 || kind.ends_with("_call_output")
                 || matches!(kind, "function_call" | "custom_tool_call" | "reasoning")
@@ -154,6 +183,9 @@ impl Turn {
                 let text = visible(content, true);
                 if text.is_empty() {
                     continue;
+                }
+                if count == 0 {
+                    root = fingerprint(&[text.as_bytes()]);
                 }
                 if turns.len() == 2 {
                     turns.pop_front();
@@ -182,6 +214,8 @@ impl Turn {
             .and_then(Value::as_str)
             .unwrap_or("");
         Some(Self {
+            root,
+            exact_only: false,
             fingerprint: fingerprint(&[
                 parent.as_bytes(),
                 &count.to_le_bytes(),

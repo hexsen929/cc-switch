@@ -104,6 +104,18 @@ fn caller(app: &str, headers: &HeaderMap, body: &Value) -> Caller {
     result
 }
 
+/// Routing identity, not a display label: a child may share its parent's session header.
+pub(super) fn intent_actor(app: &str, headers: &HeaderMap, body: &Value) -> (Option<String>, bool) {
+    let who = caller(app, headers, body);
+    let field = |name| headers.get(name).and_then(|s| s.to_str().ok());
+    let explicit = match app {
+        "claude" => label(field("x-claude-code-agent-id"), 128),
+        "codex" => label(field("thread-id"), 128),
+        _ => None,
+    };
+    (who.agent_id.or(explicit), who.kind.is_some())
+}
+
 #[derive(Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct RouteRow {
