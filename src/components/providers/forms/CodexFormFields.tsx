@@ -1505,7 +1505,7 @@ export function CodexFormFields({
   // service_tier=priority。Chat、Anthropic 转换会把它转给不认的上游，Copilot 走自己的目录，
   // 都只给原生 Responses；聚合布局不显示（合并目录不看卡上的设置）。
   // 这一档只加在模型列表的行上：没有列表时既不生成目录、保存也不会存这个设置，开关就锁住并说明。
-  const speedTiersNeedCatalog = autoReviewChoices.length === 0;
+  const speedTiersNeedCatalog = !catalogRows.some((row) => row.model.trim());
   const officialSpeedTiersToggle = onOfficialSpeedTiersChange &&
     !isCopilotPreset &&
     effectiveApiFormat === "openai_responses" && (
