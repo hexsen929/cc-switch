@@ -4,6 +4,7 @@ use crate::{
     proxy::{handler_context::RequestContext, server::ProxyState},
 };
 use std::{
+    borrow::Cow,
     collections::{HashMap, HashSet},
     time::Duration,
 };
@@ -22,6 +23,9 @@ impl SmartConfig {
         if self.groups.len() > MAX_GROUPS {
             return Err("too many routing groups (max 16)");
         }
+        if self.decision_pool {
+            return Err("main group must route answers");
+        }
         for (key, node) in &self.groups {
             if key.is_empty()
                 || key.trim() != key
@@ -35,8 +39,9 @@ impl SmartConfig {
             }
         }
         for node in std::iter::once(self).chain(self.groups.values()) {
-            let static_group =
-                node.ordered_only || node.classifiers.is_empty() && node.categories.is_empty();
+            let static_group = node.decision_pool
+                || node.ordered_only
+                || node.classifiers.is_empty() && node.categories.is_empty();
             if static_group && node.members.is_empty() {
                 return Err("an ordered group needs at least one member");
             }
@@ -50,9 +55,6 @@ impl SmartConfig {
             {
                 return Err("invalid group settings, timeout, classifier or category count");
             }
-            if !static_group && !node.classifiers.iter().all(Target::valid_leaf) {
-                return Err("invalid classifier card or model");
-            }
             for category in node.categories.iter().filter(|_| !static_group) {
                 if category.description.trim().is_empty()
                     || category.description.len() > 512
@@ -61,15 +63,33 @@ impl SmartConfig {
                     return Err("invalid category description or targets");
                 }
             }
-            for t in node.members.iter().chain(
-                node.categories
-                    .iter()
-                    .filter(|_| !static_group)
-                    .flat_map(|c| &c.targets),
-            ) {
+            let refs = node
+                .members
+                .iter()
+                .map(|t| (t, node.decision_pool))
+                .chain(
+                    node.categories
+                        .iter()
+                        .filter(|_| !static_group)
+                        .flat_map(|c| &c.targets)
+                        .map(|t| (t, false)),
+                )
+                .chain(
+                    node.classifiers
+                        .iter()
+                        .filter(|_| !static_group)
+                        .map(|t| (t, true)),
+                );
+            for (t, judge) in refs {
                 if let Some(id) = &t.group_id {
-                    if !self.groups.contains_key(id) {
-                        return Err("referenced routing group does not exist");
+                    let child = self
+                        .groups
+                        .get(id)
+                        .ok_or("referenced routing group does not exist")?;
+                    if child.decision_pool != judge {
+                        return Err(
+                            "classifier pools and answer groups cannot substitute for each other",
+                        );
                     }
                     if !t.provider_id.is_empty()
                         || !t.model.is_empty()
@@ -78,8 +98,8 @@ impl SmartConfig {
                     {
                         return Err("a group reference cannot also specify a leaf model");
                     }
-                } else if !t.valid_leaf() || t.protocol != Protocol::Chat {
-                    return Err("invalid answer card or model");
+                } else if !t.valid_leaf() || !judge && t.protocol != Protocol::Chat {
+                    return Err("invalid card or model");
                 }
             }
         }
@@ -103,8 +123,13 @@ impl SmartConfig {
                 .chain(
                     node.categories
                         .iter()
-                        .filter(|_| !node.ordered_only)
+                        .filter(|_| !node.ordered_only && !node.decision_pool)
                         .flat_map(|c| &c.targets),
+                )
+                .chain(
+                    node.classifiers
+                        .iter()
+                        .filter(|_| !node.ordered_only && !node.decision_pool),
                 )
                 .filter_map(|t| t.group_id.as_deref())
             {
@@ -122,7 +147,49 @@ impl SmartConfig {
         for (id, g) in &self.groups {
             height(id, g, self, &mut visiting, &mut known)?;
         }
+        for g in std::iter::once(self)
+            .chain(self.groups.values())
+            .filter(|g| !g.ordered_only && !g.decision_pool)
+        {
+            if self.with_classifiers(g).classifiers.len() > 16 {
+                return Err("more than 16 distinct classifiers after expanding pools");
+            }
+        }
         Ok(())
+    }
+
+    /// Keep the parent question and confidence threshold. A pool changes only
+    /// which card answers that question. Expand each pool and unique leaf once.
+    fn with_classifiers<'a>(&'a self, node: &'a Self) -> Cow<'a, Self> {
+        if !node.classifiers.iter().any(|t| t.group_id.is_some()) {
+            return Cow::Borrowed(node);
+        }
+        let mut pending: Vec<_> = node.classifiers.iter().rev().collect();
+        let mut pools = HashSet::new();
+        let mut seen = HashSet::new();
+        let mut classifiers = Vec::new();
+        while let Some(t) = pending.pop() {
+            if let Some(id) = &t.group_id {
+                if pools.insert(id) {
+                    if let Some(pool) = self.groups.get(id).filter(|g| g.decision_pool && g.enabled)
+                    {
+                        pending.extend(pool.members.iter().rev());
+                    }
+                }
+            } else if seen.insert((&t.provider_id, &t.model, t.protocol)) {
+                classifiers.push(t.clone());
+            }
+        }
+        Cow::Owned(Self {
+            enabled: true,
+            classifiers,
+            categories: node.categories.clone(),
+            prompt: node.prompt.clone(),
+            timeout_ms: node.timeout_ms,
+            keep_warm: node.keep_warm,
+            min_confidence: node.min_confidence,
+            ..Default::default()
+        })
     }
 }
 
@@ -152,7 +219,7 @@ pub(crate) async fn resolve(
     while let Some(w) = work.pop() {
         match w {
             Work::Node(id, cfg) => {
-                if !seen_groups.insert(id) || !cfg.enabled {
+                if !seen_groups.insert(id) || !cfg.enabled || cfg.decision_pool {
                     continue;
                 }
                 let scope_name = format!("{}:{id}", ctx.app_type_str);
@@ -161,16 +228,15 @@ pub(crate) async fn resolve(
                 } else {
                     // A child does not acquire a fresh full timeout, even on a
                     // classifier failure or a list of nested fallback groups.
-                    let pending = state.provider_router.smart_intent.decide(
-                        cfg,
-                        &scope_name,
-                        scope,
-                        turn,
-                        |i, prev| classify(ctx, state, cfg, i, turn, prev),
-                    );
-                    tokio::time::timeout_at(deadline, pending)
+                    let effective = root.with_classifiers(cfg);
+                    let node = effective.as_ref();
+                    state
+                        .provider_router
+                        .smart_intent
+                        .decide_until(node, &scope_name, scope, turn, deadline, |i, prev| {
+                            classify(ctx, state, node, i, turn, prev)
+                        })
                         .await
-                        .unwrap_or_else(|_| Decision::new("timeout", None, None))
                 };
                 let chosen = result.category.and_then(|i| cfg.categories.get(i));
                 if id == ROOT {

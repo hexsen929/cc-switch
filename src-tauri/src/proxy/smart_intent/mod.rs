@@ -74,6 +74,8 @@ pub struct SmartConfig {
     pub members: Vec<Target>,
     pub min_confidence: u8,
     pub ordered_only: bool,
+    /// A named pool supplies fallback classifiers, never answer models.
+    pub decision_pool: bool,
 }
 
 impl Default for SmartConfig {
@@ -89,6 +91,7 @@ impl Default for SmartConfig {
             members: Vec::new(),
             min_confidence: 40,
             ordered_only: false,
+            decision_pool: false,
         }
     }
 }

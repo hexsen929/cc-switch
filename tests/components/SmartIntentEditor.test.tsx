@@ -54,6 +54,27 @@ describe("smart intent settings", () => {
     expect(
       screen.getByRole("button", { name: "smartIntent.removeGroup" }),
     ).toBeDisabled();
+    fireEvent.change(screen.getByLabelText("smartIntent.groupName"), {
+      target: { value: "judges" },
+    });
+    fireEvent.click(
+      screen.getByRole("button", { name: "smartIntent.addGroup" }),
+    );
+    fireEvent.click(
+      screen.getByRole("switch", { name: "smartIntent.decisionPool" }),
+    );
+    fireEvent.change(screen.getByLabelText("smartIntent.protocol"), {
+      target: { value: "openaiDecisions" },
+    });
+    fireEvent.change(
+      screen.getByRole("combobox", { name: "smartIntent.group" }),
+      { target: { value: "" } },
+    );
+    fireEvent.change(screen.getAllByLabelText("smartIntent.provider")[0], {
+      target: { value: "group:judges" },
+    });
+    expect(last?.classifiers[0].groupId).toBe("judges");
+    expect(last?.groups?.judges.members?.[0].protocol).toBe("openaiDecisions");
   });
   it("validates even detached cycles, unknown references and missing members", () => {
     const node = (g: string): SmartIntentConfig => ({
@@ -76,6 +97,8 @@ describe("smart intent settings", () => {
       { providerId: "card", model: "two" },
     ];
     expect(validateSmartGraph(cfg, ["card"])).toBeUndefined();
+    cfg.groups.dev.decisionPool = true;
+    expect(validateSmartGraph(cfg, ["card"])).toBe("poolType");
   });
   it("starts off and edits classifications separately from the classifier", () => {
     let last: SmartIntentConfig | undefined;

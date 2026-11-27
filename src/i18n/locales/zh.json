@@ -6161,6 +6161,9 @@
     }
   },
   "smartIntent": {
+    "decisionPool": "用作分类器池",
+    "poolMembers": "分类器池成员（从上到下尝试）",
+    "poolType": "回答目标只能引用回答组，分类器只能引用分类器池。",
     "group": "路由组",
     "root": "主组",
     "groupName": "新组名",

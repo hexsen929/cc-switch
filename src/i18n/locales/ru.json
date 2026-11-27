@@ -6159,6 +6159,9 @@
     }
   },
   "smartIntent": {
+    "decisionPool": "Use as a classifier pool",
+    "poolMembers": "Classifiers in fallback order",
+    "poolType": "Use answer groups for answers and classifier pools for classification.",
     "group": "Routing group",
     "root": "Main group",
     "groupName": "New group name",

@@ -5,6 +5,7 @@ export function validateSmartGraph(
   cards: string[],
 ): string | undefined {
   const groups = new Map(Object.entries(root.groups ?? {}));
+  if (root.decisionPool) return "poolType";
   if (groups.size > 16) return "groupLimit";
   const edges = new Map<string, string[]>();
   for (const [id, node] of [["$root", root] as const, ...groups]) {
@@ -21,23 +22,34 @@ export function validateSmartGraph(
     if (!Number.isInteger(threshold) || threshold < 0 || threshold > 100)
       return "invalidConfidence";
     const fixed =
-      node.orderedOnly || (!node.classifiers.length && !node.categories.length);
+      node.decisionPool ||
+      node.orderedOnly ||
+      (!node.classifiers.length && !node.categories.length);
     if (fixed && !node.members?.length) return "emptyGroup";
     if (
       !fixed &&
       (!node.classifiers.length ||
-        !node.classifiers.every(leaf) ||
         node.categories.length < 2 ||
         node.categories.some((c) => !c.description.trim() || !c.targets.length))
     )
       return "invalidTargets";
-    const targets = [
-      ...(node.members ?? []),
-      ...(fixed ? [] : node.categories.flatMap((c) => c.targets)),
+    const targets: [IntentTarget, boolean][] = [
+      ...(node.members ?? []).map(
+        (t) => [t, !!node.decisionPool] as [IntentTarget, boolean],
+      ),
+      ...(fixed
+        ? []
+        : node.categories.flatMap((c) =>
+            c.targets.map((t) => [t, false] as [IntentTarget, boolean]),
+          )),
+      ...(fixed
+        ? []
+        : node.classifiers.map((t) => [t, true] as [IntentTarget, boolean])),
     ];
-    for (const t of targets) {
+    for (const [t, judge] of targets) {
       if (t.groupId) {
         if (!groups.has(t.groupId)) return "missingGroup";
+        if (!!groups.get(t.groupId)?.decisionPool !== judge) return "poolType";
         next.push(t.groupId);
       } else if (!leaf(t)) return "invalidTargets";
     }

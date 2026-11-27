@@ -348,6 +348,7 @@ export interface SmartIntentConfig {
   groups?: Record<string, SmartIntentConfig>;
   members?: IntentTarget[];
   orderedOnly?: boolean;
+  decisionPool?: boolean;
   minConfidence?: number;
 }
 

@@ -218,6 +218,37 @@ async fn unavailable_classifier_tries_backup_within_one_budget() {
 }
 
 #[tokio::test]
+async fn exhausted_parent_deadline_reuses_child_decision_without_a_new_lookup() {
+    let store = Engine::default();
+    let config = config();
+    let t = Turn::read(&json!({"input":"bug"})).unwrap();
+    assert_eq!(
+        store
+            .decide(&config, "codex:child", "s", &t, |_, _| ready(Ok(Some(1))))
+            .await
+            .category,
+        Some(1)
+    );
+    let t = Turn::read(&json!({"input":"continue"})).unwrap();
+    let calls = AtomicUsize::new(0);
+    let v = store
+        .decide_until(
+            &config,
+            "codex:child",
+            "s",
+            &t,
+            tokio::time::Instant::now(),
+            |_, _| {
+                calls.fetch_add(1, Ordering::SeqCst);
+                ready(Ok(None))
+            },
+        )
+        .await;
+    assert_eq!(calls.load(Ordering::SeqCst), 0);
+    assert_eq!((v.category, v.trace.status), (Some(1), "previous"));
+}
+
+#[tokio::test]
 async fn a_downgrade_requires_recent_observed_cache_on_the_actual_hard_model() {
     for (provider, model, cached, expected) in [
         ("b", "large", 2048, 1),

@@ -8,6 +8,8 @@ import type { IntentTarget, SmartIntentConfig } from "@/types/proxy";
 import type { Provider } from "@/types";
 
 const blank = (): IntentTarget => ({ providerId: "", model: "" });
+const owns = (obj: object, key: string) =>
+  Object.prototype.hasOwnProperty.call(obj, key);
 const selectClass =
   "min-w-0 rounded-md border border-border bg-surface px-2 py-1 text-xs";
 
@@ -40,7 +42,7 @@ export function SmartIntentEditor({
   };
   const root = value ?? initial;
   const groups = root.groups ?? {};
-  const id = selected && Object.hasOwn(groups, selected) ? selected : "";
+  const id = selected && owns(groups, selected) ? selected : "";
   const cfg = id ? groups[id] : root;
   const update = (patch: Partial<SmartIntentConfig>) =>
     id
@@ -50,16 +52,18 @@ export function SmartIntentEditor({
   const canAdd =
     groupName.length > 0 &&
     !groupName.startsWith("$") &&
-    !Object.hasOwn(Object.prototype, groupName) &&
-    !Object.hasOwn(groups, groupName) &&
+    !owns(Object.prototype, groupName) &&
+    !owns(groups, groupName) &&
     new TextEncoder().encode(groupName).length <= 96 &&
     Object.keys(groups).length < 16;
   const inUse =
     !!id &&
     [root, ...Object.values(groups)].some((g) =>
-      [...(g.members ?? []), ...g.categories.flatMap((c) => c.targets)].some(
-        (t) => t.groupId === id,
-      ),
+      [
+        ...(g.members ?? []),
+        ...g.classifiers,
+        ...g.categories.flatMap((c) => c.targets),
+      ].some((t) => t.groupId === id),
     );
   const category = (
     i: number,
@@ -116,14 +120,15 @@ export function SmartIntentEditor({
                   {p.name}
                 </option>
               ))}
-              {!classifier &&
-                Object.keys(groups)
-                  .filter((k) => k !== id)
-                  .map((k) => (
-                    <option key={"g:" + k} value={"group:" + k}>
-                      {t("smartIntent.group")} · {k}
-                    </option>
-                  ))}
+              {Object.keys(groups)
+                .filter(
+                  (k) => k !== id && !!groups[k].decisionPool === classifier,
+                )
+                .map((k) => (
+                  <option key={"g:" + k} value={"group:" + k}>
+                    {t("smartIntent.group")} · {k}
+                  </option>
+                ))}
             </select>
             {!row.groupId && (
               <Input
@@ -135,7 +140,7 @@ export function SmartIntentEditor({
                 onChange={(e) => edit({ model: e.target.value.trim() })}
               />
             )}
-            {classifier && (
+            {classifier && !row.groupId && (
               <select
                 className={selectClass}
                 value={row.protocol ?? "chat"}
@@ -193,7 +198,7 @@ export function SmartIntentEditor({
           </div>
         );
       })}
-      {list.length < (classifier ? 3 : 8) && (
+      {list.length < (optional ? 16 : classifier ? 3 : 8) && (
         <Button
           type="button"
           variant="neutral"
@@ -294,22 +299,45 @@ export function SmartIntentEditor({
               </Button>
             )}
           </div>
-          <label className="flex items-center justify-between gap-2 text-caption">
-            {t("smartIntent.ordered")}
-            <Switch
-              checked={!!cfg.orderedOnly}
-              onCheckedChange={(orderedOnly) =>
-                update({
-                  orderedOnly,
-                  members:
-                    orderedOnly && !cfg.members?.length
-                      ? [blank()]
-                      : cfg.members,
-                })
-              }
-            />
-          </label>
-          {!cfg.orderedOnly && (
+          {id && (
+            <label className="flex items-center justify-between gap-2 text-caption">
+              {t("smartIntent.decisionPool")}
+              <Switch
+                checked={!!cfg.decisionPool}
+                disabled={
+                  inUse ||
+                  cfg.members?.some(
+                    (t) => !!(t.groupId || t.providerId || t.model),
+                  )
+                }
+                onCheckedChange={(decisionPool) =>
+                  update({
+                    decisionPool,
+                    orderedOnly: true,
+                    members: cfg.members?.length ? cfg.members : [blank()],
+                  })
+                }
+              />
+            </label>
+          )}
+          {!cfg.decisionPool && (
+            <label className="flex items-center justify-between gap-2 text-caption">
+              {t("smartIntent.ordered")}
+              <Switch
+                checked={!!cfg.orderedOnly}
+                onCheckedChange={(orderedOnly) =>
+                  update({
+                    orderedOnly,
+                    members:
+                      orderedOnly && !cfg.members?.length
+                        ? [blank()]
+                        : cfg.members,
+                  })
+                }
+              />
+            </label>
+          )}
+          {!cfg.orderedOnly && !cfg.decisionPool && (
             <>
               <label className="flex items-center justify-between gap-2 text-caption">
                 {t("smartIntent.keepWarm")}
@@ -327,7 +355,7 @@ export function SmartIntentEditor({
                 true,
               )}
               {cfg.classifiers.some(
-                (c) => c.protocol && c.protocol !== "chat",
+                (c) => c.groupId || (c.protocol && c.protocol !== "chat"),
               ) && (
                 <label className="block text-caption">
                   {t("smartIntent.confidence")}
@@ -430,12 +458,16 @@ export function SmartIntentEditor({
             </>
           )}
           <div className="text-caption font-semibold">
-            {t("smartIntent.members")}
+            {t(
+              cfg.decisionPool
+                ? "smartIntent.poolMembers"
+                : "smartIntent.members",
+            )}
           </div>
           {rows(
             cfg.members ?? [],
             (members) => update({ members }),
-            false,
+            !!cfg.decisionPool,
             true,
           )}
           <label className="block text-caption">

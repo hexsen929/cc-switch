@@ -123,6 +123,7 @@ impl Engine {
     }
     /// The caller owns authorization, request normalization and transport. Cache only
     /// hashes and category indexes. Single-flight is scoped to the app/session/config.
+    #[cfg(test)]
     pub(crate) async fn decide<F, Fut>(
         &self,
         cfg: &SmartConfig,
@@ -135,6 +136,32 @@ impl Engine {
         F: Fn(usize, Option<usize>) -> Fut,
         Fut: Future<Output = Result<Option<usize>, ()>>,
     {
+        self.decide_until(
+            cfg,
+            app,
+            session,
+            turn,
+            tokio::time::Instant::now() + Duration::from_millis(cfg.timeout_ms),
+            ask,
+        )
+        .await
+    }
+
+    pub(crate) async fn decide_until<F, Fut>(
+        &self,
+        cfg: &SmartConfig,
+        app: &str,
+        session: impl AsRef<[u8]>,
+        turn: &Turn,
+        shared_deadline: tokio::time::Instant,
+        ask: F,
+    ) -> Decision
+    where
+        F: Fn(usize, Option<usize>) -> Fut,
+        Fut: Future<Output = Result<Option<usize>, ()>>,
+    {
+        let start = tokio::time::Instant::now();
+        let deadline = shared_deadline.min(start + Duration::from_millis(cfg.timeout_ms));
         let now = Instant::now();
         let revision = serde_json::to_vec(cfg).unwrap_or_default();
         let domain = fingerprint(&[app.as_bytes(), &revision]);
@@ -209,8 +236,6 @@ impl Engine {
                 .clone();
             (cell, previous)
         };
-        let max_wait = Duration::from_millis(cfg.timeout_ms);
-        let start = tokio::time::Instant::now();
         let value = cell.get_or_init(|| async {
             let Ok(_permit) = self.slots.try_acquire() else {
                 return Decision::new("busy", previous, None);
@@ -229,6 +254,7 @@ impl Engine {
                     &domain,
                     target.provider_id.as_bytes(),
                     target.model.as_bytes(),
+                    &[target.protocol as u8],
                 ]);
                 if self
                     .state
@@ -239,7 +265,7 @@ impl Engine {
                 {
                     continue;
                 }
-                let remaining = max_wait.saturating_sub(start.elapsed());
+                let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
                 if remaining.is_zero() {
                     break;
                 }
@@ -317,7 +343,7 @@ impl Engine {
         });
         // A cancelled leader releases its OnceCell. A waiter never inherits a new
         // full timeout: the deadline is from admission of its own request.
-        tokio::time::timeout_at(start + max_wait + Duration::from_millis(5), value)
+        tokio::time::timeout_at(deadline + Duration::from_millis(5), value)
             .await
             .cloned()
             .unwrap_or_else(|_| Decision::new("timeout", previous, None))

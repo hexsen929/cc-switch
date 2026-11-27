@@ -19,6 +19,10 @@ fn ordered(members: Vec<Value>) -> Value {
     json!({"enabled":true,"orderedOnly":true,"members":members})
 }
 
+fn judges(members: Vec<Value>) -> Value {
+    json!({"enabled":true,"decisionPool":true,"members":members})
+}
+
 #[test]
 fn validates_dag_including_unreachable_groups_and_long_shared_paths() {
     let mut root = ordered(vec![group_ref("a"), group_ref("b")]);
@@ -51,6 +55,15 @@ fn validates_dag_including_unreachable_groups_and_long_shared_paths() {
         validate(&chain),
         Err("routing groups exceed maximum depth (8)")
     );
+    let mut cross = ordered(vec![group_ref("judges")]);
+    cross["groups"] = json!({"judges":judges(vec![leaf("p","judge")])});
+    assert_eq!(
+        validate(&cross),
+        Err("classifier pools and answer groups cannot substitute for each other")
+    );
+    cross["members"] = json!([leaf("p", "answer")]);
+    cross["groups"]["judges"] = judges(vec![group_ref("judges")]);
+    assert_eq!(validate(&cross), Err("routing group reference cycle"));
 }
 
 #[tokio::test]
@@ -69,6 +82,7 @@ async fn nested_native_choices_retain_per_attempt_model_and_tool_turn() {
             let credential=h.get("x-goog-api-key").or_else(||h.get("authorization")).and_then(|v|v.to_str().ok()).unwrap_or("");
             seen.lock().unwrap().push((path.to_owned(),v.clone(),credential.into()));
             let result=match path {
+                "/v1/decisions" if v["model"]=="refuses"=> json!({"answers":[{"name":"intent","type":"refusal"}]}),
                 "/v1/decisions" if v["questions"][0]["name"]=="intent" && v["input"][0]["content"][0]["type"]=="input_json" =>
                     json!({"answers":[{"name":"intent","type":"choice","choice":"2","confidence":0.94}]}),
                 "/v1/systemone" if v["state"]["message"]=="investigate" && v["questions"]["intent"]["criteria"]["2"]=="debug" =>
@@ -182,8 +196,15 @@ async fn nested_native_choices_retain_per_attempt_model_and_tool_turn() {
         assert_eq!(r[3].1["model"], "backup");
         assert!(!r[0].1.to_string().contains("PRIVATE"));
     }
-    root["classifiers"] =
-        json!([{"providerId":"google","model":"google-decision","protocol":"googleDecisions"}]);
+    root["classifiers"] = json!([group_ref("judges")]);
+    root["groups"]["google-pool"] = judges(vec![
+        json!({"providerId":"google","model":"google-decision","protocol":"googleDecisions"}),
+    ]);
+    root["groups"]["judges"] = judges(vec![
+        json!({"providerId":"outer","model":"refuses","protocol":"openaiDecisions"}),
+        group_ref("google-pool"),
+        group_ref("google-pool"),
+    ]);
     save(&root);
     RequestContext::new(
         &state,
@@ -198,8 +219,20 @@ async fn nested_native_choices_retain_per_attempt_model_and_tool_turn() {
     .await
     .unwrap();
     let locked = calls.lock().unwrap();
+    assert_eq!(locked.len(), 6);
+    assert_eq!(locked[4].0, "/v1/decisions");
+    assert_eq!(locked[4].1["model"], "refuses");
+    assert_eq!(locked[4].2, "Bearer key-outer");
     let last = locked.last().unwrap();
     assert_eq!(last.0, "/v1beta/decisions");
     assert_eq!(last.2, "key-google");
+    assert_eq!(
+        locked[4].1["input"][0]["content"][0]["data"]["message"],
+        "quick"
+    );
+    assert_eq!(
+        serde_json::from_str::<Value>(last.1["input"].as_str().unwrap()).unwrap()["message"],
+        "quick"
+    );
     server.abort();
 }
