@@ -62,7 +62,7 @@ impl Decision {
 #[derive(Default)]
 struct State {
     turns: HashMap<Key, (Instant, Arc<OnceCell<Decision>>)>,
-    previous: HashMap<Key, (Instant, Option<usize>)>,
+    previous: HashMap<Key, (Instant, Option<usize>, Key)>,
     failed: HashMap<Key, Instant>,
     warm: HashMap<Key, (Instant, Receipt)>,
 }
@@ -93,7 +93,7 @@ impl Engine {
         if st
             .previous
             .get(&ticket.thread)
-            .is_none_or(|(at, _)| *at != ticket.generation)
+            .is_none_or(|v| v.0 != ticket.generation)
         {
             return;
         }
@@ -153,6 +153,16 @@ impl Engine {
                     category,
                     None,
                 );
+            }
+            // A client can send a single user string with no response/turn id.
+            // "continue" after a different task is a new judgment, not a replay
+            // of the identical word from several turns ago.
+            if turn.unanchored
+                && !turn.exact_only
+                && st.previous.get(&thread).is_some_and(|v| v.2 != key)
+                && st.turns.get(&key).is_some_and(|v| v.1.initialized())
+            {
+                st.turns.remove(&key);
             }
             if let Some((_, cell)) = st.turns.get(&key) {
                 if let Some(previous) = cell.get() {
@@ -253,7 +263,7 @@ impl Engine {
                                 && st
                                     .previous
                                     .get(&thread)
-                                    .is_some_and(|(at, _)| *at == r.generation)
+                                    .is_some_and(|v| v.0 == r.generation)
                         })
                     {
                         decision.category = Some(prev);
@@ -284,8 +294,8 @@ impl Engine {
                     st.previous.remove(&k);
                 }
             }
-            if st.previous.get(&thread).is_none_or(|(at, _)| *at <= now) {
-                st.previous.insert(thread, (now, decision.category));
+            if st.previous.get(&thread).is_none_or(|v| v.0 <= now) {
+                st.previous.insert(thread, (now, decision.category, key));
             }
             decision
         });

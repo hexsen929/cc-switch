@@ -1,5 +1,7 @@
 //! Optional, turn-scoped routing. Only an administrator's targets are selectable;
 //! a classifier returns a one-based category number, never a model or endpoint.
+#[cfg(test)]
+mod codex_tests;
 mod engine;
 #[cfg(test)]
 mod tests;

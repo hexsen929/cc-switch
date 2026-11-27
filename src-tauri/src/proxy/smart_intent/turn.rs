@@ -12,6 +12,7 @@ pub(crate) struct Turn {
     pub fingerprint: [u8; 32],
     pub within: bool,
     pub(super) count: u64,
+    pub(super) unanchored: bool,
     root: [u8; 32],
     pub(super) exact_only: bool,
 }
@@ -144,6 +145,7 @@ impl Turn {
                     .unwrap_or("");
                 Self {
                     count: 1,
+                    unanchored: parent.is_empty(),
                     root: fingerprint(&[text.as_bytes()]),
                     fingerprint: fingerprint(&[
                         parent.as_bytes(),
@@ -243,6 +245,7 @@ impl Turn {
             .unwrap_or("");
         Some(Self {
             count,
+            unanchored: count == 1 && parent.is_empty(),
             root,
             exact_only: false,
             fingerprint: fingerprint(&[
