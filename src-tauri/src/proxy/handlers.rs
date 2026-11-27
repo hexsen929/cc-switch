@@ -868,7 +868,7 @@ async fn handle_claude_transform(
             // Gemini 转换出的 message_delta 是最终 usage 快照，按它记账（见 parser 注释）。
             let final_delta_authoritative = api_format == "gemini_native";
 
-            Some(SseUsageCollector::new(
+            Some(SseUsageCollector::new_for_converted_stream(
                 start_time,
                 Some(claude_stream_usage_event_filter),
                 move |events, first_token_ms| {
@@ -2233,7 +2233,7 @@ async fn handle_codex_chat_to_responses_transform(
             let gateway_key_id = ctx.gateway_key_id.clone();
             let diagnostics = ctx.diagnostics.clone();
 
-            Some(SseUsageCollector::new(
+            Some(SseUsageCollector::new_for_converted_stream(
                 start_time,
                 Some(codex_stream_usage_event_filter),
                 move |events, first_token_ms| {
@@ -2773,7 +2773,7 @@ fn build_codex_anthropic_sse_response(
         let gateway_key_id = ctx.gateway_key_id.clone();
         let diagnostics = ctx.diagnostics.clone();
 
-        Some(SseUsageCollector::new(
+        Some(SseUsageCollector::new_for_converted_stream(
             start_time,
             Some(codex_stream_usage_event_filter),
             move |events, first_token_ms| {

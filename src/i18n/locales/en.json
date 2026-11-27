@@ -2310,7 +2310,8 @@
     "autoReviewModelMainDefault": "Main model reviews itself (default)",
     "autoReviewModelNoList": "No model list is required. Enter a reviewer model directly; blank uses codex-auto-review.",
     "officialSpeedTiersLabel": "Keep official Fast tier",
-    "officialSpeedTiersHint": "Keeps the official Fast speed tier on GPT models in the model list, so choosing Fast in Codex sends service_tier=priority. Only relays that forward to official ChatGPT accounts (such as CPA) accept it, and it uses quota faster; other upstreams may reject it or bill it at a higher price. Once on, a Fast choice you made under the official card takes effect on this provider right away. Not used in aggregation mode. Restart Codex after changing it.",
+    "officialSpeedTiersHint": "Keeps the official Fast speed tier on GPT models in the model list, so choosing Fast in Codex sends service_tier=priority. Only relays that forward to official ChatGPT accounts (such as CPA) accept it, and it uses quota faster; other upstreams may reject it or bill it at a higher price. The Codex desktop app shows Fast only while it is signed in with ChatGPT: sign in there and turn on \"Keep official login for direct switches\" in Settings (or use routing mode), and requests still go to this card. Without a sign-in only the Codex CLI can use it (/fast). Once on, a Fast choice you made under the official card takes effect on this provider right away. Not used in aggregation mode. Restart Codex after changing it.",
+    "officialSpeedTiersNoList": "This card has no model list: the Fast tier is only added to GPT models in the model list, so it can't be turned on yet. Add GPT models to the list above to turn it on.",
     "modelListHint": "Restart Codex after changes.",
     "modelListDefaultHelp": "These models appear in Codex's /model menu; the first row is the default model. Rows named after an official GPT model use the official entry, so their display name, window and reasoning levels are ignored.",
     "addCatalogModel": "Add manually",
@@ -2884,6 +2885,7 @@
       "duration": "Duration",
       "durationEstimated": "Duration (estimated)",
       "speedTooFew": "Under 100 output tokens, so no speed",
+      "speedBurst": "Arrived in a buffered burst, so no speed",
       "speedEstimateTooFew": "Under 200 output tokens, so no estimate",
       "noTimingSession": "Session logs have no timing data",
       "noFirstToken": "No first-token timing, so no speed",
@@ -5092,6 +5094,7 @@
     },
     "updatedAt": "Updated {{time}}",
     "clickToRefresh": "Click to check again",
+    "manualIdle": "Click refresh to query quota",
     "resetCredits": {
       "label": "Resets",
       "left": "Resets left: {{count}}",
@@ -5371,9 +5374,9 @@
       "disableAria": "Turn off the {{count}} selected Skills in",
       "uninstall": "Uninstall"
     },
-    "piColumnTitle": "Pi counts a Skill as enabled when its folder exists in ~/.pi/agent/skills",
+    "piColumnTitle": "Pi also reads ~/.agents/skills, so unchecked skills in that path are still directly available",
     "piHelpTitle": "How Pi counts as enabled",
-    "piHelp": "Whether the folder exists in ~/.pi/agent/skills.",
+    "piHelp": "Pi also reads ~/.agents/skills, so unchecked skills in that path are still directly available.",
     "pop": {
       "onlyApp": "Show only ones enabled in {{app}}",
       "showAll": "Show all Skills"
@@ -5754,6 +5757,10 @@
       "import": "Import",
       "imported": "Imported the local ChatGPT login",
       "importFailed": "Import failed"
+    },
+    "autoQuota": {
+      "title": "Query quota automatically",
+      "description": "When off, official account quotas are only queried when you click refresh: opening the Auth Center, scheduled card refreshes and hovering the tray won't query them. DeepSeek account balances are shown with the sign-in status and aren't affected by this switch."
     }
   },
   "kimi": {

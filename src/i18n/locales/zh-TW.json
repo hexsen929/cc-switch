@@ -2309,7 +2309,8 @@
     "autoReviewModelMainDefault": "主模型自己審批（預設）",
     "autoReviewModelNoList": "無需設定模型清單；可直接填寫審批模型，留空使用 codex-auto-review。",
     "officialSpeedTiersLabel": "保留官方 Fast 檔",
-    "officialSpeedTiersHint": "讓模型列表裡的 GPT 模型保留官方的 Fast 速度檔，Codex 選了 Fast 後請求會帶 service_tier=priority。只有轉發官方 ChatGPT 帳號的中轉（如 CPA）才認得，會更快消耗額度；其他上游可能報錯或按更高價計費。開啟後，先前在官方卡下選過的 Fast 會立刻在這家生效。聚合模式下不生效。改完需要重新啟動 Codex。",
+    "officialSpeedTiersHint": "讓模型列表裡的 GPT 模型保留官方的 Fast 速度檔，Codex 選了 Fast 後請求會帶 service_tier=priority。只有轉發官方 ChatGPT 帳號的中轉（如 CPA）才認得，會更快消耗額度；其他上游可能報錯或按更高價計費。Codex 桌面版要登入 ChatGPT 才顯示 Fast：在桌面版登入後，開啟設定裡的「非接管切換時保留官方登入」（或使用路由模式），請求仍發往這張卡；不登入時只有命令列版能用（/fast）。開啟後，先前在官方卡下選過的 Fast 會立刻在這家生效。聚合模式下不生效。改完需要重新啟動 Codex。",
+    "officialSpeedTiersNoList": "這張卡沒有模型列表：Fast 檔只加在模型列表裡的 GPT 模型上，所以現在打不開。在上面的模型列表裡加上 GPT 模型後才能開啟。",
     "modelListHint": "修改後需要重新啟動 Codex。",
     "modelListDefaultHelp": "這些模型會出現在 Codex 的 /model 裡，第一行是預設模型。名稱是官方 GPT 模型的行依官方條目產生，行裡的顯示名、視窗和思考等級不生效。",
     "addCatalogModel": "手動新增",
@@ -2884,6 +2885,7 @@
       "duration": "耗時",
       "durationEstimated": "耗時（估算）",
       "speedTooFew": "輸出不到 100 token，不算速度",
+      "speedBurst": "疑似緩衝後突發吐出，不算速度",
       "speedEstimateTooFew": "輸出不到 200 token，不估速度",
       "noTimingSession": "工作階段日誌沒有計時資料",
       "noFirstToken": "沒有首字計時，不算速度",
@@ -5092,6 +5094,7 @@
     },
     "updatedAt": "{{time}}更新",
     "clickToRefresh": "點擊重新查詢",
+    "manualIdle": "點重新整理查詢額度",
     "resetCredits": {
       "label": "重設",
       "left": "重設剩餘 {{count}} 次",
@@ -5371,9 +5374,9 @@
       "disableAria": "在這個應用裡停用選中的 {{count}} 個 Skill",
       "uninstall": "解除安裝"
     },
-    "piColumnTitle": "Pi 按 ~/.pi/agent/skills 裡有沒有這個目錄來判斷",
+    "piColumnTitle": "Pi 會讀取 ~/.agents/skills，因此未勾選但存在於該路徑的 skills 仍可直接使用",
     "piHelpTitle": "Pi 怎麼算啟用",
-    "piHelp": "看 ~/.pi/agent/skills 裡有沒有這個目錄。",
+    "piHelp": "Pi 會讀取 ~/.agents/skills，因此未勾選但存在於該路徑的 skills 仍可直接使用。",
     "pop": {
       "onlyApp": "只看在 {{app}} 啟用的",
       "showAll": "顯示全部 Skill"
@@ -5754,6 +5757,10 @@
       "import": "匯入",
       "imported": "已匯入本機 ChatGPT 登入",
       "importFailed": "匯入失敗"
+    },
+    "autoQuota": {
+      "title": "自動查詢額度",
+      "description": "關掉後，官方帳號的額度只在你點重新整理時查詢，開啟授權中心、卡片定時重新整理和懸停系統匣都不會自動去查。DeepSeek 帳號的餘額和登入狀態一起顯示，不受這個開關影響。"
     }
   },
   "kimi": {

@@ -645,8 +645,8 @@ mod tests {
         attempt.prepared(&json!({"model":"m"}), &["opaque-token".into()]);
         attempt.headers(200);
         let parts = vec![
-            Bytes::from_static(b"data: {\"type\":\"content_block_delta\",\"text\":\"opaque-"),
-            Bytes::from_static(b"token\"}\n\n"),
+            Bytes::from_static(b"data: {\"type\":\"content_block_delta\",\"delta\":{\"type\":\"text_delta\",\"text\":\"opaque-"),
+            Bytes::from_static(b"token\"}}\n\n"),
         ];
         let expected = parts.concat();
         let response = ProxyResponse::streamed(
