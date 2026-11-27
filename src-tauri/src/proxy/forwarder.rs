@@ -232,6 +232,7 @@ pub struct RequestForwarder {
     request_rewrite: crate::proxy::request_rewrite::RequestRewriteConfig,
     /// 路由规则指定的最终模型，在协议转换之前应用。
     intent_model: Option<String>,
+    smart_targets: Vec<super::smart_intent::Target>,
     /// 响应侧可编程中间件（Fork 扩展，onResponse 非流式 / onEvent 流式，默认关闭、fail-open）
     response_middleware: crate::proxy::response_middleware::ResponseMiddlewareConfig,
     /// 出站请求脱敏（Fork 扩展，PII / secret redaction，默认关闭、fail-open）
@@ -546,6 +547,7 @@ impl RequestForwarder {
             request_middleware,
             request_rewrite,
             intent_model: None,
+            smart_targets: Vec::new(),
             response_middleware,
             pii_redaction,
             reliability,
@@ -697,6 +699,10 @@ impl RequestForwarder {
 
     pub fn intent_model(mut self, model: Option<String>) -> Self {
         self.intent_model = model.filter(|m| !m.is_empty());
+        self
+    }
+    pub(crate) fn smart_targets(mut self, targets: Vec<super::smart_intent::Target>) -> Self {
+        self.smart_targets = targets;
         self
     }
 
@@ -2276,7 +2282,17 @@ impl RequestForwarder {
                     .map(str::to_owned);
             }
         }
-        if let Some(model) = &self.intent_model {
+        let smart = self
+            .smart_targets
+            .iter()
+            .find(|t| t.provider_id == provider.id);
+        if let Some(effort) = smart
+            .and_then(|t| t.effort.as_deref())
+            .filter(|s| !s.is_empty())
+        {
+            super::smart_intent::apply_effort(app_type, &mut mapped_body, effort);
+        }
+        if let Some(model) = smart.map(|t| &t.model).or(self.intent_model.as_ref()) {
             if matches!(app_type, AppType::Gemini) {
                 if gemini_url_model.is_some() {
                     gemini_url_model = Some(model.clone());
@@ -2286,6 +2302,7 @@ impl RequestForwarder {
             }
         }
         let explicit_model = card_review_model.is_some()
+            || smart.is_some()
             || self.intent_model.is_some()
             || before_rewrite_model.as_ref() != mapped_body.get("model");
 
@@ -3540,6 +3557,10 @@ impl RequestForwarder {
     ) -> Option<u64> {
         if self.request_middleware.is_active()
             || self.request_rewrite.is_active()
+            || self
+                .smart_targets
+                .iter()
+                .any(|t| t.provider_id == provider.id)
             || self.intent_model.is_some()
         {
             return None;

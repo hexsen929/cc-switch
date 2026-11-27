@@ -16,11 +16,13 @@ import { proxyApi } from "@/lib/api/proxy";
 import type { AppId } from "@/lib/api";
 import type { Provider } from "@/types";
 import { useProvidersQuery } from "@/lib/query/queries";
+import { SmartIntentEditor } from "./SmartIntentEditor";
 import {
   type IntentKind,
   type IntentMatcher,
   type IntentRoutingConfig,
   type IntentRule,
+  type SmartIntentConfig,
 } from "@/types/proxy";
 
 const INTENT_KINDS: IntentKind[] = [
@@ -63,6 +65,7 @@ export function IntentRoutingPanel({ appType }: IntentRoutingPanelProps) {
   const { t } = useTranslation();
   const [enabled, setEnabled] = useState(false);
   const [rules, setRules] = useState<IntentRule[]>([]);
+  const [smart, setSmart] = useState<SmartIntentConfig>();
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
 
@@ -81,6 +84,7 @@ export function IntentRoutingPanel({ appType }: IntentRoutingPanelProps) {
         if (!active) return;
         setEnabled(cfg.enabled);
         setRules(cfg.rules ?? []);
+        setSmart(cfg.smart);
       })
       .catch(() => {
         /* 读取失败保持默认（关闭 + 空规则） */
@@ -118,7 +122,11 @@ export function IntentRoutingPanel({ appType }: IntentRoutingPanelProps) {
       name: r.name.trim(),
       model: r.model?.trim() ? r.model.trim() : null,
     }));
-    const cfg: IntentRoutingConfig = { enabled, rules: cleaned };
+    const cfg: IntentRoutingConfig = {
+      enabled,
+      rules: cleaned,
+      ...(smart ? { smart } : {}),
+    };
     setSaving(true);
     try {
       await proxyApi.setIntentRoutingConfig(appType, cfg);
@@ -194,6 +202,14 @@ export function IntentRoutingPanel({ appType }: IntentRoutingPanelProps) {
         </div>
       )}
 
+      {["claude", "codex", "gemini"].includes(appType) && (
+        <SmartIntentEditor
+          providers={providers}
+          value={smart}
+          onChange={setSmart}
+          disabled={busy}
+        />
+      )}
       <div className="flex justify-end">
         <Button
           variant="solid"

@@ -86,6 +86,7 @@ pub struct RequestContext {
     pub request_rewrite: crate::proxy::request_rewrite::RequestRewriteConfig,
     /// 意图路由指定的上游模型，与供应商别名映射独立。
     pub intent_model: Option<String>,
+    smart_targets: Vec<super::smart_intent::Target>,
     /// 响应侧可编程中间件（Fork 扩展，onResponse / onEvent，默认关闭）
     pub response_middleware: crate::proxy::response_middleware::ResponseMiddlewareConfig,
     /// 出站请求脱敏（Fork 扩展，PII / secret redaction，默认关闭）
@@ -244,6 +245,7 @@ impl RequestContext {
             .get_request_rewrite_config(app_type_str)
             .unwrap_or_default();
         let mut intent_model = None;
+        let mut smart = None;
 
         // Fork 扩展：读取响应侧中间件配置（默认空配置/两钩子关闭；坏数据回落默认，fail-safe）
         let response_middleware = state
@@ -368,6 +370,16 @@ impl RequestContext {
                 } else {
                     None
                 };
+
+                if intent_target.is_none()
+                    && intent_cfg.enabled
+                    && authed.is_none()
+                    && !stack_mode
+                    && !headers.contains_key(super::smart_intent::MARKER)
+                    && matches!(app_type, AppType::Codex | AppType::Claude | AppType::Gemini)
+                {
+                    smart = intent_cfg.smart.filter(|cfg| cfg.enabled && cfg.valid());
+                }
 
                 // 意图命中时，把「当前供应商」与其 id 都对齐到目标：既作为链头候选，又避免
                 // 成功回答后被误判为「发生故障转移」而 churn 托盘；未命中保持原值。
@@ -549,9 +561,8 @@ impl RequestContext {
             for (name, reason) in observations {
                 d.route(&name, reason);
             }
-            d.route(&provider.name, selection_reason);
         }
-        Ok(Self {
+        let mut ctx = Self {
             diagnostics,
             start_time,
             app_config,
@@ -572,6 +583,7 @@ impl RequestContext {
             request_middleware,
             request_rewrite,
             intent_model,
+            smart_targets: Vec::new(),
             response_middleware,
             pii_redaction,
             reliability,
@@ -579,7 +591,70 @@ impl RequestContext {
             privacy_filter_config,
             is_stack,
             gateway_key_id: authed.map(|ak| ak.id.clone()),
-        })
+        };
+        if let Some(cfg) = smart {
+            if ctx.apply_smart(state, body, &cfg).await {
+                selection_reason = "smartIntent";
+            }
+        }
+        if let Some(d) = &ctx.diagnostics {
+            d.route(&ctx.provider.name, selection_reason);
+        }
+        Ok(ctx)
+    }
+
+    async fn apply_smart(
+        &mut self,
+        state: &ProxyState,
+        body: &serde_json::Value,
+        cfg: &super::smart_intent::SmartConfig,
+    ) -> bool {
+        use super::smart_intent::{classify, Turn};
+        let Some(turn) = Turn::read(body) else {
+            return false;
+        };
+        let decision = state
+            .provider_router
+            .smart_intent
+            .decide(
+                cfg,
+                self.app_type_str,
+                &self.session_id,
+                &turn,
+                |index, previous| classify(self, state, cfg, index, &turn, previous),
+            )
+            .await;
+        if let Some(d) = &self.diagnostics {
+            d.smart_intent(decision.trace);
+        }
+        let Some(category) = decision.category.and_then(|i| cfg.categories.get(i)) else {
+            return false;
+        };
+        let mut selected = Vec::new();
+        for target in &category.targets {
+            if let Ok(Some(p)) = state
+                .db
+                .get_provider_by_id(&target.provider_id, &self.app_type)
+            {
+                self.smart_targets.push(target.clone());
+                selected.push(p);
+                if !self.app_config.auto_failover_enabled {
+                    break;
+                }
+            }
+        }
+        let Some(first) = selected.first() else {
+            return false;
+        };
+        self.provider = first.clone();
+        self.current_provider_id.clone_from(&first.id);
+        if self.app_config.auto_failover_enabled {
+            self.providers
+                .retain(|p| !self.smart_targets.iter().any(|t| t.provider_id == p.id));
+            selected.append(&mut self.providers);
+        }
+        self.providers = selected;
+        true
     }
 
     /// 创建 RequestForwarder
@@ -641,6 +716,7 @@ impl RequestContext {
         )
         .stack_request(self.is_stack)
         .intent_model(self.intent_model.clone())
+        .smart_targets(self.smart_targets.clone())
         .diagnostics(self.diagnostics.clone())
         .failover_chain(self.app_config.auto_failover_enabled)
         .route_revision(self.route_revision)

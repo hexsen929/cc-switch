@@ -6160,7 +6160,37 @@
       "memgen": "记忆整理"
     }
   },
+  "smartIntent": {
+    "title": "智能意图分流",
+    "easy": "简单提问、翻译、摘要或小改动",
+    "hard": "排查故障、设计方案或跨文件修改",
+    "provider": "供应商",
+    "missing": "供应商已不存在",
+    "model": "上游模型 ID",
+    "effort": "沿用请求推理强度",
+    "remove": "移除",
+    "addBackup": "添加备用",
+    "consent": "两个开关均开启后，本地规则未命中时，会把本轮用户文字和上轮问答的节选发给指定分类器，可能增加等待时间和用量。直连、显式 Stack 和带网关密钥的请求不参与。",
+    "classifier": "分类器",
+    "category": "类别",
+    "addCategory": "添加类别",
+    "prompt": "补充分类说明（可选）",
+    "timeout": "分类器总等待上限（毫秒）",
+    "status": {
+      "classified": "分类完成",
+      "noMatch": "没有匹配类别",
+      "previous": "分类器不可用，沿用上轮类别",
+      "unavailable": "分类器不可用，按原路由",
+      "timeout": "分类超时",
+      "busy": "分类器繁忙",
+      "cached": "复用分类结果",
+      "held": "同轮工具回传，沿用决定",
+      "unknownTurn": "没有可关联的用户轮次",
+      "missingTarget": "没有可用的分流目标"
+    }
+  },
   "magpiePorts": {
+    "route_smartIntent": "智能意图分流",
     "carry": "复制到 {{target}} 继续",
     "copied": "已另建目标会话，原会话未改动",
     "inspect": "配置体检 / 退出预览",

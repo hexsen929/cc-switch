@@ -46,6 +46,8 @@ pub struct AttemptDiagnostics {
 #[derive(Clone, Debug, Default, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RequestDiagnostics {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) smart_intent: Option<super::smart_intent::Trace>,
     pub trace_id: String,
     #[serde(skip)]
     request_ids: Vec<String>,
@@ -148,6 +150,9 @@ impl DiagnosticHandle {
                     .push((short(provider, FIELD_BYTES), reason.into()));
             }
         });
+    }
+    pub(crate) fn smart_intent(&self, trace: super::smart_intent::Trace) {
+        self.update(|entry| entry.smart_intent = Some(trace));
     }
     pub fn bind(&self, request_id: &str) {
         self.update(|entry| {

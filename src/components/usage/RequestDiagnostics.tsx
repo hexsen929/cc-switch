@@ -149,6 +149,21 @@ export function RequestDiagnostics({ requestId }: { requestId: string }) {
         </p>
       ) : (
         <>
+          {record.smartIntent && (
+            <div className="border-b border-border pb-2 text-caption">
+              <strong>{t("smartIntent.title")}</strong>
+              {" · "}
+              {t(
+                `smartIntent.status.${record.smartIntent.status}`,
+                record.smartIntent.status,
+              )}
+              {record.smartIntent.category != null &&
+                ` · ${t("smartIntent.category")} #${record.smartIntent.category}`}
+              {record.smartIntent.classifier != null &&
+                ` · ${t("smartIntent.classifier")} #${record.smartIntent.classifier}`}
+              {` · ${record.smartIntent.elapsedMs} ms`}
+            </div>
+          )}
           {!!record.route?.length && (
             <div className="rounded-panel border border-border p-2 text-caption">
               <strong>{t("magpiePorts.routing")}</strong>

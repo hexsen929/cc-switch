@@ -146,6 +146,8 @@ pub struct IntentRule {
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct IntentRoutingConfig {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub smart: Option<super::smart_intent::SmartConfig>,
     /// 总开关（默认关闭）。
     #[serde(default)]
     pub enabled: bool,
@@ -512,6 +514,7 @@ mod tests {
         IntentRoutingConfig {
             enabled: true,
             rules,
+            smart: None,
         }
     }
 
@@ -765,6 +768,7 @@ mod tests {
     fn config_round_trips_camelcase_and_tagged_matcher() {
         let c = IntentRoutingConfig {
             enabled: true,
+            smart: None,
             rules: vec![IntentRule {
                 id: "r".into(),
                 name: "n".into(),

@@ -238,6 +238,15 @@ impl Database {
         app_type: &str,
         config: &crate::proxy::intent_routing::IntentRoutingConfig,
     ) -> Result<(), AppError> {
+        if config
+            .smart
+            .as_ref()
+            .is_some_and(|cfg| cfg.enabled && !cfg.valid())
+        {
+            return Err(AppError::InvalidInput(
+                "Invalid smart intent classifiers, categories, or timeout".into(),
+            ));
+        }
         let key = format!("fork_intent_routing_{app_type}");
         let json = serde_json::to_string(config)
             .map_err(|e| AppError::Database(format!("序列化意图路由配置失败: {e}")))?;

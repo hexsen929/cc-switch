@@ -44,6 +44,7 @@ pub mod response_processor;
 pub(crate) mod route_activity;
 pub(crate) mod server;
 pub mod session;
+pub mod smart_intent;
 pub(crate) mod sse;
 pub(crate) mod switch_lock;
 pub mod thinking_budget_rectifier;

@@ -230,6 +230,7 @@ pub(crate) fn provider_supports_failover(app_type: &AppType, provider: &Provider
 
 /// 供应商路由器
 pub struct ProviderRouter {
+    pub(crate) smart_intent: super::smart_intent::Engine,
     /// 数据库连接
     db: Arc<Database>,
     /// 熔断器管理器 - key 格式: "app_type:provider_id"
@@ -273,6 +274,7 @@ impl ProviderRouter {
     pub fn new_with_app_handle(db: Arc<Database>, app_handle: Option<tauri::AppHandle>) -> Self {
         Self {
             db,
+            smart_intent: Default::default(),
             circuit_breakers: Arc::new(RwLock::new(HashMap::new())),
             rotate_cursors: Mutex::new(HashMap::new()),
             usage_counts: Mutex::new(HashMap::new()),

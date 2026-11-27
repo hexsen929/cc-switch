@@ -28,6 +28,12 @@ export interface AttemptDiagnostics {
 
 export interface RequestDiagnostics {
   traceId: string;
+  smartIntent?: {
+    status: string;
+    category: number | null;
+    classifier: number | null;
+    elapsedMs: number;
+  };
   route?: [string, string][];
   captureBodies: boolean;
   requestBody: string;

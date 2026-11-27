@@ -6160,7 +6160,37 @@
       "memgen": "メモリ整理"
     }
   },
+  "smartIntent": {
+    "title": "Smart intent routing",
+    "easy": "A quick question, translation, summary or small edit",
+    "hard": "Investigating a fault, designing a system, or changing multiple files",
+    "provider": "Provider",
+    "missing": "Missing provider",
+    "model": "Upstream model ID",
+    "effort": "Keep requested effort",
+    "remove": "Remove",
+    "addBackup": "Add fallback",
+    "consent": "When both switches are on, unmatched requests can send the current user text and excerpts of the previous turn to the selected classifier. This may add latency and usage. Direct, explicit Stack and gateway-key requests are excluded.",
+    "classifier": "Classifier",
+    "category": "Category",
+    "addCategory": "Add category",
+    "prompt": "Additional classification guidance (optional)",
+    "timeout": "Total classifier timeout (ms)",
+    "status": {
+      "classified": "Classified",
+      "noMatch": "No matching category",
+      "previous": "Classifier unavailable; previous category",
+      "unavailable": "Classifier unavailable; normal route",
+      "timeout": "Classifier timed out",
+      "busy": "Classifier busy",
+      "cached": "Reused decision",
+      "held": "Same user turn",
+      "unknownTurn": "Tool result without a known turn",
+      "missingTarget": "No configured target available"
+    }
+  },
   "magpiePorts": {
+    "route_smartIntent": "Smart intent routing",
     "carry": "{{target}} にコピーして続ける",
     "copied": "Created a new session; the original is unchanged",
     "inspect": "Configuration health / disconnect preview",
