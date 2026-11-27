@@ -71,6 +71,7 @@ pub mod session_usage_mcode;
 pub mod session_usage_agy;
 pub mod session_usage_dsh;
 pub mod session_usage_workbuddy;
+pub mod session_usage_zcode;
 pub mod workbuddy_account;
 
 pub(crate) mod sync_review;
