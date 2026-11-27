@@ -106,7 +106,8 @@ vi.mock("@/components/providers/forms/GeminiConfigEditor", () => ({
   default: () => <div data-testid="gemini-config-editor" />,
 }));
 
-vi.mock("@/components/providers/forms/hooks", () => ({
+vi.mock("@/components/providers/forms/hooks", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/components/providers/forms/hooks")>()),
   useDraftEditorProjection: () => ({
     projectDraft: async (settings: unknown) => settings,
   }),
