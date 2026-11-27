@@ -107,7 +107,9 @@ vi.mock("@/components/providers/forms/GeminiConfigEditor", () => ({
 }));
 
 vi.mock("@/components/providers/forms/hooks", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("@/components/providers/forms/hooks")>()),
+  ...(await importOriginal<
+    typeof import("@/components/providers/forms/hooks")
+  >()),
   useDraftEditorProjection: () => ({
     projectDraft: async (settings: unknown) => settings,
   }),
