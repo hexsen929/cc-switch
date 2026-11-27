@@ -2384,13 +2384,7 @@
     "instructionsFileStateUnreadable": "ファイルを読み取れません",
     "instructionsFileStateEmpty": "ファイルは空です",
     "instructionsFileStateInvalid": "ファイル内容が無効です",
-    "instructionsFileStateWithSize": "{{state}} · {{size}} B",
-    "sessionAutoContinuationLabel": "中継サービスのターン上限後も会話を継続",
-    "sessionAutoContinuationHint": "ローカルプロキシ経由のサードパーティ製 Codex ネイティブ Responses のみ対応。明確なターン上限エラー時に識別情報を更新し、全履歴を保持して最大1回再試行します。公式 OAuth、直接接続、形式変換は対象外です。上流が拒否する場合があります。",
-    "sessionAutoContinuationScope": "既定はオフで、プロバイダーごとに保存します。識別情報の更新と全履歴のアーカイブを同時に有効にし、コンテキストの自動圧縮・消去・要約は行いません。",
-    "sessionAutoContinuationStreamNotice": "HTTP 200 の SSE ストリーム内にある再試行可能な上限エラーを検出するため、出力が始まるまで先頭を先読みします（最大 256 KiB または 10 秒。初回バイトタイムアウトの設定が短い場合はそれに従います）。この範囲を過ぎて届いた上限エラーは再試行されません。",
-    "sessionIdentityDiagnosticsLabel": "匿名化したセッション識別診断を有効化",
-    "sessionIdentityDiagnosticsHint": "既定はオフです。識別情報のハッシュ、フィールド数、再試行結果のみ記録し、元の識別子、ルーティング状態、キー、会話内容は記録しません。"
+    "instructionsFileStateWithSize": "{{state}} · {{size}} B"
   },
   "geminiConfig": {
     "envFile": "環境変数 (.env)",

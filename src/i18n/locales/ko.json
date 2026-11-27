@@ -2384,13 +2384,7 @@
     "instructionsFileHint": "Enabling a file replaces Codex's built-in base instructions for the selected model. Use this only when a custom model requires dedicated instructions.",
     "instructionsFileStateNotFile": "Path is not a file",
     "instructionsFileReadRetry": "The file could not be read, so it cannot be saved safely. Close and retry or check its permissions.",
-    "instructionsFileStateCheckFailed": "File check failed",
-    "sessionAutoContinuationLabel": "중계 서비스 턴 제한 이후 대화 계속",
-    "sessionAutoContinuationHint": "로컬 프록시를 통한 타사 Codex 기본 Responses에만 적용됩니다. 명확한 턴 제한 오류 시 세션 식별자를 바꾸고 전체 기록을 유지하며 한 번만 재시도합니다. 공식 OAuth, 직접 연결 및 프로토콜 변환은 제외되며 상위 서비스에서 거부할 수 있습니다.",
-    "sessionAutoContinuationScope": "기본값은 꺼짐이며 공급자별로 저장됩니다. 식별자 교체와 전체 기록 보관을 함께 켜며 컨텍스트를 자동으로 압축, 삭제 또는 요약하지 않습니다.",
-    "sessionAutoContinuationStreamNotice": "HTTP 200 SSE 스트림에서 재시도 가능한 제한 오류를 찾기 위해 출력이 시작될 때까지 앞부분을 미리 읽습니다(최대 256 KiB 또는 10초, 첫 바이트 시간 제한을 설정했다면 더 짧은 값). 이 범위 이후에 발생한 제한 오류는 재시도하지 않습니다.",
-    "sessionIdentityDiagnosticsLabel": "익명화된 세션 식별 진단 활성화",
-    "sessionIdentityDiagnosticsHint": "기본값은 꺼짐입니다. 식별자 해시, 필드 수, 재시도 결과만 기록하며 원본 식별자, 라우팅 상태, 키 또는 대화 내용은 기록하지 않습니다."
+    "instructionsFileStateCheckFailed": "File check failed"
   },
   "geminiConfig": {
     "envFile": "환경 변수(.env)",

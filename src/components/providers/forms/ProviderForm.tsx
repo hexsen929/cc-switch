@@ -570,12 +570,6 @@ function ProviderFormFull({
     );
     setHasValidCodexOfficialSelection(true);
     setCodexFastMode(initialData?.meta?.codexFastMode ?? false);
-    setCodexSessionAutoContinuation(
-      initialData?.meta?.codexSessionIdentityRotation ?? false,
-    );
-    setCodexSessionIdentityDiagnostics(
-      initialData?.meta?.codexSessionIdentityDiagnostics ?? false,
-    );
     setCodexChatReasoning(initialData?.meta?.codexChatReasoning ?? {});
     setClaudeReasoningEffort(
       toClaudeReasoningEffortChoice(initialData?.meta?.claudeReasoningEffort),
@@ -827,10 +821,6 @@ function ProviderFormFull({
   const [codexFastMode, setCodexFastMode] = useState<boolean>(
     () => initialData?.meta?.codexFastMode ?? false,
   );
-  const [codexSessionAutoContinuation, setCodexSessionAutoContinuation] =
-    useState(() => initialData?.meta?.codexSessionIdentityRotation ?? false);
-  const [codexSessionIdentityDiagnostics, setCodexSessionIdentityDiagnostics] =
-    useState(() => initialData?.meta?.codexSessionIdentityDiagnostics ?? false);
   const [codexChatReasoning, setCodexChatReasoning] =
     useState<CodexChatReasoning>(
       () => initialData?.meta?.codexChatReasoning ?? {},
@@ -2260,12 +2250,6 @@ function ProviderFormFull({
           ? selectedGitHubAccountId
           : undefined,
       codexFastMode: isClaudeCodexOauthProvider ? codexFastMode : undefined,
-      codexSessionIdentityRotation:
-        appId === "codex" && codexSessionAutoContinuation ? true : undefined,
-      codexSessionHistoryArchive:
-        appId === "codex" && codexSessionAutoContinuation ? true : undefined,
-      codexSessionIdentityDiagnostics:
-        appId === "codex" && codexSessionIdentityDiagnostics ? true : undefined,
       codexChatReasoning:
         appId === "codex" && category !== "official" && isCodexChatFormat
           ? normalizeCodexChatReasoningForSave(codexChatReasoning)
@@ -2495,9 +2479,6 @@ function ProviderFormFull({
 
   const handlePresetChange = (value: string) => {
     setSelectedPresetId(value);
-    // 换预设视作新的供应商草稿，不能沿用上一家显式开启的身份轮换/诊断。
-    setCodexSessionAutoContinuation(false);
-    setCodexSessionIdentityDiagnostics(false);
     // Stack 模型是这家自己的：换预设后回到跟着新预设的模型映射。
     setClaudeStackRows(null);
     if (value === "custom") {
@@ -3144,12 +3125,6 @@ function ProviderFormFull({
               onMaxOutputTokensChange={setLocalCodexMaxOutputTokens}
               codexChatReasoning={codexChatReasoning}
               onCodexChatReasoningChange={setCodexChatReasoning}
-              sessionAutoContinuation={codexSessionAutoContinuation}
-              onSessionAutoContinuationChange={setCodexSessionAutoContinuation}
-              sessionIdentityDiagnostics={codexSessionIdentityDiagnostics}
-              onSessionIdentityDiagnosticsChange={
-                setCodexSessionIdentityDiagnostics
-              }
               promptCacheRouting={promptCacheRouting}
               onPromptCacheRoutingChange={setPromptCacheRouting}
               catalogModels={codexCatalogModels}

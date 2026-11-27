@@ -2313,13 +2313,7 @@
     "instructionsFileHint": "Enabling a file replaces Codex's built-in base instructions for the selected model. Use this only when a custom model requires dedicated instructions.",
     "instructionsFileStateNotFile": "Path is not a file",
     "instructionsFileReadRetry": "The file could not be read, so it cannot be saved safely. Close and retry or check its permissions.",
-    "instructionsFileStateCheckFailed": "File check failed",
-    "sessionAutoContinuationLabel": "Aracının tur sınırından sonra devam et",
-    "sessionAutoContinuationHint": "Yalnızca yerel proxy üzerinden üçüncü taraf yerel Codex Responses için. Açık bir tur sınırı hatasında oturum kimliğini değiştirir ve tüm geçmişi koruyarak en fazla bir kez yeniden dener. Resmî OAuth, doğrudan bağlantılar ve protokol dönüşümü kapsam dışıdır; üst hizmet yine reddedebilir.",
-    "sessionAutoContinuationScope": "Varsayılan olarak kapalıdır; sağlayıcı bazında kaydedilir. Bağlamı otomatik sıkıştırmadan, temizlemeden veya özetlemeden kimlik değiştirmeyi ve tam geçmiş arşivlemeyi birlikte etkinleştirir.",
-    "sessionAutoContinuationStreamNotice": "HTTP 200 SSE akışlarındaki yeniden denenebilir limit hatalarını algılamak için proxy, çıktı başlayana kadar akışın başını önceden okur; üst sınır 256 KiB veya 10 saniyedir (ilk bayt zaman aşımı daha kısaysa o kullanılır). Bu süreden sonra gelen limit hataları yeniden denenmez.",
-    "sessionIdentityDiagnosticsLabel": "Anonim oturum kimliği tanılamasını etkinleştir",
-    "sessionIdentityDiagnosticsHint": "Varsayılan olarak kapalıdır. Yalnızca kimlik karmalarını, alan sayılarını ve yeniden deneme sonuçlarını kaydeder; özgün kimlikleri, yönlendirme durumunu, anahtarları veya konuşma içeriğini kaydetmez."
+    "instructionsFileStateCheckFailed": "File check failed"
   },
   "geminiConfig": {
     "envFile": "Ortam Değişkenleri (.env)",

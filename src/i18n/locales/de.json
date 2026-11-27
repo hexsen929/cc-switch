@@ -2384,13 +2384,7 @@
     "instructionsFileSaveFailed": "Could not save the model instructions file: {{error}}",
     "instructionsFileStateNotFile": "Path is not a file",
     "instructionsFileSaveSuccess": "Model instructions file saved",
-    "instructionsFileStateUnreadable": "File is unreadable",
-    "sessionAutoContinuationLabel": "Nach dem Turn-Limit des Relays fortsetzen",
-    "sessionAutoContinuationHint": "Nur native Codex Responses von Drittanbietern über den lokalen Proxy. Bei einem eindeutigen Turn-Limit wird die Sitzungsidentität gewechselt und der vollständige Verlauf mit höchstens einem erneuten Versuch beibehalten. Ohne offizielles OAuth, Direktverbindungen oder Protokollkonvertierung; der Anbieter kann weiterhin ablehnen.",
-    "sessionAutoContinuationScope": "Standardmäßig aus; pro Anbieter gespeichert. Aktiviert Identitätswechsel und vollständige Verlaufsarchivierung ohne automatische Komprimierung, Löschung oder Zusammenfassung des Kontexts.",
-    "sessionAutoContinuationStreamNotice": "Um wiederholbare Limitfehler in HTTP-200-SSE-Streams zu erkennen, liest der Proxy den Anfang vor, bis eine Ausgabe erscheint, höchstens 256 KiB oder 10 Sekunden (bei kürzerem First-Byte-Timeout entsprechend kürzer). Spätere Limitfehler werden nicht erneut versucht.",
-    "sessionIdentityDiagnosticsLabel": "Anonymisierte Sitzungsdiagnose aktivieren",
-    "sessionIdentityDiagnosticsHint": "Standardmäßig aus. Protokolliert nur Identitäts-Hashes, Feldanzahl und Wiederholungsresultate, keine ursprünglichen Kennungen, Routing-Zustände, Schlüssel oder Gesprächsinhalte."
+    "instructionsFileStateUnreadable": "File is unreadable"
   },
   "geminiConfig": {
     "envFile": "Umgebungsvariablen (.env)",

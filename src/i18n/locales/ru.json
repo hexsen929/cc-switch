@@ -2384,13 +2384,7 @@
     "instructionsFileHint": "Enabling a file replaces Codex's built-in base instructions for the selected model. Use this only when a custom model requires dedicated instructions.",
     "instructionsFileStateNotFile": "Path is not a file",
     "instructionsFileReadRetry": "The file could not be read, so it cannot be saved safely. Close and retry or check its permissions.",
-    "instructionsFileStateCheckFailed": "File check failed",
-    "sessionAutoContinuationLabel": "Продолжать после лимита ходов посредника",
-    "sessionAutoContinuationHint": "Только сторонние нативные Codex Responses через локальный прокси. При явной ошибке лимита ходов меняет идентификатор сеанса и сохраняет всю историю с одной повторной попыткой. Официальный OAuth, прямые подключения и преобразование протоколов исключены; сервер всё ещё может отказать.",
-    "sessionAutoContinuationScope": "По умолчанию выключено; сохраняется для каждого провайдера. Включает смену идентификатора и архивирование всей истории без автоматического сжатия, очистки или пересказа контекста.",
-    "sessionAutoContinuationStreamNotice": "Чтобы обнаруживать повторяемые ошибки лимита в потоках SSE с HTTP 200, прокси предварительно читает начало до появления вывода: не более 256 КиБ или 10 секунд (меньше при заданном тайм-ауте первого байта). Ошибка лимита после этого окна не повторяется.",
-    "sessionIdentityDiagnosticsLabel": "Включить обезличенную диагностику сеанса",
-    "sessionIdentityDiagnosticsHint": "По умолчанию выключено. Записывает только хеши идентификаторов, число полей и результаты повторов, без исходных идентификаторов, состояния маршрутизации, ключей и текста разговора."
+    "instructionsFileStateCheckFailed": "File check failed"
   },
   "geminiConfig": {
     "envFile": "Переменные окружения (.env)",

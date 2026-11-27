@@ -262,12 +262,6 @@ export interface ProviderMeta {
   promptCacheRouting?: PromptCacheRoutingMode;
   // Codex OAuth FAST mode: injects service_tier="priority" on ChatGPT Codex requests
   codexFastMode?: boolean;
-  // Codex 原生 Responses 经本地代理转发时，明确到达会话轮数上限后换身份重试；缺省关闭。
-  codexSessionIdentityRotation?: boolean;
-  // 明确到限后完整归档历史；默认关闭，需同时开启身份轮换。
-  codexSessionHistoryArchive?: boolean;
-  // 可关闭的会话身份脱敏诊断，只记录必要的哈希和数量；缺省关闭。
-  codexSessionIdentityDiagnostics?: boolean;
   // Codex Responses -> Chat Completions reasoning capability metadata
   codexChatReasoning?: CodexChatReasoning;
   // Tool-call bridge: convert tools into prompt instructions and parse JSON tool calls back.

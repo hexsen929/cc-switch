@@ -11,9 +11,6 @@ mod opencode;
 mod request_body;
 mod response_check;
 mod send;
-mod session_identity;
-mod session_identity_notice;
-mod session_identity_notice_response;
 
 use super::hyper_client::{ProxyResponse, MAX_RESPONSE_BODY_BYTES};
 use super::{
@@ -264,8 +261,6 @@ pub struct RequestForwarder {
     /// 最近一次 `forward()` 定下的出站模型名，失败时随 [`ForwardError`] 交给日志。
     /// 每次 `forward()` 开头清空，映射失败等没走到出站的尝试留 None（日志回落到请求名）。
     last_outbound_model: std::sync::Mutex<Option<String>>,
-    /// 请求级预算：同一供应商在所有整流/账号重试中最多自动轮换重试一次。
-    session_identity_retried: std::sync::Mutex<std::collections::HashSet<String>>,
     /// 隐私过滤配置。在 [`Self::forward`] 里对定稿的上游请求体执行，每次尝试都会执行。
     privacy_filter: PrivacyFilterConfig,
     #[cfg(test)]
@@ -563,7 +558,6 @@ impl RequestForwarder {
             stack_request: false,
             failover_chain: false,
             last_outbound_model: std::sync::Mutex::new(None),
-            session_identity_retried: std::sync::Mutex::new(Default::default()),
             privacy_filter: PrivacyFilterConfig::default(),
             #[cfg(test)]
             test_copilot_auth: None,
@@ -1433,24 +1427,6 @@ impl RequestForwarder {
                         .await);
                 }
                 Err(mut e) => {
-                    // 明确的轮次上限不是密文不兼容。轮换已经用完预算或安全跳过后，
-                    // 不允许旧整流器把历史压缩条目删除，再以同一身份追加一次请求。
-                    // 关闭本功能及其他错误仍保留原有整流和故障转移语义。
-                    let preserve_session_limit_context = |error: &ProxyError| {
-                        matches!(app_type, AppType::Codex)
-                            && method == http::Method::POST
-                            && session_identity::is_rotation_endpoint(endpoint)
-                            && attempted_codex_upstream_format
-                                == Some(CodexUpstreamFormat::NativeResponses)
-                            && !super::providers::is_codex_official_provider(provider)
-                            && !provider.is_codex_oauth()
-                            && provider
-                                .meta
-                                .as_ref()
-                                .is_some_and(|meta| meta.codex_session_identity_rotation_enabled())
-                            && matches!(error, ProxyError::UpstreamError { status, body: Some(body) }
-                            if super::codex_session_identity::is_turn_limit(*status, body))
-                    };
                     // Reconstruct at most once, and only after an error-only rectifier
                     // check matches. Ordinary failures replay on the next provider only.
                     let mut provider_body = RetryBody::new(self, &body, provider);
@@ -1467,17 +1443,14 @@ impl RequestForwarder {
                     );
                     let mut signature_rectifier_non_retryable_client_error = false;
 
-                    if !preserve_session_limit_context(&e)
-                        && self.media_retry_should_trigger(
-                            adapter.name(),
-                            media_rectifier_retried,
-                            None,
-                            &e,
-                        )
-                        && super::media_sanitizer::contains_image_blocks(
-                            provider_body.get().map_err(replay_error)?,
-                        )
-                    {
+                    if self.media_retry_should_trigger(
+                        adapter.name(),
+                        media_rectifier_retried,
+                        None,
+                        &e,
+                    ) && super::media_sanitizer::contains_image_blocks(
+                        provider_body.get().map_err(replay_error)?,
+                    ) {
                         let mut media_body = provider_body.get().map_err(replay_error)?.clone();
                         let replaced_images =
                             super::media_sanitizer::replace_image_blocks_with_marker(
@@ -1546,13 +1519,12 @@ impl RequestForwarder {
 
                     // 压缩回合被原生 Responses 第三方拒绝：有的上游不收 `tool_choice: "none"`
                     // （见 `compaction_retry_without_tool_choice`），去掉它对同一家重试一次。
-                    let compaction_body = if !preserve_session_limit_context(&e)
-                        && Self::compaction_tool_choice_retry_applicable(
-                            app_type,
-                            provider,
-                            attempted_codex_upstream_format,
-                            &e,
-                        ) {
+                    let compaction_body = if Self::compaction_tool_choice_retry_applicable(
+                        app_type,
+                        provider,
+                        attempted_codex_upstream_format,
+                        &e,
+                    ) {
                         self.compaction_tool_choice_retry_body(
                             app_type,
                             provider,
@@ -1595,17 +1567,16 @@ impl RequestForwarder {
                         }
                     }
 
-                    let opaque_rejection = if !preserve_session_limit_context(&e)
-                        && self
-                            .opaque_state_retry_rejection(
-                                app_type,
-                                provider,
-                                attempted_codex_upstream_format,
-                                opaque_rectifier_retried,
-                                None,
-                                &e,
-                            )
-                            .is_some()
+                    let opaque_rejection = if self
+                        .opaque_state_retry_rejection(
+                            app_type,
+                            provider,
+                            attempted_codex_upstream_format,
+                            opaque_rectifier_retried,
+                            None,
+                            &e,
+                        )
+                        .is_some()
                     {
                         self.opaque_state_retry_rejection(
                             app_type,
@@ -2111,34 +2082,6 @@ impl RequestForwarder {
         } = *attempt;
         *codex_upstream_format_out = None;
         self.set_last_outbound_model(None);
-        // 先只保存原始身份描述；等实际协议确定后才占用映射容量。
-        let session_identity_descriptor = (matches!(app_type, AppType::Codex)
-            && method == http::Method::POST
-            && session_identity::is_rotation_endpoint(endpoint)
-            && provider
-                .meta
-                .as_ref()
-                .is_some_and(|meta| meta.codex_session_identity_rotation_enabled())
-            && !super::providers::is_codex_official_provider(provider)
-            && !provider.is_codex_oauth())
-        .then(|| {
-            let mut descriptor = serde_json::Map::new();
-            for field in [
-                "session_id",
-                "session-id",
-                "thread_id",
-                "thread-id",
-                "turn_id",
-                "turn-id",
-                "metadata",
-                "client_metadata",
-            ] {
-                if let Some(value) = body.get(field) {
-                    descriptor.insert(field.to_string(), value.clone());
-                }
-            }
-            Value::Object(descriptor)
-        });
         if matches!(app_type, AppType::Codex)
             && extensions.get::<super::gateway_auth::AuthedKey>().is_some()
             && super::providers::is_codex_official_provider(provider)
@@ -2553,15 +2496,6 @@ impl RequestForwarder {
             None
         };
         *codex_upstream_format_out = codex_upstream_format;
-        let session_identity_candidate = session_identity_descriptor
-            .as_ref()
-            .filter(|_| {
-                codex_upstream_format == Some(CodexUpstreamFormat::NativeResponses)
-                    && !codex_official_auth_passthrough
-            })
-            .and_then(|descriptor| {
-                super::codex_session_identity::acquire(&provider.id, headers, descriptor)
-            });
 
         // GitHub Copilot 动态 endpoint 路由
         // 从 CopilotAuthManager 获取缓存的 API endpoint（支持企业版等非默认 endpoint）
@@ -2992,10 +2926,6 @@ impl RequestForwarder {
 
         // Codex 以为在跟内置 openai 说话时才发的字段（ChatGPT 后端私有）：第三方与本地原生
         // Responses 网关收到会整条 400（#9042），去掉后和 Codex 对自定义表发的一样。
-        // 初次正常请求继续原有兼容处理；只有明确到限后的重试/已轮换身份才恢复完整历史。
-        let session_identity_ciphertext = session_identity_candidate
-            .as_ref()
-            .map(|_| session_identity::capture_ciphertext(&request_body));
         if should_strip_codex_openai_only_fields(
             app_type,
             provider,
@@ -3350,6 +3280,16 @@ impl RequestForwarder {
         }
         .build(headers);
 
+        // 序列化请求体。GET/HEAD 是 idempotent/safe 方法，按 HTTP 语义不应携带 body；
+        // 强行附带 JSON body 会让某些上游（如 Google Gemini 的 models.list）拒绝请求。
+        let body_bytes = if matches!(method, &http::Method::GET | &http::Method::HEAD) {
+            Vec::new()
+        } else {
+            serde_json::to_vec(&filtered_body).map_err(|e| {
+                ProxyError::Internal(format!("Failed to serialize request body: {e}"))
+            })?
+        };
+
         // 确保 content-type 存在
         if !ordered_headers.contains_key(http::header::CONTENT_TYPE) {
             ordered_headers.insert(
@@ -3373,85 +3313,6 @@ impl RequestForwarder {
                 ordered_headers.insert("chatgpt-account-id", value);
             }
         }
-
-        // 身份应用必须晚于所有头/体覆盖；不适用的协议及官方认证路径不参与。
-        let session_identity = session_identity_candidate
-            .filter(|_| {
-                *codex_upstream_format_out == Some(CodexUpstreamFormat::NativeResponses)
-                    && !codex_official_auth_passthrough
-                    && !codex_responses_to_chat
-                    && !codex_responses_to_anthropic
-            })
-            .map(|lease| lease.for_outbound(&ordered_headers, &filtered_body));
-        let session_identity_snapshot = session_identity.as_ref().map(|lease| lease.snapshot());
-        // 保存尚未应用任何一代映射的定稿，第二次到限也从原缓存键/窗口构造新代。
-        let session_identity_baseline = session_identity.as_ref().and_then(|_| {
-            let mut retry_body = filtered_body.clone();
-            // 定稿正文不回退，只恢复兼容层删除的密文字段；显式 input 覆盖以用户配置为准。
-            let input_overridden = provider
-                .meta
-                .as_ref()
-                .and_then(|meta| meta.local_proxy_request_overrides.as_ref())
-                .and_then(|overrides| overrides.body.as_ref())
-                .is_some_and(|body| body.get("input").is_some());
-            if !input_overridden {
-                if let Some(ciphertext) = &session_identity_ciphertext {
-                    if !session_identity::restore_ciphertext(ciphertext, &mut retry_body) {
-                        return None;
-                    }
-                }
-            }
-            Some((ordered_headers.clone(), retry_body))
-        });
-        let session_identity_diagnostics = provider
-            .meta
-            .as_ref()
-            .is_some_and(|meta| meta.codex_session_identity_diagnostics_enabled());
-        let session_history_archive = provider
-            .meta
-            .as_ref()
-            .is_some_and(|meta| meta.codex_session_history_archive_enabled());
-        if let (Some(lease), Some(snapshot)) = (&session_identity, &session_identity_snapshot) {
-            if snapshot.generation() > 0 {
-                let Some((_, body)) = &session_identity_baseline else {
-                    return Err(ProxyError::InvalidRequest("无法在最终请求中唯一定位原始密文条目，已停止身份轮换转发，避免丢失上下文；请检查本地请求改写或关闭此供应商的自动更换标识开关".to_string()));
-                };
-                filtered_body = body.clone();
-                if session_history_archive {
-                    filtered_body = session_identity::archive_history(
-                        &filtered_body,
-                        session_identity_diagnostics,
-                    )?;
-                }
-            }
-            let report = lease.apply(snapshot, &mut ordered_headers, &mut filtered_body);
-            if session_identity_diagnostics {
-                lease.log(snapshot, &report, "outbound", None);
-            }
-        }
-        if session_identity_diagnostics
-            && session_identity_descriptor.is_some()
-            && session_identity.is_none()
-        {
-            log::info!(
-                "[CodexSessionIdentity] phase=skipped reason=identity_unavailable_or_protocol"
-            );
-        }
-        if session_identity_diagnostics
-            && session_identity.is_some()
-            && session_identity_baseline.is_none()
-        {
-            log::info!("[CodexSessionIdentity] phase=skipped reason=ambiguous_ciphertext");
-        }
-
-        // GET/HEAD 不带 body；其余在最终身份定稿后序列化。
-        let body_bytes = if matches!(method, &http::Method::GET | &http::Method::HEAD) {
-            Vec::new()
-        } else {
-            serde_json::to_vec(&filtered_body).map_err(|e| {
-                ProxyError::Internal(format!("Failed to serialize request body: {e}"))
-            })?
-        };
 
         reject_proxy_placeholder_for_managed_account_upstream(&url, &ordered_headers)?;
 
@@ -3527,7 +3388,7 @@ impl RequestForwarder {
         }
 
         let response = self
-            .send_with_session_identity(
+            .send_upstream(
                 &url,
                 &target_for_log,
                 method,
@@ -3537,12 +3398,6 @@ impl RequestForwarder {
                 request_is_streaming,
                 preserve_exact_header_case,
                 auto_deadline,
-                session_identity.as_ref(),
-                session_identity_snapshot,
-                session_identity_baseline.as_ref(),
-                &provider.id,
-                session_identity_diagnostics,
-                session_history_archive,
             )
             .await?;
 

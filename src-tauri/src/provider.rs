@@ -749,25 +749,6 @@ pub struct ProviderMeta {
     /// Codex OAuth FAST mode: inject `service_tier = "priority"` for ChatGPT Codex requests.
     #[serde(rename = "codexFastMode", skip_serializing_if = "Option::is_none")]
     pub codex_fast_mode: Option<bool>,
-    /// Codex 原生 Responses 经本地代理转发时，到达明确的会话轮数上限后换身份重试。
-    /// 按供应商独立保存；旧配置缺失时关闭，Chat / Anthropic 转换路径不使用。
-    #[serde(
-        rename = "codexSessionIdentityRotation",
-        skip_serializing_if = "Option::is_none"
-    )]
-    pub codex_session_identity_rotation: Option<bool>,
-    /// 明确到限后按原顺序归档完整历史记录；依赖身份轮换，缺省关闭。
-    #[serde(
-        rename = "codexSessionHistoryArchive",
-        skip_serializing_if = "Option::is_none"
-    )]
-    pub codex_session_history_archive: Option<bool>,
-    /// 会话身份脱敏诊断；缺省关闭，仅记录必要的哈希、数量和重试结果。
-    #[serde(
-        rename = "codexSessionIdentityDiagnostics",
-        skip_serializing_if = "Option::is_none"
-    )]
-    pub codex_session_identity_diagnostics: Option<bool>,
     /// Codex Responses -> Chat Completions reasoning capability metadata.
     #[serde(rename = "codexChatReasoning", skip_serializing_if = "Option::is_none")]
     pub codex_chat_reasoning: Option<CodexChatReasoningConfig>,
@@ -902,22 +883,6 @@ pub fn parse_custom_user_agent(
 }
 
 impl ProviderMeta {
-    /// 只有显式开启才允许自动轮换上游会话身份。
-    pub fn codex_session_identity_rotation_enabled(&self) -> bool {
-        self.codex_session_identity_rotation.unwrap_or(false)
-    }
-
-    /// 归档是独立的可选回退；不能单独开启并改变旧身份轮换的语义。
-    pub fn codex_session_history_archive_enabled(&self) -> bool {
-        self.codex_session_identity_rotation_enabled()
-            && self.codex_session_history_archive.unwrap_or(false)
-    }
-
-    /// 诊断独立于功能开关保存；默认不输出身份诊断。
-    pub fn codex_session_identity_diagnostics_enabled(&self) -> bool {
-        self.codex_session_identity_diagnostics.unwrap_or(false)
-    }
-
     /// Codex OAuth FAST mode 是否启用。默认关闭，因为 `service_tier="priority"`
     /// 会按更高速率消耗 ChatGPT 订阅配额，用户需显式开启以换取更低延迟。
     pub fn codex_fast_mode_enabled(&self) -> bool {
@@ -1361,61 +1326,6 @@ mod tests {
     };
     use serde_json::json;
     use std::collections::HashMap;
-
-    #[test]
-    fn codex_session_identity_flags_default_off_and_roundtrip_independently() {
-        let legacy: ProviderMeta = serde_json::from_value(json!({})).unwrap();
-        assert!(!legacy.codex_session_identity_rotation_enabled());
-        assert!(!legacy.codex_session_history_archive_enabled());
-        assert!(!legacy.codex_session_identity_diagnostics_enabled());
-        assert!(serde_json::to_value(&legacy)
-            .unwrap()
-            .get("codexSessionIdentityRotation")
-            .is_none());
-
-        for rotation in [false, true] {
-            for diagnostics in [false, true] {
-                let value = json!({
-                    "codexSessionIdentityRotation": rotation,
-                    "codexSessionIdentityDiagnostics": diagnostics
-                });
-                let meta: ProviderMeta = serde_json::from_value(value.clone()).unwrap();
-                assert_eq!(meta.codex_session_identity_rotation_enabled(), rotation);
-                assert_eq!(
-                    meta.codex_session_identity_diagnostics_enabled(),
-                    diagnostics
-                );
-                assert_eq!(serde_json::to_value(meta).unwrap(), value);
-            }
-        }
-    }
-
-    #[test]
-    fn codex_session_history_archive_defaults_off_and_requires_rotation() {
-        for rotation in [false, true] {
-            for archive in [false, true] {
-                let value = json!({
-                    "codexSessionIdentityRotation": rotation,
-                    "codexSessionHistoryArchive": archive
-                });
-                let meta: ProviderMeta = serde_json::from_value(value.clone()).unwrap();
-                assert_eq!(
-                    meta.codex_session_history_archive_enabled(),
-                    rotation && archive
-                );
-                assert_eq!(serde_json::to_value(meta).unwrap(), value);
-            }
-        }
-        let legacy: ProviderMeta = serde_json::from_value(json!({
-            "codexSessionIdentityRotation":true
-        }))
-        .unwrap();
-        assert!(!legacy.codex_session_history_archive_enabled());
-        assert!(serde_json::to_value(legacy)
-            .unwrap()
-            .get("codexSessionHistoryArchive")
-            .is_none());
-    }
 
     #[test]
     fn provider_mcp_overrides_preserve_legacy_shape_and_roundtrip_enable_list() {

@@ -8,47 +8,6 @@ fn provider(id: &str) -> Provider {
 }
 
 #[test]
-fn codex_session_identity_settings_save_reload_and_keep_providers_isolated() {
-    let db = Database::memory().unwrap();
-    let mut first = provider("identity-first");
-    let second = provider("identity-second");
-    first.meta = Some(ProviderMeta {
-        codex_session_identity_rotation: Some(true),
-        codex_session_history_archive: Some(true),
-        codex_session_identity_diagnostics: Some(true),
-        ..ProviderMeta::default()
-    });
-    db.save_provider(&AppType::Codex, &first).unwrap();
-    db.save_provider(&AppType::Codex, &second).unwrap();
-
-    let providers = db.get_all_providers(&AppType::Codex).unwrap();
-    let first_meta = providers["identity-first"].meta.as_ref().unwrap();
-    assert!(first_meta.codex_session_identity_rotation_enabled());
-    assert!(first_meta.codex_session_history_archive_enabled());
-    assert!(first_meta.codex_session_identity_diagnostics_enabled());
-    assert!(!providers["identity-second"]
-        .meta
-        .as_ref()
-        .is_some_and(ProviderMeta::codex_session_identity_rotation_enabled));
-    assert!(!providers["identity-second"]
-        .meta
-        .as_ref()
-        .is_some_and(ProviderMeta::codex_session_history_archive_enabled));
-
-    first.meta.as_mut().unwrap().codex_session_identity_rotation = Some(false);
-    db.save_provider(&AppType::Codex, &first).unwrap();
-    let reloaded = db
-        .get_provider_by_id("identity-first", &AppType::Codex)
-        .unwrap()
-        .unwrap();
-    let reloaded_meta = reloaded.meta.unwrap();
-    assert!(!reloaded_meta.codex_session_identity_rotation_enabled());
-    assert!(!reloaded_meta.codex_session_history_archive_enabled());
-    assert_eq!(reloaded_meta.codex_session_history_archive, Some(true));
-    assert!(reloaded_meta.codex_session_identity_diagnostics_enabled());
-}
-
-#[test]
 fn provider_list_batches_endpoints_without_crossing_apps_or_changing_order() {
     let db = Database::memory().unwrap();
     let mut first = provider("z");

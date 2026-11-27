@@ -2384,13 +2384,7 @@
     "instructionsFileStateUnreadable": "檔案無法讀取",
     "instructionsFileStateEmpty": "檔案內容為空",
     "instructionsFileStateInvalid": "檔案內容無效",
-    "instructionsFileStateWithSize": "{{state}} · {{size}} B",
-    "sessionAutoContinuationLabel": "解除中轉站輪次限制",
-    "sessionAutoContinuationHint": "僅適用於本機代理轉發的第三方 Codex 原生 Responses。明確達到上限後更換工作階段身分並保留完整聊天記錄，最多重試一次。官方 OAuth、直連及協定轉換不生效；上游仍可能拒絕。",
-    "sessionAutoContinuationScope": "預設關閉，依供應商儲存。啟用後同時開啟身分輪換及完整歷史封存，不自動壓縮、清空或摘要上下文。",
-    "sessionAutoContinuationStreamNotice": "為偵測 HTTP 200 串流中的可重試上限錯誤，代理會先讀取 SSE 開頭直到出現輸出，最多 256 KB 或 10 秒（若已設定首位元組逾時則採較短值）；超出此範圍才出現的上限錯誤不會重試。",
-    "sessionIdentityDiagnosticsLabel": "啟用工作階段身分去識別診斷",
-    "sessionIdentityDiagnosticsHint": "預設關閉。僅記錄身分雜湊、欄位數量及重試結果，不記錄原始識別碼、路由狀態、金鑰或對話內容。"
+    "instructionsFileStateWithSize": "{{state}} · {{size}} B"
   },
   "geminiConfig": {
     "envFile": "環境變數 (.env)",

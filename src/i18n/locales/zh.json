@@ -2384,13 +2384,7 @@
     "instructionsFileStateUnreadable": "文件不可读",
     "instructionsFileStateEmpty": "文件内容为空",
     "instructionsFileStateInvalid": "文件内容无效",
-    "instructionsFileStateWithSize": "{{state}} · {{size}} B",
-    "sessionAutoContinuationLabel": "解除中转站轮次限制",
-    "sessionAutoContinuationHint": "仅适用于本地代理转发的第三方 Codex 原生 Responses。明确到限后更换会话身份并保留完整聊天记录，最多重试一次。官方 OAuth、直连和协议转换不生效；上游仍可能拒绝。",
-    "sessionAutoContinuationScope": "默认关闭，按供应商保存。开启后同时启用身份轮换和完整历史归档，不自动压缩、清空或摘要上下文。",
-    "sessionAutoContinuationStreamNotice": "为识别 HTTP 200 流中的可重试到限错误，代理会预读 SSE 开头直到出现输出，最多 256 KB 或 10 秒（已配置首字节超时则更短）；超出此窗口才出现的到限错误不会触发重试。",
-    "sessionIdentityDiagnosticsLabel": "启用会话身份脱敏诊断",
-    "sessionIdentityDiagnosticsHint": "默认关闭。仅记录身份哈希、字段数量和重试结果，不记录原始标识、路由状态、密钥或对话正文。"
+    "instructionsFileStateWithSize": "{{state}} · {{size}} B"
   },
   "geminiConfig": {
     "envFile": "环境变量 (.env)",

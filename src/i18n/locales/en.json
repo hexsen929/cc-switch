@@ -2384,13 +2384,7 @@
     "instructionsFileStateUnreadable": "File is unreadable",
     "instructionsFileStateEmpty": "File is empty",
     "instructionsFileStateInvalid": "File content is invalid",
-    "instructionsFileStateWithSize": "{{state}} · {{size}} B",
-    "sessionAutoContinuationLabel": "Continue after relay turn limits",
-    "sessionAutoContinuationHint": "Only third-party native Codex Responses through the local proxy. On an explicit turn-limit error, rotate the session identity and retain full history, with at most one retry. Excludes official OAuth, direct connections and protocol conversion; upstream may still reject it.",
-    "sessionAutoContinuationScope": "Off by default; saved per provider. Enables identity rotation and full history archiving together, without automatic context compression, clearing or summarization.",
-    "sessionAutoContinuationStreamNotice": "To detect retryable limit errors in HTTP 200 SSE streams, the proxy pre-reads the start until output appears, for at most 256 KiB or 10 seconds (less if a first-byte timeout is configured). A limit error arriving after that window is not retried.",
-    "sessionIdentityDiagnosticsLabel": "Enable redacted session identity diagnostics",
-    "sessionIdentityDiagnosticsHint": "Off by default. Logs only identity hashes, field counts and retry results, without original identifiers, routing state, keys or conversation content."
+    "instructionsFileStateWithSize": "{{state}} · {{size}} B"
   },
   "geminiConfig": {
     "envFile": "Environment Variables (.env)",
