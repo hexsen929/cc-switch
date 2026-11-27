@@ -536,6 +536,38 @@ impl SseUsageCollector {
     }
 }
 
+/// Observe upstream timing before fork converters buffer their replies to
+/// backfill message_start usage. The downstream collector still owns usage and
+/// completion; observing timing here neither buffers output nor changes bytes.
+pub(crate) fn observe_upstream_timing(
+    stream: impl Stream<Item = Result<Bytes, std::io::Error>> + Send + 'static,
+    mut collector: Option<SseUsageCollector>,
+) -> impl Stream<Item = Result<Bytes, std::io::Error>> + Send {
+    async_stream::stream! {
+        futures::pin_mut!(stream);
+        let mut sse = SseBuffer::with_max_pending_bytes(64 * 1024);
+        while let Some(chunk) = stream.next().await {
+            if let (Some(current), Ok(bytes)) = (collector.as_ref(), &chunk) {
+                for part in bytes.chunks(64 * 1024) {
+                    if sse.push_bytes(part).is_err() { break; }
+                    while let Some(block) = sse.next_block() {
+                        let event = block.lines().filter_map(|line| strip_sse_field(line, "event")).next_back();
+                        if let Some(data) = sse_event_data(block) {
+                            current.observe_data(event, &data);
+                        }
+                    }
+                    if current.inner.first_output_time.get().is_some() { break; }
+                }
+                if current.inner.first_output_time.get().is_some() {
+                    collector = None;
+                    sse = SseBuffer::with_max_pending_bytes(64 * 1024);
+                }
+            }
+            yield chunk;
+        }
+    }
+}
+
 /// 转换流的首字判定：跳过只宣告响应开始或保活的元数据事件，其余非空事件都算
 /// （见 [`SseUsageCollector::new_for_converted_stream`]）。Chat Completions / Gemini 的
 /// 分块没有事件类型，一律算。
@@ -2186,10 +2218,16 @@ mod tests {
     const HIDDEN_REASONING_MS: u64 = 80;
 
     /// 把（已经转换过的）流交给收集器跑完，返回记下的 first_token_ms。
-    async fn first_token_through(
+    async fn first_token_through<T>(
         stream: impl futures::Stream<Item = Result<Bytes, std::io::Error>> + Send + 'static,
         converted_stream: bool,
-    ) -> u64 {
+        convert: impl FnOnce(
+            std::pin::Pin<Box<dyn futures::Stream<Item = Result<Bytes, std::io::Error>> + Send>>,
+        ) -> T,
+    ) -> u64
+    where
+        T: futures::Stream<Item = Result<Bytes, std::io::Error>> + Send + 'static,
+    {
         let start = std::time::Instant::now();
         let recorded = Arc::new(std::sync::Mutex::new(None));
         let recorded_in_cb = recorded.clone();
@@ -2201,6 +2239,15 @@ mod tests {
         } else {
             SseUsageCollector::new(start, None, callback)
         };
+        let stream = if converted_stream {
+            Box::pin(observe_upstream_timing(stream, Some(collector.clone())))
+                as std::pin::Pin<
+                    Box<dyn futures::Stream<Item = Result<Bytes, std::io::Error>> + Send>,
+                >
+        } else {
+            Box::pin(stream)
+        };
+        let stream = convert(stream);
         let stream = create_logged_passthrough_stream_with_terminal_hook(
             stream,
             "test",
@@ -2245,10 +2292,9 @@ mod tests {
     #[tokio::test]
     async fn converted_chat_to_anthropic_keeps_hidden_reasoning_in_generation_window() {
         let converted = first_token_through(
-            super::super::providers::streaming::create_anthropic_sse_stream(
-                chat_hidden_reasoning_upstream(),
-            ),
+            chat_hidden_reasoning_upstream(),
             true,
+            super::super::providers::streaming::create_anthropic_sse_stream,
         )
         .await;
         assert!(
@@ -2257,10 +2303,9 @@ mod tests {
         );
         // 对照：同一条流按内容帧判，首字被推到正文开始
         let semantic = first_token_through(
-            super::super::providers::streaming::create_anthropic_sse_stream(
-                chat_hidden_reasoning_upstream(),
-            ),
+            chat_hidden_reasoning_upstream(),
             false,
+            super::super::providers::streaming::create_anthropic_sse_stream,
         )
         .await;
         assert!(
@@ -2295,10 +2340,9 @@ mod tests {
             ));
         };
         let converted = first_token_through(
-            super::super::providers::streaming_responses::create_anthropic_sse_stream_from_responses_with_web_search_options(
-                upstream, None, None,
-            ),
+            upstream,
             true,
+            |upstream| super::super::providers::streaming_responses::create_anthropic_sse_stream_from_responses_with_web_search_options(upstream, None, None),
         )
         .await;
         assert!(

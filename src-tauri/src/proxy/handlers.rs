@@ -823,28 +823,6 @@ async fn handle_claude_transform(
         } else {
             stream
         };
-        let sse_stream: Box<
-            dyn futures::Stream<Item = Result<Bytes, std::io::Error>> + Send + Unpin,
-        > = if api_format == "openai_responses" {
-            Box::new(Box::pin(
-                create_anthropic_sse_stream_from_responses_with_web_search_options(
-                    stream,
-                    hosted_web_search_name.clone(),
-                    hosted_web_search_max_uses,
-                ),
-            ))
-        } else if api_format == "gemini_native" {
-            Box::new(Box::pin(create_anthropic_sse_stream_from_gemini(
-                stream,
-                Some(state.gemini_shadow.clone()),
-                Some(ctx.provider.id.clone()),
-                Some(ctx.session_id.clone()),
-                tool_schema_hints.clone(),
-            )))
-        } else {
-            Box::new(Box::pin(create_anthropic_sse_stream(stream)))
-        };
-
         // 创建使用量收集器；关闭 usage logging 时不要再解析转换后的 SSE。
         let usage_collector = if usage_collection_enabled(state, ctx.gateway_key_id.as_deref()) {
             let state = state.clone();
@@ -919,6 +897,30 @@ async fn handle_claude_transform(
             ))
         } else {
             None
+        };
+
+        let stream =
+            super::response_processor::observe_upstream_timing(stream, usage_collector.clone());
+        let sse_stream: Box<
+            dyn futures::Stream<Item = Result<Bytes, std::io::Error>> + Send + Unpin,
+        > = if api_format == "openai_responses" {
+            Box::new(Box::pin(
+                create_anthropic_sse_stream_from_responses_with_web_search_options(
+                    stream,
+                    hosted_web_search_name.clone(),
+                    hosted_web_search_max_uses,
+                ),
+            ))
+        } else if api_format == "gemini_native" {
+            Box::new(Box::pin(create_anthropic_sse_stream_from_gemini(
+                stream,
+                Some(state.gemini_shadow.clone()),
+                Some(ctx.provider.id.clone()),
+                Some(ctx.session_id.clone()),
+                tool_schema_hints.clone(),
+            )))
+        } else {
+            Box::new(Box::pin(create_anthropic_sse_stream(stream)))
         };
 
         // 获取流式超时配置
