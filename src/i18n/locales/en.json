@@ -6161,6 +6161,13 @@
     }
   },
   "smartIntent": {
+    "invalidTargets": "Choose a valid provider and model for each classifier and category, describe every category, and use distinct fallback providers.",
+    "invalidTimeout": "The total timeout must be a whole number between 200 and 8000 ms.",
+    "keepWarm": "Keep the stronger model when recent usage confirms a warm cache (requires usage logging)",
+    "tier": "Cache routing tier",
+    "normalTier": "Regular category",
+    "easyTier": "Easy",
+    "hardTier": "Hard",
     "title": "Smart intent routing",
     "easy": "A quick question, translation, summary or small edit",
     "hard": "Investigating a fault, designing a system, or changing multiple files",
@@ -6178,6 +6185,7 @@
     "timeout": "Total classifier timeout (ms)",
     "status": {
       "classified": "Classified",
+      "warm": "Kept the stronger model based on recent cache usage",
       "noMatch": "No matching category",
       "previous": "Classifier unavailable; previous category",
       "unavailable": "Classifier unavailable; normal route",

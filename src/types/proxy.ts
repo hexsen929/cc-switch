@@ -335,9 +335,14 @@ export interface IntentTarget {
 export interface SmartIntentConfig {
   enabled: boolean;
   classifiers: IntentTarget[];
-  categories: { description: string; targets: IntentTarget[] }[];
+  categories: {
+    description: string;
+    targets: IntentTarget[];
+    tier?: "easy" | "hard" | null;
+  }[];
   prompt: string;
   timeoutMs: number;
+  keepWarm?: boolean;
 }
 
 // ==================== 局域网网关（Fork 扩展，默认关闭） ====================

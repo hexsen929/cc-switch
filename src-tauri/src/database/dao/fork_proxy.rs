@@ -238,10 +238,11 @@ impl Database {
         app_type: &str,
         config: &crate::proxy::intent_routing::IntentRoutingConfig,
     ) -> Result<(), AppError> {
-        if config
-            .smart
-            .as_ref()
-            .is_some_and(|cfg| cfg.enabled && !cfg.valid())
+        if config.enabled
+            && config
+                .smart
+                .as_ref()
+                .is_some_and(|cfg| cfg.enabled && !cfg.valid())
         {
             return Err(AppError::InvalidInput(
                 "Invalid smart intent classifiers, categories, or timeout".into(),

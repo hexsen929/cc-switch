@@ -1,4 +1,4 @@
-use super::{turn::fingerprint, SmartConfig, Turn};
+use super::{turn::fingerprint, SmartConfig, Tier, Turn};
 use crate::sync_utils::MutexExt;
 use serde::Serialize;
 use std::{
@@ -22,6 +22,16 @@ pub(crate) struct Trace {
     pub category: Option<usize>,
     pub classifier: Option<usize>,
     pub elapsed_ms: u64,
+    #[serde(skip)]
+    pub(crate) receipt: Option<Receipt>,
+}
+
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct Receipt {
+    thread: Key,
+    generation: Instant,
+    actual_target: Key,
+    turns: u64,
 }
 
 #[derive(Clone, Debug)]
@@ -43,6 +53,7 @@ impl Decision {
                 category: category.map(|i| i + 1),
                 classifier: classifier.map(|i| i + 1),
                 elapsed_ms: 0,
+                receipt: None,
             },
         }
     }
@@ -53,6 +64,7 @@ struct State {
     turns: HashMap<Key, (Instant, Arc<OnceCell<Decision>>)>,
     previous: HashMap<Key, (Instant, Option<usize>)>,
     failed: HashMap<Key, Instant>,
+    warm: HashMap<Key, (Instant, Receipt)>,
 }
 
 pub(crate) struct Engine {
@@ -70,6 +82,29 @@ impl Default for Engine {
 }
 
 impl Engine {
+    pub(crate) fn observe_usage(
+        &self,
+        ticket: Receipt,
+        provider: &str,
+        model: &str,
+        cached_tokens: u32,
+    ) {
+        let mut st = self.state.lock_recover();
+        if st
+            .previous
+            .get(&ticket.thread)
+            .is_none_or(|(at, _)| *at != ticket.generation)
+        {
+            return;
+        }
+        let confirmed = fingerprint(&[provider.as_bytes(), model.as_bytes()])
+            == ticket.actual_target
+            && cached_tokens >= 1024;
+        st.warm.remove(&ticket.thread);
+        if confirmed && st.warm.len() < CAP {
+            st.warm.insert(ticket.thread, (Instant::now(), ticket));
+        }
+    }
     /// The caller owns authorization, request normalization and transport. Cache only
     /// hashes and category indexes. Single-flight is scoped to the app/session/config.
     pub(crate) async fn decide<F, Fut>(
@@ -94,6 +129,8 @@ impl Engine {
             st.turns.retain(|_, v| v.0.elapsed() < KEEP);
             st.previous.retain(|_, v| v.0.elapsed() < KEEP);
             st.failed.retain(|_, at| at.elapsed() < REST);
+            st.warm
+                .retain(|_, (at, _)| at.elapsed() < Duration::from_secs(300));
             let previous = if turn.exact_only {
                 None
             } else {
@@ -204,6 +241,44 @@ impl Engine {
             }
             decision.trace.elapsed_ms = now.elapsed().as_millis() as u64;
             let mut st = self.state.lock_recover();
+            if cfg.keep_warm && !turn.exact_only {
+                if let (Some(prev), Some(picked)) = (previous, decision.category) {
+                    // A cached provider/model was actually used, on this same
+                    // turn lineage. A smaller/compacted transcript starts fresh.
+                    if cfg.categories[prev].tier == Some(Tier::Hard)
+                        && cfg.categories[picked].tier == Some(Tier::Easy)
+                        && st.warm.get(&thread).is_some_and(|(seen, r)| {
+                            seen.elapsed() < Duration::from_secs(300)
+                                && turn.count >= r.turns
+                                && st
+                                    .previous
+                                    .get(&thread)
+                                    .is_some_and(|(at, _)| *at == r.generation)
+                        })
+                    {
+                        decision.category = Some(prev);
+                        decision.trace.category = Some(prev + 1);
+                        decision.trace.status = "warm";
+                    }
+                }
+                if let Some(c) = decision
+                    .category
+                    .and_then(|i| cfg.categories.get(i))
+                    .filter(|c| c.tier == Some(Tier::Hard))
+                {
+                    if let Some(t) = c.targets.first() {
+                        decision.trace.receipt = Some(Receipt {
+                            thread,
+                            generation: now,
+                            actual_target: fingerprint(&[
+                                t.provider_id.as_bytes(),
+                                t.model.as_bytes(),
+                            ]),
+                            turns: turn.count,
+                        });
+                    }
+                }
+            }
             if st.previous.len() >= CAP && !st.previous.contains_key(&thread) {
                 if let Some(k) = st.previous.iter().min_by_key(|(_, v)| v.0).map(|(k, _)| *k) {
                     st.previous.remove(&k);

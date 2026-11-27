@@ -628,10 +628,11 @@ impl RequestContext {
                 classify(self, state, cfg, index, &turn, previous)
             })
             .await;
-        if let Some(d) = &self.diagnostics {
-            d.smart_intent(decision.trace);
-        }
+        let mut trace = decision.trace;
         let Some(category) = decision.category.and_then(|i| cfg.categories.get(i)) else {
+            if let Some(d) = &mut self.diagnostics {
+                d.smart_intent(trace);
+            }
             return false;
         };
         let mut selected = Vec::new();
@@ -648,8 +649,15 @@ impl RequestContext {
             }
         }
         let Some(first) = selected.first() else {
+            trace.status = "missingTarget";
+            if let Some(d) = &mut self.diagnostics {
+                d.smart_intent(trace);
+            }
             return false;
         };
+        if let Some(d) = &mut self.diagnostics {
+            d.smart_intent(trace);
+        }
         self.provider = first.clone();
         self.current_provider_id.clone_from(&first.id);
         if self.app_config.auto_failover_enabled {

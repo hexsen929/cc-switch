@@ -938,6 +938,21 @@ async fn log_usage_internal(
     let dedup_scope = super::usage::parser::dedup_scope_for_app(app_type, provider_id);
     let request_id = usage.dedup_request_id(dedup_scope);
     if let Some(diagnostics) = diagnostics {
+        if let Some(receipt) = diagnostics.intent_receipt {
+            let cached = if (200..300).contains(&status_code) {
+                usage
+                    .cache_read_tokens
+                    .saturating_add(usage.cache_creation_tokens)
+            } else {
+                0
+            };
+            state.provider_router.smart_intent.observe_usage(
+                receipt,
+                provider_id,
+                outbound_model,
+                cached,
+            );
+        }
         if let Some(ticket) = diagnostics.tray_ticket {
             ticket.usage(&usage, first_token_ms);
         }

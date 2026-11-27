@@ -11,6 +11,7 @@ pub(crate) struct Turn {
     pub reply: String,
     pub fingerprint: [u8; 32],
     pub within: bool,
+    pub(super) count: u64,
     root: [u8; 32],
     pub(super) exact_only: bool,
 }
@@ -38,7 +39,16 @@ fn own_words(s: &str) -> &str {
             break;
         }
     }
-    if s.starts_with("# AGENTS.md instructions") || s.starts_with("# Files mentioned by the user:")
+    if [
+        "# AGENTS.md instructions",
+        "# Files mentioned by the user:",
+        "[tool_result without a matching tool_call]",
+        "Companion Page snapshot part ",
+        "Available agent types ",
+        "New agent types are now available",
+    ]
+    .iter()
+    .any(|p| s.starts_with(p))
     {
         return "";
     }
@@ -51,6 +61,9 @@ fn own_words(s: &str) -> &str {
             ("<subagent_notification", "</subagent_notification>"),
             ("<subagent-notification", "</subagent-notification>"),
             ("<turn_aborted", "</turn_aborted>"),
+            ("<user_shell_command", "</user_shell_command>"),
+            ("<in-app-browser-context", "</in-app-browser-context>"),
+            ("<session-context", "</session-context>"),
         ]
         .into_iter()
         .find(|(open, _)| s.starts_with(open)) else {
@@ -130,6 +143,7 @@ impl Turn {
                     .and_then(Value::as_str)
                     .unwrap_or("");
                 Self {
+                    count: 1,
                     root: fingerprint(&[text.as_bytes()]),
                     fingerprint: fingerprint(&[
                         parent.as_bytes(),
@@ -182,6 +196,20 @@ impl Turn {
                 }
                 let text = visible(content, true);
                 if text.is_empty() {
+                    if content.as_array().is_some_and(|parts| {
+                        parts.iter().any(|p| {
+                            matches!(
+                                p["type"].as_str(),
+                                Some("image" | "image_url" | "input_image" | "input_file")
+                            ) || p.get("inlineData").is_some()
+                                || p.get("fileData").is_some()
+                        })
+                    }) {
+                        turns.clear();
+                        within = false;
+                    } else {
+                        within = true;
+                    }
                     continue;
                 }
                 if count == 0 {
@@ -214,6 +242,7 @@ impl Turn {
             .and_then(Value::as_str)
             .unwrap_or("");
         Some(Self {
+            count,
             root,
             exact_only: false,
             fingerprint: fingerprint(&[

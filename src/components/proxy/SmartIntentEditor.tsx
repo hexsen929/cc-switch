@@ -28,11 +28,12 @@ export function SmartIntentEditor({
     enabled: false,
     classifiers: [blank()],
     categories: [
-      { description: t("smartIntent.easy"), targets: [blank()] },
-      { description: t("smartIntent.hard"), targets: [blank()] },
+      { description: t("smartIntent.easy"), targets: [blank()], tier: "easy" },
+      { description: t("smartIntent.hard"), targets: [blank()], tier: "hard" },
     ],
     prompt: "",
     timeoutMs: 1800,
+    keepWarm: false,
   };
   const update = (patch: Partial<SmartIntentConfig>) =>
     onChange({ ...cfg, ...patch });
@@ -140,6 +141,13 @@ export function SmartIntentEditor({
       {cfg.enabled && (
         <>
           <p className="text-caption text-fg-2">{t("smartIntent.consent")}</p>
+          <label className="flex items-center justify-between gap-2 text-caption">
+            {t("smartIntent.keepWarm")}
+            <Switch
+              checked={!!cfg.keepWarm}
+              onCheckedChange={(keepWarm) => update({ keepWarm })}
+            />
+          </label>
           <div className="text-caption font-semibold">
             {t("smartIntent.classifier")}
           </div>
@@ -174,6 +182,27 @@ export function SmartIntentEditor({
                   </Button>
                 )}
               </div>
+              {cfg.keepWarm && (
+                <select
+                  className={selectClass}
+                  aria-label={t("smartIntent.tier")}
+                  value={c.tier ?? ""}
+                  onChange={(e) =>
+                    category(i, {
+                      tier:
+                        e.target.value === "hard"
+                          ? "hard"
+                          : e.target.value === "easy"
+                            ? "easy"
+                            : null,
+                    })
+                  }
+                >
+                  <option value="">{t("smartIntent.normalTier")}</option>
+                  <option value="easy">{t("smartIntent.easyTier")}</option>
+                  <option value="hard">{t("smartIntent.hardTier")}</option>
+                </select>
+              )}
               {rows(c.targets, (targets) => category(i, { targets }), false)}
             </div>
           ))}

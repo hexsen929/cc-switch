@@ -50,6 +50,15 @@ fn normalizes_real_words_not_machine_context_or_tool_payloads() {
         ("continue", "debug the stream", "it disconnected")
     );
     assert!(!t.within);
+    let browser = Turn::read(&json!({"input":[{"role":"user","content":"summarize"},
+        {"role":"user","content":"[tool_result without a matching tool_call]\nprivate page contents"}]})).unwrap();
+    assert!(browser.within);
+    assert_eq!(browser.text, "summarize");
+    assert!(
+        Turn::read(&json!({"input":[{"role":"user","content":"debug"},
+        {"role":"user","content":[{"type":"input_image","image_url":"private"}]}]}))
+        .is_none()
+    );
     for body in [
         json!({"messages":[{"role":"user","content":[{"type":"tool_result","content":"secret"}]}]}),
         json!({"input":[{"type":"function_call_output","call_id":"x","output":"secret"}]}),
@@ -206,6 +215,33 @@ async fn unavailable_classifier_tries_backup_within_one_budget() {
         })
         .await;
     assert_eq!((v.trace.classifier, v.category), (Some(2), Some(0)));
+}
+
+#[tokio::test]
+async fn a_downgrade_requires_recent_observed_cache_on_the_actual_hard_model() {
+    for (provider, model, cached, expected) in [
+        ("b", "large", 2048, 1),
+        ("b", "large", 0, 0),
+        ("b", "other", 2048, 0),
+        ("a", "large", 2048, 0),
+    ] {
+        let mut cfg = config();
+        cfg.categories[0].tier = Some(Tier::Easy);
+        cfg.categories[1].tier = Some(Tier::Hard);
+        cfg.keep_warm = true;
+        let engine = Engine::default();
+        let t = Turn::read(&json!({"input":"debug"})).unwrap();
+        let first = engine
+            .decide(&cfg, "codex", "s", &t, |_, _| ready(Ok(Some(1))))
+            .await;
+        engine.observe_usage(first.trace.receipt.unwrap(), provider, model, cached);
+        let t=Turn::read(&json!({"input":[{"role":"user","content":"debug"},{"role":"user","content":"summarize"}]})).unwrap();
+        let second = engine
+            .decide(&cfg, "codex", "s", &t, |_, _| ready(Ok(Some(0))))
+            .await;
+        assert_eq!(second.category, Some(expected));
+        assert_eq!(second.trace.status == "warm", expected == 1);
+    }
 }
 
 #[tokio::test]

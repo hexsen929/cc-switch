@@ -117,6 +117,32 @@ export function IntentRoutingPanel({ appType }: IntentRoutingPanelProps) {
 
   const handleSave = async () => {
     if (saving) return;
+    if (enabled && smart?.enabled) {
+      const usable = (target: { providerId: string; model: string }) =>
+        providers.some((p) => p.id === target.providerId) &&
+        !!target.model.trim();
+      if (
+        !smart.classifiers.every(usable) ||
+        smart.categories.some(
+          (c) =>
+            !c.description.trim() ||
+            !c.targets.every(usable) ||
+            new Set(c.targets.map((t) => t.providerId)).size !==
+              c.targets.length,
+        )
+      ) {
+        toast.error(t("smartIntent.invalidTargets"));
+        return;
+      }
+      if (
+        !Number.isInteger(smart.timeoutMs) ||
+        smart.timeoutMs < 200 ||
+        smart.timeoutMs > 8000
+      ) {
+        toast.error(t("smartIntent.invalidTimeout"));
+        return;
+      }
+    }
     const cleaned: IntentRule[] = rules.map((r) => ({
       ...r,
       name: r.name.trim(),

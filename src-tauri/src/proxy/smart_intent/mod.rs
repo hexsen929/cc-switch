@@ -6,7 +6,7 @@ mod tests;
 mod transport;
 mod turn;
 
-pub(crate) use engine::{Engine, Trace};
+pub(crate) use engine::{Engine, Receipt, Trace};
 pub(crate) use transport::classify;
 pub(crate) use transport::MARKER;
 pub(crate) use turn::Turn;
@@ -26,6 +26,14 @@ pub struct Target {
 pub struct Category {
     pub description: String,
     pub targets: Vec<Target>,
+    pub tier: Option<Tier>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Deserialize, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Tier {
+    Easy,
+    Hard,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Deserialize, Serialize)]
@@ -36,6 +44,7 @@ pub struct SmartConfig {
     pub categories: Vec<Category>,
     pub prompt: String,
     pub timeout_ms: u64,
+    pub keep_warm: bool,
 }
 
 impl Default for SmartConfig {
@@ -46,6 +55,7 @@ impl Default for SmartConfig {
             categories: Vec::new(),
             prompt: String::new(),
             timeout_ms: 1800,
+            keep_warm: false,
         }
     }
 }

@@ -63,6 +63,7 @@ pub struct RequestDiagnostics {
 
 #[derive(Clone)]
 pub struct DiagnosticHandle {
+    pub(crate) intent_receipt: Option<super::smart_intent::Receipt>,
     pub(super) tray_ticket: Option<super::route_activity::Ticket>,
     store: RecentStore,
     id: String,
@@ -107,6 +108,7 @@ impl DiagnosticHandle {
 
     fn with_store(capture: bool, pii: PiiRedactionConfig, store: RecentStore) -> Self {
         let handle = Self {
+            intent_receipt: None,
             tray_ticket: None,
             store,
             id: uuid::Uuid::new_v4().to_string(),
@@ -151,7 +153,8 @@ impl DiagnosticHandle {
             }
         });
     }
-    pub(crate) fn smart_intent(&self, trace: super::smart_intent::Trace) {
+    pub(crate) fn smart_intent(&mut self, trace: super::smart_intent::Trace) {
+        self.intent_receipt = trace.receipt;
         self.update(|entry| entry.smart_intent = Some(trace));
     }
     pub fn bind(&self, request_id: &str) {
