@@ -91,7 +91,7 @@ import {
   type ClaudeModelEnvField,
 } from "./hooks/useModelState";
 import {
-  providerPresets,
+  claudePresetModelsUrl,
   type TemplateValueConfig,
 } from "@/config/claudeProviderPresets";
 
@@ -392,11 +392,7 @@ export function ClaudeFormFields({
     }
     // 当 baseURL 仍是某预设的默认值时，优先使用预设上的 modelsUrl 覆写
     // 避免多走一次失败的候选请求（如 DeepSeek 把 /models 挂在根，而不是 /anthropic 子路径下）
-    const matchedPreset = providerPresets.find((p) => {
-      const env = (p.settingsConfig as { env?: Record<string, string> })?.env;
-      return env?.ANTHROPIC_BASE_URL === baseUrl;
-    });
-    const modelsUrl = matchedPreset?.modelsUrl;
+    const modelsUrl = claudePresetModelsUrl(baseUrl);
 
     setIsFetchingModels(true);
     fetchModelsForConfig(

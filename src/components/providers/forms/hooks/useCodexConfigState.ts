@@ -3,7 +3,7 @@ import {
   extractCodexAgentsMaxThreads,
   extractCodexAgentsString,
   extractCodexBaseUrl,
-  extractCodexExperimentalBearerToken,
+  pickCodexApiKey,
   extractCodexModelName,
   extractCodexTopLevelString,
   normalizeCodexModelInstructionsFiles,
@@ -70,19 +70,6 @@ interface UseCodexConfigStateProps {
   initialData?: {
     settingsConfig?: Record<string, unknown>;
   };
-}
-
-// auth.json 缺 OPENAI_API_KEY 时回退到 config.toml 的 experimental_bearer_token
-// (Mobile 兼容形态：保留 ChatGPT 登录态但用第三方 token)
-function pickCodexApiKey(
-  authObj: { OPENAI_API_KEY?: unknown } | null | undefined,
-  configText: string,
-): string {
-  if (authObj && typeof authObj.OPENAI_API_KEY === "string") {
-    const key = normalizeUserApiKey(authObj.OPENAI_API_KEY);
-    if (key) return key;
-  }
-  return extractCodexExperimentalBearerToken(configText) || "";
 }
 
 // 目录行 load 映射（隐藏字段白名单重建）。抽成可导出的纯函数，与

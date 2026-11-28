@@ -20,26 +20,37 @@ import type { FetchedModel } from "@/lib/api/model-fetch";
 export function ModelDropdown({
   models,
   onSelect,
+  open: controlledOpen,
+  onOpenChange,
+  disabled,
 }: {
   models: FetchedModel[];
   onSelect: (id: string) => void;
+  open?: boolean;
+  onOpenChange?: (open: boolean) => void;
+  disabled?: boolean;
 }) {
   const { t } = useTranslation();
-  const [open, setOpen] = useState(false);
+  const [localOpen, setLocalOpen] = useState(false);
+  const open = controlledOpen ?? localOpen;
+  const setOpen = onOpenChange ?? setLocalOpen;
 
   // Group models by vendor; missing ownedBy falls back to "Other"
-  const grouped: Record<string, FetchedModel[]> = {};
+  const grouped = new Map<string, FetchedModel[]>();
   for (const model of models) {
     const vendor = model.ownedBy || "Other";
-    if (!grouped[vendor]) grouped[vendor] = [];
-    grouped[vendor].push(model);
+    const group = grouped.get(vendor);
+    if (group) group.push(model);
+    else grouped.set(vendor, [model]);
   }
-  const vendors = Object.keys(grouped).sort();
+  const vendors = [...grouped.keys()].sort();
 
   return (
     <Popover modal open={open} onOpenChange={setOpen}>
       <PopoverTrigger asChild>
         <Button
+          type="button"
+          disabled={disabled}
           variant="outline"
           size="icon"
           className="shrink-0"
@@ -74,7 +85,7 @@ export function ModelDropdown({
             </CommandEmpty>
             {vendors.map((vendor) => (
               <CommandGroup key={vendor} heading={vendor}>
-                {grouped[vendor].map((m) => (
+                {grouped.get(vendor)?.map((m) => (
                   <CommandItem
                     key={m.id}
                     value={m.id}

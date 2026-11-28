@@ -16,6 +16,7 @@ describe("smart intent settings", () => {
       const [value, setValue] = useState<SmartIntentConfig>();
       return (
         <SmartIntentEditor
+          appType="codex"
           disabled={false}
           providers={[]}
           value={value}
@@ -106,6 +107,7 @@ describe("smart intent settings", () => {
       const [value, setValue] = useState<SmartIntentConfig>();
       return (
         <SmartIntentEditor
+          appType="codex"
           disabled={false}
           providers={[]}
           value={value}

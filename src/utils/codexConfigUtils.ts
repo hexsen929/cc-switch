@@ -4,6 +4,16 @@ import type { CodexApiFormat } from "@/types";
 import { normalizeTomlText } from "@/utils/textNormalization";
 import { parse as parseToml } from "smol-toml";
 
+export function pickCodexApiKey(
+  auth: { OPENAI_API_KEY?: unknown } | null | undefined,
+  configText: string,
+): string {
+  const raw = auth?.OPENAI_API_KEY;
+  const key = typeof raw === "string" ? raw.trim() : "";
+  if (key && key !== "PROXY_MANAGED") return key;
+  return extractCodexExperimentalBearerToken(configText) || "";
+}
+
 const isPlainObject = (value: unknown): value is Record<string, any> => {
   return Object.prototype.toString.call(value) === "[object Object]";
 };

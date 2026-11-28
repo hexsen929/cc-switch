@@ -17,6 +17,7 @@ import type { AppId } from "@/lib/api";
 import type { Provider } from "@/types";
 import { useProvidersQuery } from "@/lib/query/queries";
 import { SmartIntentEditor } from "./SmartIntentEditor";
+import { RoutingModelInput } from "./RoutingModelInput";
 import { validateSmartGraph } from "./smartIntentGraph";
 import {
   type IntentKind,
@@ -203,6 +204,7 @@ export function IntentRoutingPanel({ appType }: IntentRoutingPanelProps) {
             <RuleCard
               key={rule.id || i}
               rule={rule}
+              appType={appType}
               providers={providers}
               disabled={busy}
               onChange={(patch) => updateRule(i, patch)}
@@ -215,6 +217,7 @@ export function IntentRoutingPanel({ appType }: IntentRoutingPanelProps) {
 
       {["claude", "codex", "gemini"].includes(appType) && (
         <SmartIntentEditor
+          appType={appType}
           providers={providers}
           value={smart}
           onChange={setSmart}
@@ -241,6 +244,7 @@ export function IntentRoutingPanel({ appType }: IntentRoutingPanelProps) {
 }
 
 interface RuleCardProps {
+  appType: AppId;
   rule: IntentRule;
   providers: Provider[];
   disabled: boolean;
@@ -250,6 +254,7 @@ interface RuleCardProps {
 }
 
 function RuleCard({
+  appType,
   rule,
   providers,
   disabled,
@@ -539,15 +544,13 @@ function RuleCard({
             )}
           </SelectContent>
         </Select>
-        <Input
+        <RoutingModelInput
+          app={appType}
+          provider={providers.find((p) => p.id === rule.targetProviderId)}
           value={rule.model ?? ""}
-          onChange={(e) => onChange({ model: e.target.value })}
+          onChange={(model) => onChange({ model })}
           disabled={disabled}
-          placeholder={t(
-            "proxy.intentRouting.modelOverride",
-            "改写模型（可选）",
-          )}
-          className="flex-1 font-mono text-xs"
+          label={t("proxy.intentRouting.modelOverride", "改写模型（可选）")}
         />
       </div>
     </div>

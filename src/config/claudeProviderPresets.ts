@@ -3259,3 +3259,11 @@ export const providerPresets: ProviderPreset[] = [
     apiFormat: "openai_chat",
   },
 ];
+/** Use a preset's explicit models endpoint only for that preset's own API base. */
+export function claudePresetModelsUrl(baseUrl: string): string | undefined {
+  return providerPresets.find(
+    (preset) =>
+      (preset.settingsConfig as { env?: Record<string, unknown> }).env
+        ?.ANTHROPIC_BASE_URL === baseUrl,
+  )?.modelsUrl;
+}

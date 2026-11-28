@@ -6,6 +6,8 @@ import { Input } from "@/components/ui/input";
 import { Switch } from "@/components/ui/switch";
 import type { IntentTarget, SmartIntentConfig } from "@/types/proxy";
 import type { Provider } from "@/types";
+import type { AppId } from "@/lib/api";
+import { RoutingModelInput } from "./RoutingModelInput";
 
 const blank = (): IntentTarget => ({ providerId: "", model: "" });
 const owns = (obj: object, key: string) =>
@@ -14,6 +16,7 @@ const selectClass =
   "min-w-0 rounded-md border border-border bg-surface px-2 py-1 text-xs";
 
 type Props = {
+  appType: AppId;
   providers: Provider[];
   value?: SmartIntentConfig;
   onChange: (next: SmartIntentConfig) => void;
@@ -21,6 +24,7 @@ type Props = {
 };
 
 export function SmartIntentEditor({
+  appType,
   providers,
   value,
   onChange,
@@ -131,13 +135,15 @@ export function SmartIntentEditor({
                 ))}
             </select>
             {!row.groupId && (
-              <Input
-                className="min-w-32 flex-1 font-mono text-xs"
-                aria-label={t("smartIntent.model")}
-                placeholder={t("smartIntent.model")}
+              <RoutingModelInput
+                key={id}
+                app={appType}
+                provider={providers.find((p) => p.id === row.providerId)}
+                label={t("smartIntent.model")}
                 maxLength={256}
+                disabled={disabled}
                 value={row.model}
-                onChange={(e) => edit({ model: e.target.value.trim() })}
+                onChange={(model) => edit({ model: model.trim() })}
               />
             )}
             {classifier && !row.groupId && (

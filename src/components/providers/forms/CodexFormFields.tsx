@@ -83,11 +83,11 @@ import { XaiOAuthSection } from "./XaiOAuthSection";
 import {
   copilotGetModels,
   copilotGetModelsForAccount,
-  type CopilotModel,
 } from "@/lib/api/copilot";
 import {
   copilotAutoCatalogModel,
   copilotFetchedModels,
+  isCopilotModelSupportedByCodex,
   COPILOT_AUTO_MODEL_ID,
 } from "@/lib/copilot-model-options";
 import {
@@ -131,28 +131,6 @@ import type { AppId } from "@/lib/api";
 
 interface EndpointCandidate {
   url: string;
-}
-
-export function isCopilotModelSupportedByCodex(
-  model: CopilotModel,
-  format: CodexCopilotApiFormat = "auto",
-): boolean {
-  const endpoints =
-    format === "openai_responses"
-      ? ["/responses", "/v1/responses"]
-      : format === "openai_chat"
-        ? ["/chat/completions", "/v1/chat/completions"]
-        : [
-            "/responses",
-            "/v1/responses",
-            "/chat/completions",
-            "/v1/chat/completions",
-          ];
-  return (model.supported_endpoints ?? []).some((endpoint) =>
-    endpoints.includes(
-      endpoint.split("?")[0].replace(/\/+$/, "").toLowerCase(),
-    ),
-  );
 }
 
 export function resolveCopilotReportedPromptLimit(
